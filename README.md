@@ -1,227 +1,307 @@
-# CialloClaw
+# CialloClaw 仪表盘
 
-> An innovative AI-powered dashboard interface that visualizes agent states and system interactions through a dynamic "consciousness field" metaphor.
+> 一个创新的 AI 驱动仪表盘界面，通过「意识场」隐喻可视化 AI 代理状态与系统交互。
 
-## [中文文档](#chinese-documentation)
+## 概述
+
+CialloClaw 是一个视觉震撼的仪表盘原型，将 AI 代理的活动呈现为围绕中心「意识核心」运行的行星。这个沉浸式界面为监控 AI 任务进度、管理异步协作和接收系统通知提供了直观的交互方式。
+
+### 核心特性
+
+- **三层意识场视觉系统** - 通过焦点/候选/后台三层级展现事件优先级
+- **意识核心** - 响应式中心球体，支持拖拽与长按语音交互
+- **多模块支持** - 任务状态、便签协作、镜子、硬件感知
+- **语音界面** - 长按中心球体激活语音对话
+- **专注模式** - 按下 `F` 键进入聚焦视图，行星交错显示
+- **分离窗口** - 长按面板标题栏拖出独立浮动窗口
+- **召唤系统** - AI 主动推送重要事件的通知
+- **键盘快捷键** - 快速访问所有功能
 
 ---
 
-## Overview
+## 技术栈
 
-CialloClaw is a visually stunning dashboard application that presents AI agent activities as orbiting planets around a central orb. This immersive interface provides an intuitive way to monitor system status, manage tasks, and interact with AI assistants.
+### 前端核心
 
-### Key Features
+| 技术 | 版本 | 用途 |
+|------|------|------|
+| **React** | 19.1.2 | 现代化 UI 框架，采用最新特性 |
+| **TypeScript** | 5.8.3 | 类型安全保障 |
+| **Vite** | 8.0.1 | 高速构建工具与开发服务器 |
+| **Tailwind CSS** | 3.4.17 | 原子化 CSS 框架 |
+| **React Router** | 7.6.3 | 客户端路由 |
 
-- **Planetary Visualization System** - Interactive orbiting representations of different modules
-- **Consciousness Core** - Central orb that responds to user interactions
-- **Multi-Module Support** - Task Status, Notepad Collaboration, Mirror, and Hardware Sense
-- **Voice Interface** - Long-press center orb for voice commands
-- **Focus Mode** - Press 'F' to enter focused view with staggered planet reveals
-- **Detached Windows** - Drag planets to create separate floating windows
-- **Keyboard Shortcuts** - Quick access to all functions
-- **Internationalization** - Built-in i18n support for multiple languages
+### 状态管理与数据
 
-## Technology Stack
+| 技术 | 版本 | 用途 |
+|------|------|------|
+| **Recharts** | 3.2.0 | 数据可视化图表 |
+| **Firebase** | 12.0.0 | 数据库与身份验证（预留） |
+| **Supabase** | 2.57.4 | 备用后端服务（预留） |
+| **Stripe** | 4.0.2 | 支付集成（预留） |
 
-### Frontend
-- **React 19.1.2** - Modern React with latest features
-- **TypeScript** - Full TypeScript support
-- **Vite 8.0.1** - Fast build tool and development server
-- **Tailwind CSS 3.4.17** - Utility-first CSS framework
-- **React Router DOM 7.6.3** - Client-side routing
+### 国际化
 
-### State Management & Data
-- **React Hooks** - Built-in state management
-- **Recharts 3.2.0** - Data visualization
-- **Firebase 12.0.0** - Database and authentication
-- **Supabase 2.57.4** - Alternative backend service
-- **Stripe React 4.0.2** - Payment integration
+| 技术 | 版本 | 用途 |
+|------|------|------|
+| **i18next** | 25.3.2 | 国际化框架 |
+| **react-i18next** | 15.6.0 | React 集成 |
+| **i18next-browser-languagedetector** | 8.2.0 | 自动语言检测 |
 
-### Internationalization
-- **i18next 25.3.2** - Internationalization framework
-- **react-i18next 15.6.0** - React integration
-- **i18next-browser-languagedetector** - Auto language detection
+### 开发工具
 
-## Project Structure
+| 工具 | 版本 | 用途 |
+|------|------|------|
+| **ESLint** | 9.30.1 | 代码质量检查 |
+| **PostCSS** | 8.5.6 | CSS 处理 |
+| **unplugin-auto-import** | 19.3.0 | 自动导入 API |
+
+---
+
+## 交互设计详解
+
+### 意识场视觉系统
+
+仪表盘采用「意识场」隐喻，将不同模块的活动以行星形式围绕中心球体运行，通过三层级视觉权重展现事件优先级：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                                                           │
+│                    ┌─────────────┐                        │
+│                   ╱               ╲                       │
+│                  │   后台行星      │  第三层：弱脉冲，仅信号  │
+│                   ╲               ╱                        │
+│                    └─────────────┘                         │
+│                                                           │
+│         ┌─────────────┐       ┌─────────────┐             │
+│        ╱               ╲     ╱               ╲            │
+│       │   候选行星      │   │   候选行星      │ 第二层      │
+│        ╲               ╱     ╲               ╱            │
+│         └─────────────┘       └─────────────┘             │
+│                                                           │
+│                 ┌─────────────┐                          │
+│                ╱               ╲                         │
+│               │   焦点行星      │  第一层：最亮，当前关注  │
+│                ╲               ╱                         │
+│                 └─────────────┘                          │
+│                                                           │
+│              ╱───────────────────╲                       │
+│             │    ● 意识核心 ●     │                      │
+│              ╲───────────────────╱                       │
+│                                                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+| 层级 | 视觉特征 | 代表含义 |
+|------|----------|----------|
+| **焦点行星** | 轨道半径 148px，尺寸 62px，最亮 | AI 当前正在执行的主要任务 |
+| **候选行星** | 轨道半径 210-215px，尺寸 42-46px，中等亮度 | 次要任务，需要关注 |
+| **后台脉冲** | 轨道半径 248px，尺寸 34px，微弱闪烁 | 后台运行的服务（如硬件监控） |
+
+### 核心交互操作
+
+#### 中心球体（意识核心）
+
+| 操作 | 效果 |
+|------|------|
+| **拖拽** | 球体跟随鼠标移动，产生倾斜 3D 效果 |
+| **松手** | 弹簧动画回弹至中心 |
+| **长按 650ms** | 激活语音对话界面，进度环环绕显示 |
+
+#### 行星节点
+
+| 操作 | 效果 |
+|------|------|
+| **单击** | 打开对应模块的详情面板 |
+| **拖拽** | 行星跟随移动 |
+| **松手** | 自动吸附回轨道（计算角度） |
+| **长按面板标题** | 显示进度条，持续拖拽后分离为独立窗口 |
+
+#### 面板（JarvisPanel）
+
+详情面板采用「JARVIS 风格」设计，支持丰富的手势操作：
+
+| 操作 | 效果 |
+|------|------|
+| **左右滑动** | 切换当前模块的不同状态（如任务状态：进行中 → 已完成） |
+| **上下滑动** | 切换到不同模块（任务 → 便签 → 镜子 → 硬件） |
+| **拖拽边缘** | 调整面板尺寸 |
+| **双击尺寸指示器** | 重置为默认大小 |
+
+### 键盘快捷键
+
+| 按键 | 功能 |
+|------|------|
+| `F` | 进入/退出专注模式 |
+| `1-4` | 快速切换到对应模块（任务/便签/镜子/硬件） |
+| `5` | 打开信任与边界面板 |
+| `?` | 显示快捷键帮助面板 |
+| `ESC` | 关闭当前面板/退出语音界面 |
+| `方向键` | 在面板中导航（←→ 切换状态，↑↓ 切换模块） |
+
+### 专注模式
+
+按下 `F` 键进入专注模式：
+- 所有行星淡出至不可见
+- 仅保留中心球体与极简环境
+- 退出时行星交错淡入，间隔 110ms
+
+### 语音界面
+
+长按中心球体 650ms 激活语音对话，包含 5 个阶段：
+
+1. **就绪** - 显示麦克风图标，提示"直接说出你的想法"
+2. **聆听** - 波纹环绕，实时捕获关键词并向上漂移
+3. **理解** - 粒子向中心汇聚，提取意图碎片
+4. **确认** - 显示 AI 理解的摘要与操作按钮
+5. **执行** - 步进式显示执行进度，完成后跳转至对应模块
+
+**语音建议指令：**
+- "帮我看今天的重点任务"
+- "总结我刚才说的内容"
+- "帮我记一下这个想法"
+- "最近系统状态怎么样"
+
+### 召唤系统
+
+AI 主动推送通知，以「被召唤的行星」形式出现：
+
+```
+┌─────────────────────────────────────┐
+│  ● 你有一个 2 小时后到期的任务       │
+│  周报整理 · 今日 11:00 截止         │
+│  [点击查看并开始处理]               │
+└─────────────────────────────────────┘
+```
+
+支持三种优先级：`urgent`（紧急）、`normal`（普通）、`low`（低）
+
+---
+
+## 仪表盘承载内容
+
+### 1. 任务状态模块（焦点行星）
+
+展示 AI 正在执行的主要任务，包含 9 种状态：
+
+| 状态 | 标签 | 说明 |
+|------|------|------|
+| `standby` | 待命 | 等待新指令 |
+| `idle_present` | 空闲在场 | 上次任务完成，持续监听 |
+| `working` | 推进中 | 正在处理任务，显示进度条 |
+| `highlight` | 新进展 | 发现需要关注的风险点 |
+| `completing` | 接近完成 | 草稿已就绪，等待确认 |
+| `done` | 已完成 | 任务全部完成 |
+| `error_permission` | 缺少权限 | 需要用户授权才能继续 |
+| `error_blocked` | 步骤阻塞 | 依赖的上游任务未完成 |
+| `error_missing_info` | 缺少信息 | 需要用户提供关键信息 |
+
+**面板内容：**
+- 任务标题与副标题
+- 进度百分比与步骤指示器
+- 上下文信息流（实时更新的操作日志）
+- 异常警告卡片（如有）
+
+### 2. 便签协作模块（候选行星）
+
+异步任务处理与团队协作功能：
+
+| 状态 | 标签 | 说明 |
+|------|------|------|
+| `notepad_processing` | 便签处理中 | AI 正在处理用户留下的便签 |
+| `notepad_reminder` | 重复任务提醒 | 识别用户习惯，定时提醒 |
+| `scheduled_task` | 定时任务 | 自动巡检已完成，发现需关注项 |
+
+**面板内容：**
+- 便签列表（处理中/待执行/需确认）
+- 标签分类（文档/沟通/优先级）
+- 上下文操作日志
+
+### 3. 镜子模块（候选行星）
+
+周期性总结与习惯洞察，帮助用户自我反思：
+
+| 状态 | 标签 | 说明 |
+|------|------|------|
+| `mirror_summary` | 周期总结 | 总结最近两周的关注重点 |
+| `mirror_habit` | 习惯洞察 | 识别用户形成的新工作节奏 |
+
+**面板内容：**
+- 洞察周期（如 2025 年 3 月 17 日 — 3 月 31 日）
+- 洞察卡片列表（带强调标记）
+- 观察到的模式与建议
+
+### 4. 硬件感知模块（后台脉冲）
+
+系统监控与性能感知：
+
+| 状态 | 标签 | 说明 |
+|------|------|------|
+| `sense_alert` | 系统感知 | CPU/内存负荷过高，建议暂缓任务 |
+| `sense_suggestion` | 系统建议 | 系统状态良好，适合启动大任务 |
+
+**面板内容：**
+- 实时系统指标（CPU/内存/网络/磁盘）
+- 风险等级指示（正常/警告/临界）
+- 建议操作
+
+### 5. 信任与边界模块
+
+展示 AI 决策的透明度与风险边界：
+
+**显示信息：**
+- 风险等级（低/中/高）
+- 是否需要用户授权
+- 数据保存路径
+- 是否可恢复
+- 成本异常提示
+
+---
+
+## 项目结构
 
 ```
 CialloClaw/
 ├── src/
-│   ├── i18n/                 # Internationalization configuration
+│   ├── i18n/                    # 国际化配置
 │   │   ├── index.ts
-│   │   └── local/           # Translation files (auto-imported)
-│   ├── mocks/               # Mock data and state definitions
-│   │   └── agentStates.ts
-│   ├── pages/               # Page components
+│   │   └── local/               # 翻译文件（自动导入）
+│   ├── mocks/                   # Mock 数据与状态定义
+│   │   └── agentStates.ts       # 18 种代理状态数据
+│   ├── pages/                   # 页面组件
 │   │   ├── home/
-│   │   │   ├── page.tsx     # Main dashboard component
-│   │   │   └── components/  # Visual components
-│   │   └── NotFound.tsx     # 404 page
-│   ├── router/              # Routing configuration
-│   │   ├── config.tsx
-│   │   └── index.ts
-│   ├── App.tsx              # Main app component
-│   ├── main.tsx             # Application entry point
-│   └── index.css            # Global styles
-├── .github/workflows/       # GitHub Actions workflows
-├── .githooks/               # Git hooks
-├── eslint.config.ts         # ESLint configuration
-├── tailwind.config.ts       # Tailwind CSS config
-└── vite.config.ts           # Vite build configuration
+│   │   │   ├── page.tsx         # 主仪表盘组件
+│   │   │   └── components/      # 视觉组件
+│   │   │       ├── CenterOrb.tsx        # 中心意识球
+│   │   │       ├── PlanetNode.tsx       # 行星节点
+│   │   │       ├── JarvisPanel.tsx      # 详情面板
+│   │   │       ├── VoiceInterface.tsx   # 语音界面
+│   │   │       ├── SummonedPlanet.tsx   # 召唤通知
+│   │   │       ├── DetachedWindow.tsx   # 独立窗口
+│   │   │       └── ...
+│   │   └── NotFound.tsx
+│   ├── router/                  # 路由配置
+│   ├── App.tsx
+│   ├── main.tsx
+│   └── index.css
+├── .github/workflows/           # GitHub Actions
+├── .githooks/                   # Git hooks
+├── eslint.config.ts
+├── tailwind.config.ts
+├── vite.config.ts
+└── package.json
 ```
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js (v18 or higher recommended)
-- npm or yarn package manager
-
-### Installation
-
-1. Clone the repository:
-```bash
-git clone git@github.com:Blackcloudss/CialloClaw.git
-cd CialloClaw
-```
-
-2. Install dependencies:
-```bash
-npm install
-```
-
-3. Start the development server:
-```bash
-npm run dev
-```
-
-4. Open your browser and navigate to:
-```
-http://localhost:3000
-```
-
-### Available Scripts
-
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Start development server on port 3000 |
-| `npm run build` | Build for production |
-| `npm run preview` | Preview production build |
-| `npm run lint` | Run ESLint |
-| `npm run type-check` | Run TypeScript type checking |
-
-## Core Modules
-
-### 1. Task Status (任务状态)
-Primary task management with states:
-- Working
-- Completing
-- Done
-- Error handling
-
-### 2. Notepad Collaboration (便签协作)
-Async task processing and reminders for team collaboration.
-
-### 3. Mirror (镜子)
-Periodic insights and habit tracking for self-reflection.
-
-### 4. Hardware Sense (硬件感知)
-System monitoring and performance awareness.
-
-## Keyboard Shortcuts
-
-| Key | Action |
-|-----|--------|
-| `F` | Enter/Exit Focus Mode |
-| `1-5` | Quick access to module functions |
-| `ESC` | Close panels/windows |
-| `?` | Show help and shortcuts |
-| Long-click center orb | Activate voice interface |
-
-## Interactive Features
-
-### Focus Mode
-Press 'F' to enter a focused view with staggered planet reveals, minimizing distractions.
-
-### Voice Interface
-Long-press the center orb to activate voice commands for hands-free interaction.
-
-### Detached Windows
-Drag any planet to create a separate floating window for multitasking.
-
-### Summon System
-Proactive notifications that appear as summoned planets when events require attention.
-
-## Development
-
-### Code Quality
-- Relaxed TypeScript settings for rapid development
-- Custom ESLint rules including route validation
-- Git commit message validation
-- Comprehensive mock data system
-
-### Build Configuration
-- Outputs to `out/` directory
-- Source maps enabled for debugging
-- Auto-import configured for React, Router, and i18n
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch: `git checkout -b feature/my-feature`
-3. Commit your changes: `git commit -m 'feat: add my feature'`
-4. Push to the branch: `git push origin feature/my-feature`
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License.
 
 ---
 
-## Chinese Documentation [中文文档]
-
-> 一个创新的 AI 驱动仪表板界面，通过动态"意识场"隐喻可视化代理状态和系统交互。
-
-## 概述 [Overview]
-
-CialloClaw 是一个视觉震撼的仪表板应用程序，将 AI 代理活动呈现为围绕中心球体运行的行星。这个沉浸式界面提供了监控系统状态、管理任务和与 AI 助手交互的直观方式。
-
-### 核心特性
-
-- **行星可视化系统** - 不同模块的交互式轨道表示
-- **意识核心** - 响应用户交互的中心球体
-- **多模块支持** - 任务状态、便签协作、镜子和硬件感知
-- **语音界面** - 长按中心球体进行语音命令
-- **专注模式** - 按 'F' 进入聚焦视图，行星交错显示
-- **分离窗口** - 拖动行星创建独立的浮动窗口
-- **键盘快捷键** - 快速访问所有功能
-- **国际化** - 内置 i18n 支持多种语言
-
-## 技术栈
-
-### 前端
-- **React 19.1.2** - 最新功能的现代 React
-- **TypeScript** - 完整的 TypeScript 支持
-- **Vite 8.0.1** - 快速构建工具和开发服务器
-- **Tailwind CSS 3.4.17** - 实用优先的 CSS 框架
-- **React Router DOM 7.6.3** - 客户端路由
-
-### 状态管理和数据
-- **React Hooks** - 内置状态管理
-- **Recharts 3.2.0** - 数据可视化
-- **Firebase 12.0.0** - 数据库和身份验证
-- **Supabase 2.57.4** - 备用后端服务
-- **Stripe React 4.0.2** - 支付集成
-
-### 国际化
-- **i18next 25.3.2** - 国际化框架
-- **react-i18next 15.6.0** - React 集成
-- **i18next-browser-languagedetector** - 自动语言检测
-
 ## 快速开始
 
-### 安装
+### 环境要求
+
+- Node.js v18 或更高版本
+- npm 或 yarn 包管理器
+
+### 安装步骤
 
 1. 克隆仓库：
 ```bash
@@ -246,57 +326,54 @@ http://localhost:3000
 
 ### 可用脚本
 
-| 命令 | 描述 |
+| 命令 | 说明 |
 |------|------|
 | `npm run dev` | 在端口 3000 启动开发服务器 |
 | `npm run build` | 构建生产版本 |
 | `npm run preview` | 预览生产构建 |
-| `npm run lint` | 运行 ESLint |
+| `npm run lint` | 运行 ESLint 检查 |
 | `npm run type-check` | 运行 TypeScript 类型检查 |
 
-## 核心模块
+---
 
-### 1. 任务状态
-主要任务管理，支持以下状态：
-- 进行中 (Working)
-- 完成中 (Completing)
-- 已完成 (Done)
-- 错误处理 (Error handling)
+## 设计理念
 
-### 2. 便签协作
-用于团队协作的异步任务处理和提醒。
+### 意识场隐喻
 
-### 3. 镜子
-用于自我反思的定期洞察和习惯追踪。
+将 AI 代理的活动想象为一个「意识场」：
 
-### 4. 硬件感知
-系统监控和性能感知。
+- **中心球体** 代表 AI 的「意识核心」，始终在场，持续呼吸
+- **轨道行星** 代表不同的任务流，按优先级分层呈现
+- **召唤系统** 模拟 AI 的主动意识，当需要关注时主动浮现
+- **拖拽与吸附** 体现意识的流动性与弹性
 
-## 键盘快捷键
+### 视觉语言
 
-| 按键 | 操作 |
-|------|------|
-| `F` | 进入/退出专注模式 |
-| `1-5` | 快速访问模块功能 |
-| `ESC` | 关闭面板/窗口 |
-| `?` | 显示帮助和快捷键 |
-| 长按中心球体 | 激活语音界面 |
+- **颜色编码**：每个模块有专属色（任务-绿/便签-紫/镜子-紫/硬件-蓝）
+- **呼吸动画**：所有元素以不同速率呼吸，传达生命力
+- **光晕效果**：核心与行星使用多层光晕，营造能量场感
+- **层级衰减**：非焦点元素逐渐透明，减少视觉干扰
 
-## 交互功能
+---
 
-### 专注模式
-按 'F' 进入聚焦视图，行星交错显示，最大限度减少干扰。
+## 开发说明
 
-### 语音界面
-长按中心球体激活语音命令，实现免提交互。
+### 代码质量
 
-### 分离窗口
-拖动任何行星创建独立的浮动窗口，便于多任务处理。
+- 宽松的 TypeScript 配置以支持快速原型开发
+- 自定义 ESLint 规则（含路由验证）
+- Git commit 消息验证
+- 完善的 Mock 数据系统
 
-### 召唤系统
-当事件需要关注时，主动通知会显示为被召唤的行星。
+### 构建配置
 
-## 贡献
+- 输出至 `out/` 目录
+- 启用 Source Maps 用于调试
+- 自动导入配置（React、Router、i18n）
+
+---
+
+## 贡献指南
 
 欢迎贡献！请遵循以下步骤：
 
@@ -304,8 +381,14 @@ http://localhost:3000
 2. 创建功能分支：`git checkout -b feature/my-feature`
 3. 提交更改：`git commit -m 'feat: add my feature'`
 4. 推送到分支：`git push origin feature/my-feature`
-5. 提交拉取请求
+5. 提交 Pull Request
+
+---
 
 ## 许可证
 
 本项目采用 MIT 许可证。
+
+---
+
+> **CialloClaw** - 让 AI 的意识场可视化
