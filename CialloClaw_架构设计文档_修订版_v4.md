@@ -71,19 +71,18 @@ CialloClaw 采用 **“前端架构 + JSON-RPC 协议边界 + 后端 Harness 架
 
 ### 3.2 前端架构总览
 
-前端采用 **“桌面宿主层 + 表现层 + 应用编排层 + 状态与服务层 + 平台集成与协议适配层”** 的结构。前端的设计重点不是传统后台页面树，而是围绕悬浮球近场交互、气泡生命周期、轻量输入、结果分流和低频仪表盘展开。
+前端采用 **“运行环境 + 表现层 + 应用层 + 状态管理层 + 服务层 + 平台集成层”** 的结构。前端的设计重点不是传统后台页面树，而是围绕悬浮球近场交互、气泡生命周期、轻量输入、结果分流和低频仪表盘展开。
 
 ```mermaid
 flowchart TB
     U[用户]
 
-    subgraph F1[前端第1层：桌面宿主层]
+    subgraph ENV[运行环境]
         direction LR
         TAURI[Tauri 2 Windows 宿主]
-        TPLUG[Tauri 官方插件]
     end
 
-    subgraph F2[前端第2层：表现层]
+    subgraph F1[前端第1层：表现层]
         direction LR
         FB[悬浮球]
         BUBBLE[气泡]
@@ -93,7 +92,7 @@ flowchart TB
         PANEL[控制面板界面]
     end
 
-    subgraph F3[前端第3层：应用编排层]
+    subgraph F2[前端第2层：应用层]
         direction LR
         ENTRY[交互入口编排]
         CONFIRM[意图确认流程]
@@ -102,33 +101,38 @@ flowchart TB
         DISPATCH[结果分发]
     end
 
-    subgraph F4[前端第4层：状态与服务层]
+    subgraph F3[前端第3层：状态管理层]
         direction LR
         STATE[前端状态管理]
         QUERY[查询与缓存]
+    end
+
+    subgraph F4[前端第4层：服务层]
+        direction LR
         SERVICES[前端服务封装]
     end
 
-    subgraph F5[前端第5层：平台集成与协议适配层]
+    subgraph F5[前端第5层：平台集成层]
         direction LR
+        TPLUG[Tauri 官方插件]
         RPC[Typed JSON-RPC Client]
         SUB[订阅与通知适配]
         PLATFORM[窗口 / 托盘 / 快捷键 / 拖拽 / 文件 / 本地存储]
     end
 
     U --> FB
-    U --> DASH
-    U --> PANEL
+    U --> PLATFORM
 
     TAURI --> TPLUG
     TPLUG --> PLATFORM
 
     FB --> ENTRY
     BUBBLE --> CONFIRM
+    BUBBLE --> DISPATCH
     INPUT --> CONFIRM
-    DASH --> DISPATCH
     RESULT --> DISPATCH
-    PANEL --> SERVICES
+    PLATFORM --> PANEL
+    ENTRY --> DASH
 
     ENTRY --> STATE
     CONFIRM --> STATE
@@ -1131,25 +1135,20 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> 显现
 
-    显现 --> 透明化: 无操作达到透明化阈值
-    显现 --> 置顶保留: 用户置顶
-    显现 --> 已删除: 用户删除
+    显现 --> 隐藏: 鼠标离开悬浮球区域10s
+    显现 --> 置顶显现: 用户置顶
+    显现 --> 已销毁: 用户删除
+    显现 --> 已销毁: 气泡数量超过阈值，旧气泡被销毁
 
-    透明化 --> 隐藏: 持续无操作
-    透明化 --> 显现: 鼠标接近或重新激活
-    透明化 --> 置顶保留: 用户置顶
-    透明化 --> 已删除: 用户删除
+    隐藏 --> 显现: 重新唤起/再次显示
+    隐藏 --> 置顶显现: 用户置顶
+    隐藏 --> 已销毁: 隐藏超过5分钟
+    隐藏 --> 已销毁: 用户删除
 
-    隐藏 --> 显现: 鼠标移回气泡区域
-    隐藏 --> 消散: 隐藏超时
-    隐藏 --> 置顶保留: 用户置顶
-    隐藏 --> 已删除: 用户删除
+    置顶显现 --> 显现: 用户取消置顶
+    置顶显现 --> 已销毁: 用户删除
 
-    置顶保留 --> 显现: 用户取消置顶
-    置顶保留 --> 已删除: 用户删除
-
-    消散 --> [*]
-    已删除 --> [*]
+    已销毁 --> [*]
 ```
 
 ## 6.14 语音承接状态图
@@ -1250,6 +1249,80 @@ stateDiagram-v2
 ## 7. 模块详细划分
 
 ## 7.1 前端模块
+
+```mermaid
+    flowchart TB
+    
+    subgraph L1[表现层]
+    direction LR
+    P1[悬浮球]
+    P2[气泡]
+    P3[轻量输入区]
+    P4[仪表盘界面]
+    P5[结果承接界面]
+    P6[控制面板界面]
+    
+    P1 ~~~ P2 ~~~ P3 ~~~ P4 ~~~ P5 ~~~ P6
+    end
+    
+    subgraph L2[应用层]
+    direction LR
+    A1[交互入口编排]
+    A2[意图确认流程]
+    A3[推荐调度]
+    A4[任务发起与执行协调]
+    A5[结果分发]
+    
+    A1 ~~~ A2 ~~~ A3 ~~~ A4 ~~~ A5
+    end
+    
+    subgraph L3[状态管理层]
+    direction LR
+    S1[悬浮球状态]
+    S2[气泡状态]
+    S3[轻量输入状态]
+    S4[当前任务对象状态]
+    S5[意图确认状态]
+    S6[语音状态]
+    S7[仪表盘状态]
+    S8[控制面板状态]
+    
+    S1 ~~~ S2 ~~~ S3 ~~~ S4 ~~~ S5 ~~~ S6 ~~~ S7 ~~~ S8
+    end
+    
+    subgraph L4[服务层]
+    direction LR
+    V1[上下文服务]
+    V2[任务服务]
+    V3[推荐服务]
+    V4[语音服务]
+    V5[文件服务]
+    V6[记忆服务]
+    V7[安全服务]
+    V8[设置服务]
+    
+    V1 ~~~ V2 ~~~ V3 ~~~ V4 ~~~ V5 ~~~ V6 ~~~ V7 ~~~ V8
+    end
+    
+    subgraph L5[平台集成层]
+    direction LR
+    I1[窗口集成]
+    I2[托盘集成]
+    I3[快捷键集成]
+    I4[文件系统集成]
+    I5[拖拽集成]
+    I6[通知集成]
+    I7[本地存储集成]
+    I8[外部能力集成]
+    
+    I1 ~~~ I2 ~~~ I3 ~~~ I4 ~~~ I5 ~~~ I6 ~~~ I7 ~~~ I8
+    end
+    
+    L1 --> L2
+    L2 --> L3
+    L3 --> L4
+    L4 --> L5
+```
 
 ### 7.1.1 前端工程与桌面宿主
 
