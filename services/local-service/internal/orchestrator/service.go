@@ -102,9 +102,10 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	artifacts := []map[string]any(nil)
 	if !suggestion.RequiresConfirm {
 		if requiresAuthorization(suggestion.Intent) {
+			pendingExecution := s.delivery.BuildApprovalExecutionPlan(task.TaskID, suggestion.Intent)
 			approvalRequest := buildApprovalRequest(task.TaskID, suggestion.Intent, "red")
 			bubble = s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", task.StartedAt.Format(dateTimeLayout))
-			if _, ok := s.runEngine.MarkWaitingApproval(task.TaskID, approvalRequest, bubble); ok {
+			if _, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble); ok {
 				task, _ = s.runEngine.GetTask(task.TaskID)
 			}
 			return map[string]any{
@@ -170,9 +171,10 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	}
 
 	if requiresAuthorization(suggestion.Intent) {
+		pendingExecution := s.delivery.BuildApprovalExecutionPlan(task.TaskID, suggestion.Intent)
 		approvalRequest := buildApprovalRequest(task.TaskID, suggestion.Intent, "red")
 		bubble = s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", task.StartedAt.Format(dateTimeLayout))
-		if _, ok := s.runEngine.MarkWaitingApproval(task.TaskID, approvalRequest, bubble); ok {
+		if _, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble); ok {
 			task, _ = s.runEngine.GetTask(task.TaskID)
 			response["task"] = taskMap(task)
 			response["bubble_message"] = bubble
@@ -206,9 +208,10 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已按新的要求开始处理", task.UpdatedAt.Format(dateTimeLayout))
 	if requiresAuthorization(intentValue) {
+		pendingExecution := s.delivery.BuildApprovalExecutionPlan(task.TaskID, intentValue)
 		approvalRequest := buildApprovalRequest(task.TaskID, intentValue, "red")
 		bubble = s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", task.UpdatedAt.Format(dateTimeLayout))
-		updatedTask, ok := s.runEngine.MarkWaitingApproval(task.TaskID, approvalRequest, bubble)
+		updatedTask, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
 		if !ok {
 			return nil, ErrTaskNotFound
 		}
@@ -528,53 +531,59 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 
 	decision := stringValue(params, "decision", "allow_once")
 	rememberRule := boolValue(params, "remember_rule", false)
-	if decision == "deny_once" {
-		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已拒绝本次操作，任务已取消。", task.UpdatedAt.Format(dateTimeLayout))
-		updatedTask, ok := s.runEngine.ControlTask(task.TaskID, "cancel", bubble)
-		if !ok {
-			return nil, ErrTaskNotFound
-		}
-		return map[string]any{
-			"authorization_record": map[string]any{
-				"authorization_record_id": fmt.Sprintf("auth_%s", updatedTask.TaskID),
-				"task_id":                 updatedTask.TaskID,
-				"approval_id":             stringValue(params, "approval_id", "appr_001"),
-				"decision":                decision,
-				"remember_rule":           rememberRule,
-				"operator":                "user",
-				"created_at":              updatedTask.UpdatedAt.Format(dateTimeLayout),
-			},
-			"task":           taskMap(updatedTask),
-			"bubble_message": bubble,
-			"impact_scope":   buildImpactScope(),
-		}, nil
-	}
-
-	resultTitle, resultPreview, resultBubbleText := resultSpecFromIntent(task.Intent)
-	deliveryResult := s.delivery.BuildDeliveryResult(task.TaskID, deliveryTypeFromIntent(task.Intent), resultTitle, resultPreview)
-	artifacts := s.delivery.BuildArtifact(task.TaskID, resultTitle, deliveryResult)
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "result", resultBubbleText, task.UpdatedAt.Format(dateTimeLayout))
-	updatedTask, ok := s.runEngine.CompleteTask(task.TaskID, deliveryResult, bubble, artifacts)
-	if !ok {
-		return nil, ErrTaskNotFound
-	}
 	authorizationRecord := map[string]any{
-		"authorization_record_id": fmt.Sprintf("auth_%s", updatedTask.TaskID),
-		"task_id":                 updatedTask.TaskID,
+		"authorization_record_id": fmt.Sprintf("auth_%s", task.TaskID),
+		"task_id":                 task.TaskID,
 		"approval_id":             stringValue(params, "approval_id", "appr_001"),
 		"decision":                decision,
 		"remember_rule":           rememberRule,
 		"operator":                "user",
-		"created_at":              updatedTask.UpdatedAt.Format(dateTimeLayout),
+		"created_at":              time.Now().Format(dateTimeLayout),
 	}
 	impactScope := buildImpactScope()
+	if decision == "deny_once" {
+		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已拒绝本次操作，任务已取消。", task.UpdatedAt.Format(dateTimeLayout))
+		updatedTask, ok := s.runEngine.DenyAfterApproval(task.TaskID, authorizationRecord, impactScope, bubble)
+		if !ok {
+			return nil, ErrTaskNotFound
+		}
+		return map[string]any{
+			"authorization_record": authorizationRecord,
+			"task":                 taskMap(updatedTask),
+			"bubble_message":       bubble,
+			"impact_scope":         impactScope,
+		}, nil
+	}
+
+	resumeBubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已允许本次操作，任务继续执行。", task.UpdatedAt.Format(dateTimeLayout))
+	processingTask, ok := s.runEngine.ResumeAfterApproval(task.TaskID, authorizationRecord, impactScope, resumeBubble)
+	if !ok {
+		return nil, ErrTaskNotFound
+	}
+
+	pendingExecution, ok := s.runEngine.PendingExecutionPlan(task.TaskID)
+	if !ok {
+		pendingExecution = s.delivery.BuildApprovalExecutionPlan(task.TaskID, task.Intent)
+	}
+
+	resultTitle := stringValue(pendingExecution, "result_title", "处理结果")
+	resultPreview := stringValue(pendingExecution, "preview_text", "已为你写入文档并打开")
+	resultBubbleText := stringValue(pendingExecution, "result_bubble_text", "结果已经生成，可直接查看。")
+	deliveryType := stringValue(pendingExecution, "delivery_type", deliveryTypeFromIntent(task.Intent))
+	deliveryResult := s.delivery.BuildDeliveryResult(task.TaskID, deliveryType, resultTitle, resultPreview)
+	artifacts := s.delivery.BuildArtifact(task.TaskID, resultTitle, deliveryResult)
+	resultBubble := s.delivery.BuildBubbleMessage(task.TaskID, "result", resultBubbleText, processingTask.UpdatedAt.Format(dateTimeLayout))
+	updatedTask, ok := s.runEngine.CompleteTask(task.TaskID, deliveryResult, resultBubble, artifacts)
+	if !ok {
+		return nil, ErrTaskNotFound
+	}
 	updatedTask, _ = s.runEngine.ResolveAuthorization(task.TaskID, authorizationRecord, impactScope)
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshotFromTask(updatedTask), updatedTask.Intent, deliveryResult, artifacts)
 
 	return map[string]any{
 		"authorization_record": authorizationRecord,
-		"task":                 taskMap(updatedTask),
-		"bubble_message":       bubble,
+		"task":                 taskMap(processingTask),
+		"bubble_message":       resumeBubble,
 		"impact_scope":         impactScope,
 	}, nil
 }
