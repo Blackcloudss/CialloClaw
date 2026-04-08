@@ -16,7 +16,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-// TestServiceStartTaskAndConfirmFlow 验证ServiceStartTaskAndConfirmFlow。
+// TestServiceStartTaskAndConfirmFlow 验证确认后的普通任务会继续执行并完成交付。
 func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	service := NewService(
 		contextsvc.NewService(),
@@ -58,8 +58,30 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	}
 
 	confirmedTask := confirmResult["task"].(map[string]any)
-	if confirmedTask["status"] != "processing" {
-		t.Fatalf("expected processing status after confirmation, got %v", confirmedTask["status"])
+	if confirmedTask["status"] != "completed" {
+		t.Fatalf("expected completed status after confirmation, got %v", confirmedTask["status"])
+	}
+
+	deliveryResult, ok := confirmResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatal("expected confirmation flow to return delivery_result")
+	}
+	if deliveryResult["type"] != "bubble" {
+		t.Fatalf("expected explain intent to deliver by bubble, got %v", deliveryResult["type"])
+	}
+
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected confirmed task to remain available in runtime")
+	}
+	if record.Status != "completed" {
+		t.Fatalf("expected runtime task to be completed, got %s", record.Status)
+	}
+	if len(record.MemoryWritePlans) == 0 {
+		t.Fatal("expected confirmation flow to attach memory write plans")
+	}
+	if record.DeliveryResult == nil {
+		t.Fatal("expected confirmation flow to persist delivery result")
 	}
 }
 

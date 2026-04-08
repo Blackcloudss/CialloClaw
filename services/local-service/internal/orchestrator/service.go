@@ -232,12 +232,24 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
-	s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshotFromTask(task), intentValue)
+	snapshot := snapshotFromTask(updatedTask)
+	s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshot, intentValue)
+
+	resultTitle, resultPreview, resultBubbleText := resultSpecFromIntent(intentValue)
+	deliveryType := deliveryTypeFromIntent(intentValue)
+	deliveryResult := s.delivery.BuildDeliveryResult(updatedTask.TaskID, deliveryType, resultTitle, resultPreview)
+	artifacts := s.delivery.BuildArtifact(updatedTask.TaskID, resultTitle, deliveryResult)
+	resultBubble := s.delivery.BuildBubbleMessage(updatedTask.TaskID, "result", resultBubbleText, updatedTask.UpdatedAt.Format(dateTimeLayout))
+	updatedTask, ok = s.runEngine.CompleteTask(updatedTask.TaskID, deliveryResult, resultBubble, artifacts)
+	if !ok {
+		return nil, ErrTaskNotFound
+	}
+	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, intentValue, deliveryResult, artifacts)
 
 	return map[string]any{
 		"task":            taskMap(updatedTask),
-		"bubble_message":  bubble,
-		"delivery_result": nil,
+		"bubble_message":  resultBubble,
+		"delivery_result": deliveryResult,
 	}, nil
 }
 
