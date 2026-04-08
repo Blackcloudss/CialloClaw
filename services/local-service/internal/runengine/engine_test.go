@@ -49,7 +49,7 @@ func TestEngineTaskLifecycle(t *testing.T) {
 		t.Fatalf("expected timeline to append a generate step, got %d steps", len(confirmed.Timeline))
 	}
 
-	deliveryResult := map[string]any{"type": "workspace_document", "title": "测试结果", "payload": map[string]any{"path": "D:/CialloClawWorkspace/result.md", "task_id": task.TaskID}}
+	deliveryResult := map[string]any{"type": "workspace_document", "title": "测试结果", "payload": map[string]any{"path": "workspace/result.md", "task_id": task.TaskID}}
 	artifacts := []map[string]any{{"artifact_id": "art_test", "task_id": task.TaskID, "artifact_type": "generated_doc"}}
 	completed, ok := engine.CompleteTask(task.TaskID, deliveryResult, map[string]any{"task_id": task.TaskID, "type": "result", "text": "完成"}, artifacts)
 	if !ok {
@@ -132,7 +132,7 @@ func TestEngineAuthorizationAndHandoffState(t *testing.T) {
 		t.Fatal("expected memory handoff plans to be stored")
 	}
 
-	storagePlan := map[string]any{"task_id": task.TaskID, "target_path": "D:/CialloClawWorkspace/result.md"}
+	storagePlan := map[string]any{"task_id": task.TaskID, "target_path": "workspace/result.md"}
 	artifactPlans := []map[string]any{{"task_id": task.TaskID, "artifact_id": "art_test"}}
 	if _, ok := engine.SetDeliveryPlans(task.TaskID, storagePlan, artifactPlans); !ok {
 		t.Fatal("expected delivery handoff plans to be stored")
@@ -145,7 +145,7 @@ func TestEngineAuthorizationAndHandoffState(t *testing.T) {
 	if len(record.MemoryReadPlans) != 1 || len(record.MemoryWritePlans) != 1 {
 		t.Fatal("expected memory handoff plans to be present on task record")
 	}
-	if record.StorageWritePlan["target_path"] != "D:/CialloClawWorkspace/result.md" {
+	if record.StorageWritePlan["target_path"] != "workspace/result.md" {
 		t.Fatal("expected storage handoff target path to be stored")
 	}
 
@@ -200,5 +200,23 @@ func TestEngineAuthorizationAndHandoffState(t *testing.T) {
 	}
 	if deniedResult.Status != "cancelled" {
 		t.Fatalf("expected denied task to be cancelled, got %s", deniedResult.Status)
+	}
+}
+
+// TestEngineDefaultsUseWorkspaceRelativePaths 验证默认配置不会写入平台盘符路径。
+func TestEngineDefaultsUseWorkspaceRelativePaths(t *testing.T) {
+	engine := NewEngine()
+
+	settings := engine.Settings()
+	general := settings["general"].(map[string]any)
+	download := general["download"].(map[string]any)
+	if download["workspace_path"] != "workspace" {
+		t.Fatalf("expected workspace_path default to be workspace, got %v", download["workspace_path"])
+	}
+
+	inspector := engine.InspectorConfig()
+	taskSources := inspector["task_sources"].([]string)
+	if len(taskSources) != 1 || taskSources[0] != "workspace/todos" {
+		t.Fatalf("expected task_sources to default to workspace/todos, got %v", taskSources)
 	}
 }

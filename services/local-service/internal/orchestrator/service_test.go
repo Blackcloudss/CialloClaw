@@ -243,6 +243,11 @@ func TestServiceSecurityRespondAllowOnceResumesAndCompletes(t *testing.T) {
 	if responseTask["status"] != "processing" {
 		t.Fatalf("expected response task to reflect resumed processing, got %v", responseTask["status"])
 	}
+	impactScope := respondResult["impact_scope"].(map[string]any)
+	files := impactScope["files"].([]string)
+	if len(files) != 1 || files[0] != "workspace/report.md" {
+		t.Fatalf("expected impact scope files to stay within workspace-relative paths, got %v", files)
+	}
 
 	record, ok := service.runEngine.GetTask(taskID)
 	if !ok {
