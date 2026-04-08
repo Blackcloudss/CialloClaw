@@ -281,6 +281,27 @@ func (e *Engine) ConfirmTask(taskID string, intent map[string]any, bubbleMessage
 	return record.clone(), true
 }
 
+// UpdateIntent 更新Task当前生效意图。
+func (e *Engine) UpdateIntent(taskID string, intent map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.Intent = cloneMap(intent)
+	record.UpdatedAt = e.now()
+	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+
+	return record.clone(), true
+}
+
 // SetPresentation 设置Presentation。
 func (e *Engine) SetPresentation(taskID string, bubbleMessage map[string]any, deliveryResult map[string]any, artifacts []map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()

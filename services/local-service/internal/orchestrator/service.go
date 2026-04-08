@@ -208,10 +208,16 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已按新的要求开始处理", task.UpdatedAt.Format(dateTimeLayout))
 	if requiresAuthorization(intentValue) {
+		updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, intentValue)
+		if !ok {
+			return nil, ErrTaskNotFound
+		}
+		s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshotFromTask(updatedTask), intentValue)
+
 		pendingExecution := s.delivery.BuildApprovalExecutionPlan(task.TaskID, intentValue)
 		approvalRequest := buildApprovalRequest(task.TaskID, intentValue, "red")
-		bubble = s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", task.UpdatedAt.Format(dateTimeLayout))
-		updatedTask, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
+		bubble = s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", updatedTask.UpdatedAt.Format(dateTimeLayout))
+		updatedTask, ok = s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
 		if !ok {
 			return nil, ErrTaskNotFound
 		}
