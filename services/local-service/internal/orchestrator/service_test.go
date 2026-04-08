@@ -187,6 +187,170 @@ func TestServiceConfirmCanEnterWaitingAuth(t *testing.T) {
 	}
 }
 
+// TestServiceSecurityRespondAllowOnceResumesAndCompletes 验证授权通过后任务会继续执行并完成交付。
+func TestServiceSecurityRespondAllowOnceResumesAndCompletes(t *testing.T) {
+	service := NewService(
+		contextsvc.NewService(),
+		intent.NewService(),
+		runengine.NewEngine(),
+		delivery.NewService(),
+		memory.NewService(),
+		risk.NewService(),
+		model.NewService(modelConfig()),
+		tools.NewRegistry(),
+		plugin.NewService(),
+	)
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "需要授权后继续执行的内容",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	_, err = service.ConfirmTask(map[string]any{
+		"task_id": taskID,
+		"corrected_intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+				"target_path":           "workspace_document",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":       taskID,
+		"approval_id":   "appr_001",
+		"decision":      "allow_once",
+		"remember_rule": false,
+	})
+	if err != nil {
+		t.Fatalf("security respond failed: %v", err)
+	}
+
+	responseTask := respondResult["task"].(map[string]any)
+	if responseTask["status"] != "processing" {
+		t.Fatalf("expected response task to reflect resumed processing, got %v", responseTask["status"])
+	}
+
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime after authorization")
+	}
+	if record.Status != "completed" {
+		t.Fatalf("expected runtime task to complete after resume, got %s", record.Status)
+	}
+	if record.Authorization == nil {
+		t.Fatal("expected authorization record to be stored on runtime task")
+	}
+
+	notifications, ok := service.runEngine.PendingNotifications(taskID)
+	if !ok {
+		t.Fatal("expected notifications to remain available after authorization")
+	}
+	hasProcessingUpdate := false
+	hasDeliveryReady := false
+	for _, notification := range notifications {
+		if notification.Method == "task.updated" {
+			if notification.Params["status"] == "processing" {
+				hasProcessingUpdate = true
+			}
+		}
+		if notification.Method == "delivery.ready" {
+			hasDeliveryReady = true
+		}
+	}
+	if !hasProcessingUpdate || !hasDeliveryReady {
+		t.Fatal("expected resumed processing and delivery notifications to be queued")
+	}
+	if record.PendingExecution != nil {
+		t.Fatal("expected pending execution plan to be cleared after successful authorization")
+	}
+}
+
+// TestServiceSecurityRespondDenyOnceCancelsTask 验证拒绝授权后任务会结束。
+func TestServiceSecurityRespondDenyOnceCancelsTask(t *testing.T) {
+	service := NewService(
+		contextsvc.NewService(),
+		intent.NewService(),
+		runengine.NewEngine(),
+		delivery.NewService(),
+		memory.NewService(),
+		risk.NewService(),
+		model.NewService(modelConfig()),
+		tools.NewRegistry(),
+		plugin.NewService(),
+	)
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "需要授权后继续执行的内容",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	_, err = service.ConfirmTask(map[string]any{
+		"task_id": taskID,
+		"corrected_intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+				"target_path":           "workspace_document",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":       taskID,
+		"approval_id":   "appr_001",
+		"decision":      "deny_once",
+		"remember_rule": false,
+	})
+	if err != nil {
+		t.Fatalf("security respond failed: %v", err)
+	}
+
+	responseTask := respondResult["task"].(map[string]any)
+	if responseTask["status"] != "cancelled" {
+		t.Fatalf("expected cancelled task in deny response, got %v", responseTask["status"])
+	}
+
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime after denial")
+	}
+	if record.Status != "cancelled" {
+		t.Fatalf("expected runtime task to be cancelled after denial, got %s", record.Status)
+	}
+	if record.Authorization == nil {
+		t.Fatal("expected denial decision to be stored as authorization record")
+	}
+	if record.PendingExecution != nil {
+		t.Fatal("expected pending execution plan to be cleared after denial")
+	}
+}
+
 // modelConfig 处理当前模块的相关逻辑。
 func modelConfig() serviceconfig.ModelConfig {
 	return serviceconfig.ModelConfig{
