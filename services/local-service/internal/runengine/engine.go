@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+const (
+	defaultWorkspaceRoot   = "workspace"
+	defaultTaskSourcePath  = "workspace/todos"
+	defaultRecoveryPathObj = "workspace/temp.md"
+)
+
 // TaskRecord 描述当前模块记录。
 type TaskRecord struct {
 	TaskID            string
@@ -108,7 +114,7 @@ func NewEngine() *Engine {
 		taskOrder:    []string{},
 		sessionOrder: []string{},
 		inspector: InspectorConfig{
-			TaskSources:          []string{"D:/workspace/todos"},
+			TaskSources:          []string{defaultTaskSourcePath},
 			InspectionInterval:   map[string]any{"unit": "minute", "value": 15},
 			InspectOnFileChange:  true,
 			InspectOnStartup:     true,
@@ -976,7 +982,7 @@ func buildRecoveryPoint(taskID string, createdAt time.Time) map[string]any {
 		"task_id":           taskID,
 		"summary":           "工具执行前恢复点",
 		"created_at":        createdAt.Format(time.RFC3339),
-		"objects":           []string{"D:/CialloClawWorkspace/temp.md"},
+		"objects":           []string{defaultRecoveryPathObj},
 	}
 }
 
@@ -1046,7 +1052,7 @@ func buildDefaultSettings() map[string]any {
 			"voice_notification_enabled": true,
 			"voice_type":                 "default_female",
 			"download": map[string]any{
-				"workspace_path":            "D:/CialloClawWorkspace",
+				"workspace_path":            defaultWorkspaceRoot,
 				"ask_before_save_each_file": true,
 			},
 		},
@@ -1066,7 +1072,7 @@ func buildDefaultSettings() map[string]any {
 			"inspect_on_startup":     true,
 			"inspect_on_file_change": true,
 			"inspection_interval":    map[string]any{"unit": "minute", "value": 15},
-			"task_sources":           []string{"D:/workspace/todos"},
+			"task_sources":           []string{defaultTaskSourcePath},
 			"remind_before_deadline": true,
 			"remind_when_stale":      false,
 		},

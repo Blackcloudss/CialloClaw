@@ -4,6 +4,7 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"path"
 	"time"
 
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
@@ -749,13 +750,13 @@ func currentTimeFromTask(engine *runengine.Engine, taskID string) string {
 func workspacePathFromSettings(settings map[string]any) string {
 	general, ok := settings["general"].(map[string]any)
 	if !ok {
-		return "D:/CialloClawWorkspace"
+		return "workspace"
 	}
 	download, ok := general["download"].(map[string]any)
 	if !ok {
-		return "D:/CialloClawWorkspace"
+		return "workspace"
 	}
-	return stringValue(download, "workspace_path", "D:/CialloClawWorkspace")
+	return stringValue(download, "workspace_path", "workspace")
 }
 
 // defaultIntentMap 处理当前模块的相关逻辑。
@@ -859,7 +860,7 @@ func buildApprovalRequest(taskID string, taskIntent map[string]any, riskLevel st
 // buildImpactScope 处理当前模块的相关逻辑。
 func buildImpactScope() map[string]any {
 	return map[string]any{
-		"files":                    []string{"D:/CialloClawWorkspace/report.md"},
+		"files":                    []string{path.Join("workspace", "report.md")},
 		"webpages":                 []string{},
 		"apps":                     []string{},
 		"out_of_workspace":         false,
