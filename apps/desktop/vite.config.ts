@@ -19,6 +19,7 @@ export default defineConfig({
         "shell-ball": resolve(currentDirectory, "shell-ball.html"),
         dashboard: resolve(currentDirectory, "dashboard.html"),
         "control-panel": resolve(currentDirectory, "control-panel.html"),
+        mirror: resolve(currentDirectory, "mirror.html"),
       },
     },
   },
