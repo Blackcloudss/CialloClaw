@@ -77,6 +77,54 @@ func TestEngineTaskLifecycle(t *testing.T) {
 	}
 }
 
+// TestEngineExecutionProgressAndToolCall 验证真实执行阶段的 timeline 和 tool_call 会被记录。
+func TestEngineExecutionProgressAndToolCall(t *testing.T) {
+	engine := NewEngine()
+	engine.now = func() time.Time { return time.Date(2026, 4, 8, 10, 30, 0, 0, time.UTC) }
+
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_exec",
+		Title:       "执行测试任务",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Timeline: []TaskStepRecord{{
+			Name:          "generate_output",
+			Status:        "running",
+			OrderIndex:    1,
+			InputSummary:  "task input",
+			OutputSummary: "等待生成",
+		}},
+	})
+
+	started, ok := engine.BeginExecution(task.TaskID, "generate_output", "开始生成正式结果")
+	if !ok {
+		t.Fatal("expected begin execution to succeed")
+	}
+	if started.CurrentStep != "generate_output" {
+		t.Fatalf("expected current step to remain generate_output, got %s", started.CurrentStep)
+	}
+	if started.Timeline[len(started.Timeline)-1].OutputSummary != "开始生成正式结果" {
+		t.Fatalf("expected execution summary to update timeline, got %v", started.Timeline[len(started.Timeline)-1].OutputSummary)
+	}
+
+	recorded, ok := engine.RecordToolCall(task.TaskID, "write_file", map[string]any{"path": "workspace/result.md"}, map[string]any{"bytes": 128}, 32)
+	if !ok {
+		t.Fatal("expected tool call recording to succeed")
+	}
+	if recorded.LatestToolCall["tool_name"] != "write_file" {
+		t.Fatalf("expected latest tool call to be write_file, got %v", recorded.LatestToolCall["tool_name"])
+	}
+	if recorded.LatestToolCall["duration_ms"] != int64(32) {
+		t.Fatalf("expected duration_ms to be preserved, got %v", recorded.LatestToolCall["duration_ms"])
+	}
+	if recorded.LatestEvent["type"] != "tool_call.completed" {
+		t.Fatalf("expected latest event to reflect tool_call.completed, got %v", recorded.LatestEvent["type"])
+	}
+}
+
 // TestEngineAuthorizationAndHandoffState 验证EngineAuthorizationAndHandoffState。
 func TestEngineAuthorizationAndHandoffState(t *testing.T) {
 	engine := NewEngine()

@@ -238,7 +238,6 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 	}
 
 	record.LatestEvent = e.buildEvent(record, "task.updated")
-	record.LatestToolCall = e.buildToolCall(record, "read_file")
 	record.queueNotification("task.updated", map[string]any{
 		"task_id": taskID,
 		"status":  record.Status,
@@ -328,6 +327,30 @@ func (e *Engine) ConfirmTask(taskID string, intent map[string]any, bubbleMessage
 	return record.clone(), true
 }
 
+// BeginExecution 把任务推进到真实执行步骤，并刷新 timeline 与事件。
+func (e *Engine) BeginExecution(taskID, stepName, outputSummary string) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.Status = "processing"
+	record.CurrentStep = firstNonEmpty(stepName, "generate_output")
+	record.UpdatedAt = e.now()
+	record.Timeline = advanceTimeline(record.Timeline, record.CurrentStep, "running", outputSummary)
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+
+	return record.clone(), true
+}
+
 // UpdateIntent 更新Task当前生效意图。
 
 // UpdateIntent 在不改变整体任务身份的前提下覆盖当前生效意图。
@@ -385,6 +408,30 @@ func (e *Engine) SetPresentation(taskID string, bubbleMessage map[string]any, de
 			"delivery_result": cloneMap(record.DeliveryResult),
 		})
 	}
+
+	return record.clone(), true
+}
+
+// RecordToolCall 记录主链路最近一次完成的 tool_call 兼容层快照。
+func (e *Engine) RecordToolCall(taskID, toolName string, input, output map[string]any, durationMS int64) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.UpdatedAt = e.now()
+	record.LatestToolCall = e.buildToolCallRecord(record, toolName, input, output, durationMS, nil)
+	record.LatestEvent = e.buildEventWithPayload(record, "tool_call.completed", map[string]any{
+		"status":    record.Status,
+		"tool_name": toolName,
+	})
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
 
 	return record.clone(), true
 }
@@ -921,6 +968,10 @@ func (e *Engine) NotepadItems(group string, limit, offset int) ([]map[string]any
 
 // buildEvent 为当前任务生成一条兼容层 Event 记录。
 func (e *Engine) buildEvent(record *TaskRecord, eventType string) map[string]any {
+	return e.buildEventWithPayload(record, eventType, map[string]any{"status": record.Status})
+}
+
+func (e *Engine) buildEventWithPayload(record *TaskRecord, eventType string, payload map[string]any) map[string]any {
 	return map[string]any{
 		"event_id":   e.nextIdentifier("evt"),
 		"run_id":     record.RunID,
@@ -928,7 +979,7 @@ func (e *Engine) buildEvent(record *TaskRecord, eventType string) map[string]any
 		"step_id":    timelineCurrentStepID(record.Timeline),
 		"type":       eventType,
 		"level":      "info",
-		"payload":    map[string]any{"status": record.Status},
+		"payload":    cloneMap(payload),
 		"created_at": e.now().Format(time.RFC3339),
 	}
 }
@@ -937,6 +988,14 @@ func (e *Engine) buildEvent(record *TaskRecord, eventType string) map[string]any
 
 // buildToolCall 为当前任务生成一条兼容层 ToolCall 记录。
 func (e *Engine) buildToolCall(record *TaskRecord, toolName string) map[string]any {
+	return e.buildToolCallRecord(record, toolName, map[string]any{}, map[string]any{}, 120, nil)
+}
+
+func (e *Engine) buildToolCallRecord(record *TaskRecord, toolName string, input, output map[string]any, durationMS int64, errorCode any) map[string]any {
+	if durationMS <= 0 {
+		durationMS = 1
+	}
+
 	return map[string]any{
 		"tool_call_id": e.nextIdentifier("tool"),
 		"run_id":       record.RunID,
@@ -944,10 +1003,10 @@ func (e *Engine) buildToolCall(record *TaskRecord, toolName string) map[string]a
 		"step_id":      timelineCurrentStepID(record.Timeline),
 		"tool_name":    toolName,
 		"status":       "succeeded",
-		"input":        map[string]any{},
-		"output":       map[string]any{},
-		"error_code":   nil,
-		"duration_ms":  120,
+		"input":        cloneMap(input),
+		"output":       cloneMap(output),
+		"error_code":   errorCode,
+		"duration_ms":  durationMS,
 	}
 }
 
