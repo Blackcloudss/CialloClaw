@@ -2,6 +2,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -992,6 +993,64 @@ func TestServiceSecuritySummaryUsesRuntimeTaskState(t *testing.T) {
 	tokenCostSummary := summary["token_cost_summary"].(map[string]any)
 	if tokenCostSummary["budget_auto_downgrade"] != true {
 		t.Fatalf("expected token summary to reflect settings snapshot, got %v", tokenCostSummary["budget_auto_downgrade"])
+	}
+}
+
+func TestServiceTaskControlRejectsInvalidStatusTransition(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "this task still requires confirmation",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	_, err = service.TaskControl(map[string]any{
+		"task_id": taskID,
+		"action":  "pause",
+	})
+	if !errors.Is(err, ErrTaskStatusInvalid) {
+		t.Fatalf("expected pause from confirming_intent to return ErrTaskStatusInvalid, got %v", err)
+	}
+}
+
+func TestServiceTaskControlRejectsFinishedTaskOperations(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_demo",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "completed task for task control error mapping",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	_, err = service.TaskControl(map[string]any{
+		"task_id": taskID,
+		"action":  "cancel",
+	})
+	if !errors.Is(err, ErrTaskAlreadyFinished) {
+		t.Fatalf("expected cancel on completed task to return ErrTaskAlreadyFinished, got %v", err)
 	}
 }
 

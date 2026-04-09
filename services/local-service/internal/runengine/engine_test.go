@@ -2,6 +2,7 @@
 package runengine
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -251,8 +252,8 @@ func TestEngineListTasksSupportsSorting(t *testing.T) {
 	second := createTask("second")
 	third := createTask("third")
 
-	if _, ok := engine.ControlTask(first.TaskID, "pause", map[string]any{"task_id": first.TaskID, "type": "status"}); !ok {
-		t.Fatal("expected first task update to succeed")
+	if _, err := engine.ControlTask(first.TaskID, "pause", map[string]any{"task_id": first.TaskID, "type": "status"}); err != nil {
+		t.Fatalf("expected first task update to succeed: %v", err)
 	}
 	currentTime = currentTime.Add(time.Minute)
 	if _, ok := engine.CompleteTask(second.TaskID, map[string]any{"type": "bubble"}, map[string]any{"task_id": second.TaskID, "type": "result"}, nil); !ok {
@@ -284,5 +285,92 @@ func TestEngineListTasksSupportsSorting(t *testing.T) {
 	defaultSorted, _ := engine.ListTasks("finished", "unknown_field", "unknown_order", 10, 0)
 	if defaultSorted[0].TaskID != third.TaskID || defaultSorted[1].TaskID != second.TaskID {
 		t.Fatalf("expected invalid sort options to fall back to updated_at desc, got %s -> %s", defaultSorted[0].TaskID, defaultSorted[1].TaskID)
+	}
+}
+
+func TestEngineControlTaskRejectsInvalidTransitions(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_control",
+		Title:       "task control transition test",
+		SourceType:  "hover_input",
+		Status:      "confirming_intent",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep: "intent_confirmation",
+		RiskLevel:   "green",
+		Timeline: []TaskStepRecord{{
+			Name:          "intent_confirmation",
+			Status:        "pending",
+			OrderIndex:    1,
+			InputSummary:  "task input",
+			OutputSummary: "waiting for confirm",
+		}},
+	})
+
+	if _, err := engine.ControlTask(task.TaskID, "resume", map[string]any{"task_id": task.TaskID, "type": "status"}); !errors.Is(err, ErrTaskStatusInvalid) {
+		t.Fatalf("expected resume from confirming_intent to be invalid, got %v", err)
+	}
+
+	if _, err := engine.ControlTask(task.TaskID, "pause", map[string]any{"task_id": task.TaskID, "type": "status"}); !errors.Is(err, ErrTaskStatusInvalid) {
+		t.Fatalf("expected pause from confirming_intent to be invalid, got %v", err)
+	}
+
+	completed, ok := engine.CompleteTask(task.TaskID, map[string]any{"type": "bubble"}, map[string]any{"task_id": task.TaskID, "type": "result"}, nil)
+	if !ok || completed.Status != "completed" {
+		t.Fatalf("expected task to complete for finished-state checks, got %#v ok=%v", completed, ok)
+	}
+
+	if _, err := engine.ControlTask(task.TaskID, "cancel", map[string]any{"task_id": task.TaskID, "type": "status"}); !errors.Is(err, ErrTaskAlreadyFinished) {
+		t.Fatalf("expected cancel on completed task to return ErrTaskAlreadyFinished, got %v", err)
+	}
+}
+
+func TestEngineControlTaskRestartResetsFinishedOutputs(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_restart",
+		Title:       "restart finished task",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Timeline: []TaskStepRecord{{
+			Name:          "generate_output",
+			Status:        "running",
+			OrderIndex:    1,
+			InputSummary:  "task input",
+			OutputSummary: "generating output",
+		}},
+	})
+
+	deliveryResult := map[string]any{"type": "workspace_document", "payload": map[string]any{"path": "workspace/result.md"}}
+	artifacts := []map[string]any{{"artifact_id": "art_test", "task_id": task.TaskID, "path": "workspace/result.md"}}
+	completed, ok := engine.CompleteTask(task.TaskID, deliveryResult, map[string]any{"task_id": task.TaskID, "type": "result"}, artifacts)
+	if !ok || completed.Status != "completed" {
+		t.Fatalf("expected task to complete before restart, got %#v ok=%v", completed, ok)
+	}
+	if _, ok := engine.SetMemoryPlans(task.TaskID, []map[string]any{{"kind": "retrieval"}}, []map[string]any{{"kind": "summary_write"}}); !ok {
+		t.Fatal("expected memory plans to be stored before restart")
+	}
+	if _, ok := engine.SetMirrorReferences(task.TaskID, []map[string]any{{"memory_id": "mem_write_task_001_1"}}); !ok {
+		t.Fatal("expected mirror references to be stored before restart")
+	}
+
+	restarted, err := engine.ControlTask(task.TaskID, "restart", map[string]any{"task_id": task.TaskID, "type": "status"})
+	if err != nil {
+		t.Fatalf("expected restart on completed task to succeed: %v", err)
+	}
+	if restarted.Status != "processing" {
+		t.Fatalf("expected restarted task to return to processing, got %s", restarted.Status)
+	}
+	if restarted.FinishedAt != nil {
+		t.Fatal("expected restart to clear finished_at")
+	}
+	if restarted.DeliveryResult != nil || len(restarted.Artifacts) != 0 {
+		t.Fatal("expected restart to clear finished delivery outputs")
+	}
+	if restarted.MemoryReadPlans != nil || restarted.MemoryWritePlans != nil || restarted.MirrorReferences != nil {
+		t.Fatal("expected restart to clear handoff and mirror snapshots")
 	}
 }
