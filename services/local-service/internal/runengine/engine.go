@@ -23,6 +23,8 @@ type TaskRecord struct {
 	SourceType        string
 	Status            string
 	Intent            map[string]any
+	PreferredDelivery string
+	FallbackDelivery  string
 	CurrentStep       string
 	RiskLevel         string
 	StartedAt         time.Time
@@ -68,18 +70,20 @@ type NotificationRecord struct {
 
 // CreateTaskInput 定义当前模块的数据结构。
 type CreateTaskInput struct {
-	SessionID        string
-	Title            string
-	SourceType       string
-	Status           string
-	Intent           map[string]any
-	CurrentStep      string
-	RiskLevel        string
-	Timeline         []TaskStepRecord
-	BubbleMessage    map[string]any
-	DeliveryResult   map[string]any
-	Artifacts        []map[string]any
-	MirrorReferences []map[string]any
+	SessionID         string
+	Title             string
+	SourceType        string
+	Status            string
+	Intent            map[string]any
+	PreferredDelivery string
+	FallbackDelivery  string
+	CurrentStep       string
+	RiskLevel         string
+	Timeline          []TaskStepRecord
+	BubbleMessage     map[string]any
+	DeliveryResult    map[string]any
+	Artifacts         []map[string]any
+	MirrorReferences  []map[string]any
 }
 
 // InspectorConfig 描述当前模块配置。
@@ -185,6 +189,8 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 		SourceType:        input.SourceType,
 		Status:            input.Status,
 		Intent:            cloneMap(input.Intent),
+		PreferredDelivery: input.PreferredDelivery,
+		FallbackDelivery:  input.FallbackDelivery,
 		CurrentStep:       input.CurrentStep,
 		RiskLevel:         input.RiskLevel,
 		StartedAt:         createdAt,

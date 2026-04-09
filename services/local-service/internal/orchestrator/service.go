@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"strings"
 	"time"
 
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
@@ -83,17 +84,20 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	options := mapValue(params, "options")
 	confirmRequired := boolValue(options, "confirm_required", true)
+	preferredDelivery, fallbackDelivery := deliveryPreferenceFromSubmit(params)
 	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
 	if s.intent.Analyze(snapshot.Text) == "waiting_input" {
 		task := s.runEngine.CreateTask(runengine.CreateTaskInput{
-			SessionID:   stringValue(params, "session_id", ""),
-			Title:       "等待补充输入",
-			SourceType:  suggestion.TaskSourceType,
-			Status:      "waiting_input",
-			Intent:      nil,
-			CurrentStep: "collect_input",
-			RiskLevel:   s.risk.DefaultLevel(),
-			Timeline:    initialTimeline("waiting_input", "collect_input"),
+			SessionID:         stringValue(params, "session_id", ""),
+			Title:             "等待补充输入",
+			SourceType:        suggestion.TaskSourceType,
+			Status:            "waiting_input",
+			Intent:            nil,
+			PreferredDelivery: preferredDelivery,
+			FallbackDelivery:  fallbackDelivery,
+			CurrentStep:       "collect_input",
+			RiskLevel:         s.risk.DefaultLevel(),
+			Timeline:          initialTimeline("waiting_input", "collect_input"),
 		})
 
 		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "请先告诉我你希望我处理什么内容。", task.StartedAt.Format(dateTimeLayout))
@@ -108,14 +112,16 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	}
 
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
-		SessionID:   stringValue(params, "session_id", ""),
-		Title:       suggestion.TaskTitle,
-		SourceType:  suggestion.TaskSourceType,
-		Status:      taskStatusForSuggestion(suggestion.RequiresConfirm),
-		Intent:      suggestion.Intent,
-		CurrentStep: currentStepForSuggestion(suggestion.RequiresConfirm),
-		RiskLevel:   s.risk.DefaultLevel(),
-		Timeline:    initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm)),
+		SessionID:         stringValue(params, "session_id", ""),
+		Title:             suggestion.TaskTitle,
+		SourceType:        suggestion.TaskSourceType,
+		Status:            taskStatusForSuggestion(suggestion.RequiresConfirm),
+		Intent:            suggestion.Intent,
+		PreferredDelivery: preferredDelivery,
+		FallbackDelivery:  fallbackDelivery,
+		CurrentStep:       currentStepForSuggestion(suggestion.RequiresConfirm),
+		RiskLevel:         s.risk.DefaultLevel(),
+		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm)),
 	})
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 
@@ -124,7 +130,7 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	artifacts := []map[string]any(nil)
 	if !suggestion.RequiresConfirm {
 		if requiresAuthorization(suggestion.Intent) {
-			pendingExecution := s.delivery.BuildApprovalExecutionPlan(task.TaskID, suggestion.Intent)
+			pendingExecution := s.buildPendingExecution(task, suggestion.Intent)
 			approvalRequest := buildApprovalRequest(task.TaskID, suggestion.Intent, "red")
 			bubble = s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", task.StartedAt.Format(dateTimeLayout))
 			if _, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble); ok {
@@ -135,7 +141,8 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 				"bubble_message": bubble,
 			}, nil
 		}
-		deliveryResult = s.delivery.BuildDeliveryResult(task.TaskID, suggestion.DirectDeliveryType, suggestion.ResultTitle, suggestion.ResultPreview)
+		deliveryType := resolveTaskDeliveryType(task, suggestion.Intent)
+		deliveryResult = s.delivery.BuildDeliveryResult(task.TaskID, deliveryType, suggestion.ResultTitle, previewTextForDeliveryType(deliveryType))
 		artifacts = s.delivery.BuildArtifact(task.TaskID, suggestion.ResultTitle, deliveryResult)
 		if _, ok := s.runEngine.CompleteTask(task.TaskID, deliveryResult, bubble, artifacts); ok {
 			task, _ = s.runEngine.GetTask(task.TaskID)
@@ -162,17 +169,20 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	explicitIntent := mapValue(params, "intent")
+	preferredDelivery, fallbackDelivery := deliveryPreferenceFromStart(params)
 	suggestion := s.intent.Suggest(snapshot, explicitIntent, len(explicitIntent) == 0)
 
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
-		SessionID:   stringValue(params, "session_id", ""),
-		Title:       suggestion.TaskTitle,
-		SourceType:  suggestion.TaskSourceType,
-		Status:      taskStatusForSuggestion(suggestion.RequiresConfirm),
-		Intent:      suggestion.Intent,
-		CurrentStep: currentStepForSuggestion(suggestion.RequiresConfirm),
-		RiskLevel:   s.risk.DefaultLevel(),
-		Timeline:    initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm)),
+		SessionID:         stringValue(params, "session_id", ""),
+		Title:             suggestion.TaskTitle,
+		SourceType:        suggestion.TaskSourceType,
+		Status:            taskStatusForSuggestion(suggestion.RequiresConfirm),
+		Intent:            suggestion.Intent,
+		PreferredDelivery: preferredDelivery,
+		FallbackDelivery:  fallbackDelivery,
+		CurrentStep:       currentStepForSuggestion(suggestion.RequiresConfirm),
+		RiskLevel:         s.risk.DefaultLevel(),
+		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm)),
 	})
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 
@@ -192,7 +202,7 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	}
 
 	if requiresAuthorization(suggestion.Intent) {
-		pendingExecution := s.delivery.BuildApprovalExecutionPlan(task.TaskID, suggestion.Intent)
+		pendingExecution := s.buildPendingExecution(task, suggestion.Intent)
 		approvalRequest := buildApprovalRequest(task.TaskID, suggestion.Intent, "red")
 		bubble = s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", task.StartedAt.Format(dateTimeLayout))
 		if _, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble); ok {
@@ -203,7 +213,8 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		return response, nil
 	}
 
-	deliveryResult := s.delivery.BuildDeliveryResult(task.TaskID, suggestion.DirectDeliveryType, suggestion.ResultTitle, suggestion.ResultPreview)
+	deliveryType := resolveTaskDeliveryType(task, suggestion.Intent)
+	deliveryResult := s.delivery.BuildDeliveryResult(task.TaskID, deliveryType, suggestion.ResultTitle, previewTextForDeliveryType(deliveryType))
 	artifacts := s.delivery.BuildArtifact(task.TaskID, suggestion.ResultTitle, deliveryResult)
 	if _, ok := s.runEngine.CompleteTask(task.TaskID, deliveryResult, bubble, artifacts); ok {
 		task, _ = s.runEngine.GetTask(task.TaskID)
@@ -235,7 +246,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		}
 		s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshotFromTask(updatedTask), intentValue)
 
-		pendingExecution := s.delivery.BuildApprovalExecutionPlan(task.TaskID, intentValue)
+		pendingExecution := s.buildPendingExecution(updatedTask, intentValue)
 		approvalRequest := buildApprovalRequest(task.TaskID, intentValue, "red")
 		bubble = s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", updatedTask.UpdatedAt.Format(dateTimeLayout))
 		updatedTask, ok = s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
@@ -257,7 +268,8 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshot, intentValue)
 
 	resultTitle, resultPreview, resultBubbleText := resultSpecFromIntent(intentValue)
-	deliveryType := deliveryTypeFromIntent(intentValue)
+	deliveryType := resolveTaskDeliveryType(updatedTask, intentValue)
+	resultPreview = previewTextForDeliveryType(deliveryType)
 	deliveryResult := s.delivery.BuildDeliveryResult(updatedTask.TaskID, deliveryType, resultTitle, resultPreview)
 	artifacts := s.delivery.BuildArtifact(updatedTask.TaskID, resultTitle, deliveryResult)
 	resultBubble := s.delivery.BuildBubbleMessage(updatedTask.TaskID, "result", resultBubbleText, updatedTask.UpdatedAt.Format(dateTimeLayout))
@@ -602,13 +614,16 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 
 	pendingExecution, ok := s.runEngine.PendingExecutionPlan(task.TaskID)
 	if !ok {
-		pendingExecution = s.delivery.BuildApprovalExecutionPlan(task.TaskID, task.Intent)
+		pendingExecution = s.buildPendingExecution(task, task.Intent)
 	}
+	pendingExecution = s.applyResolvedDeliveryToPlan(task, pendingExecution, task.Intent)
 
 	resultTitle := stringValue(pendingExecution, "result_title", "处理结果")
 	resultPreview := stringValue(pendingExecution, "preview_text", "已为你写入文档并打开")
 	resultBubbleText := stringValue(pendingExecution, "result_bubble_text", "结果已经生成，可直接查看。")
 	deliveryType := stringValue(pendingExecution, "delivery_type", deliveryTypeFromIntent(task.Intent))
+	deliveryType = resolveTaskDeliveryType(task, task.Intent)
+	resultPreview = previewTextForDeliveryType(deliveryType)
 	deliveryResult := s.delivery.BuildDeliveryResult(task.TaskID, deliveryType, resultTitle, resultPreview)
 	artifacts := s.delivery.BuildArtifact(task.TaskID, resultTitle, deliveryResult)
 	resultBubble := s.delivery.BuildBubbleMessage(task.TaskID, "result", resultBubbleText, processingTask.UpdatedAt.Format(dateTimeLayout))
@@ -970,6 +985,71 @@ func deliveryTypeFromIntent(taskIntent map[string]any) string {
 }
 
 // firstNonEmptyString 处理当前模块的相关逻辑。
+func deliveryPreferenceFromSubmit(params map[string]any) (string, string) {
+	options := mapValue(params, "options")
+	return stringValue(options, "preferred_delivery", ""), ""
+}
+
+func deliveryPreferenceFromStart(params map[string]any) (string, string) {
+	deliveryOptions := mapValue(params, "delivery")
+	return stringValue(deliveryOptions, "preferred", ""), stringValue(deliveryOptions, "fallback", "")
+}
+
+func (s *Service) buildPendingExecution(task runengine.TaskRecord, taskIntent map[string]any) map[string]any {
+	plan := s.delivery.BuildApprovalExecutionPlan(task.TaskID, taskIntent)
+	return s.applyResolvedDeliveryToPlan(task, plan, taskIntent)
+}
+
+func (s *Service) applyResolvedDeliveryToPlan(task runengine.TaskRecord, plan map[string]any, taskIntent map[string]any) map[string]any {
+	if len(plan) == 0 {
+		return nil
+	}
+
+	updatedPlan := cloneMap(plan)
+	deliveryType := resolveTaskDeliveryType(task, taskIntent)
+	updatedPlan["delivery_type"] = deliveryType
+	updatedPlan["preview_text"] = previewTextForDeliveryType(deliveryType)
+	return updatedPlan
+}
+
+func resolveTaskDeliveryType(task runengine.TaskRecord, taskIntent map[string]any) string {
+	return resolveDeliveryType(task.PreferredDelivery, task.FallbackDelivery, deliveryTypeFromIntent(taskIntent))
+}
+
+func resolveDeliveryType(preferred, fallback, defaultType string) string {
+	if normalized := normalizeDeliveryType(preferred); normalized != "" {
+		return normalized
+	}
+	if strings.TrimSpace(preferred) != "" {
+		if normalized := normalizeDeliveryType(fallback); normalized != "" {
+			return normalized
+		}
+	}
+	if normalized := normalizeDeliveryType(defaultType); normalized != "" {
+		return normalized
+	}
+	if normalized := normalizeDeliveryType(fallback); normalized != "" {
+		return normalized
+	}
+	return "workspace_document"
+}
+
+func normalizeDeliveryType(deliveryType string) string {
+	switch deliveryType {
+	case "bubble", "workspace_document":
+		return deliveryType
+	default:
+		return ""
+	}
+}
+
+func previewTextForDeliveryType(deliveryType string) string {
+	if deliveryType == "bubble" {
+		return "\u7ed3\u679c\u5df2\u901a\u8fc7\u6c14\u6ce1\u8fd4\u56de"
+	}
+	return "\u5df2\u4e3a\u4f60\u5199\u5165\u6587\u6863\u5e76\u6253\u5f00"
+}
+
 func firstNonEmptyString(primary, fallback string) string {
 	if primary != "" {
 		return primary
