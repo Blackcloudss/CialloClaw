@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	storagesvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
 
 const retrievalBackend = "sqlite_fts5+sqlite_vec"
@@ -18,7 +20,8 @@ var ErrSummaryRequired = errors.New("memory summary is required")
 var ErrQueryRequired = errors.New("memory query is required")
 
 type Service struct {
-	store Store
+	store   Store
+	backend string
 }
 
 func NewService(stores ...Store) *Service {
@@ -27,16 +30,32 @@ func NewService(stores ...Store) *Service {
 		store = stores[0]
 	}
 
-	return &Service{store: store}
+	return &Service{store: store, backend: retrievalBackend}
 }
 
 func NewInMemoryService() *Service {
 	return NewService(NewInMemoryStore())
 }
 
+func NewServiceFromStorage(store storagesvc.MemoryStore, backend string) *Service {
+	resolvedBackend := strings.TrimSpace(backend)
+	if resolvedBackend == "" {
+		resolvedBackend = retrievalBackend
+	}
+
+	return &Service{
+		store:   newStorageStore(store),
+		backend: resolvedBackend,
+	}
+}
+
 // RetrievalBackend 处理当前模块的相关逻辑。
 func (s *Service) RetrievalBackend() string {
-	return retrievalBackend
+	if strings.TrimSpace(s.backend) == "" {
+		return retrievalBackend
+	}
+
+	return s.backend
 }
 
 func (s *Service) WriteSummary(ctx context.Context, summary MemorySummary) error {
