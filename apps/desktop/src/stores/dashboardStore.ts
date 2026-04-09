@@ -1,11 +1,12 @@
 import { create } from "zustand";
+import type { DashboardModuleRoute } from "@/features/dashboard/shared/dashboardRoutes";
 
 type DashboardState = {
-  selectedPanel: "tasks" | "memory" | "safety" | "plugins";
-  setSelectedPanel: (panel: DashboardState["selectedPanel"]) => void;
+  hoveredModule: DashboardModuleRoute | null;
+  setHoveredModule: (module: DashboardModuleRoute | null) => void;
 };
 
 export const useDashboardStore = create<DashboardState>((set) => ({
-  selectedPanel: "tasks",
-  setSelectedPanel: (selectedPanel) => set({ selectedPanel }),
+  hoveredModule: null,
+  setHoveredModule: (hoveredModule) => set({ hoveredModule }),
 }));

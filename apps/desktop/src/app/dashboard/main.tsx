@@ -1,9 +1,9 @@
 import ReactDOM from "react-dom/client";
-import { DashboardApp } from "@/features/dashboard/DashboardApp";
 import { AppProviders } from "@/features/shared/AppProviders";
+import { DashboardRoot } from "./DashboardRoot";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <AppProviders>
-    <DashboardApp />
+    <DashboardRoot />
   </AppProviders>,
 );
