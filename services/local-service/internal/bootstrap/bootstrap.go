@@ -46,7 +46,7 @@ func New(cfg config.Config) (*App, error) {
 		intent.NewService(),
 		runengine.NewEngine(),
 		delivery.NewService(),
-		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryStoreBackend),
+		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
 		risk.NewService(),
 		model.NewService(cfg.Model),
 		tools.NewRegistry(),

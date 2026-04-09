@@ -35,7 +35,14 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	if app.storage.MemoryStore() == nil {
 		t.Fatal("expected storage memory store to be available")
 	}
-	if !app.storage.Capabilities().SupportsMemoryStore {
+	capabilities := app.storage.Capabilities()
+	if !capabilities.SupportsMemoryStore {
 		t.Fatalf("expected storage capabilities to expose memory store: %+v", app.storage.Capabilities())
+	}
+	if !capabilities.SupportsRetrievalHits || !capabilities.SupportsFTS5 || !capabilities.SupportsSQLiteVecStub {
+		t.Fatalf("expected retrieval and search skeleton capabilities to be exposed: %+v", capabilities)
+	}
+	if capabilities.MemoryRetrievalBackend != "sqlite_fts5+sqlite_vec" {
+		t.Fatalf("expected retrieval backend to be aligned, got %+v", capabilities)
 	}
 }
