@@ -225,6 +225,20 @@ type AuditWriter interface {
 	WriteAuditRecord(taskID, runID, auditType, action, summary, target, result string) error
 }
 
+// ExecutionCapability 是 tools 模块所需的最小执行后端接口。
+//
+// 该接口用于受控命令执行工具，不直接暴露平台实现细节。
+type ExecutionCapability interface {
+	RunCommand(ctx context.Context, command string, args []string, workingDir string) (CommandExecutionResult, error)
+}
+
+// CommandExecutionResult 描述一次受控命令执行的最小输出。
+type CommandExecutionResult struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+}
+
 // CheckpointService 是 tools 模块所需的恢复点最小接口。
 //
 // 不直接引用 checkpoint 包内部类型，由 bootstrap 注入。
@@ -256,6 +270,7 @@ type ToolExecuteContext struct {
 
 	Storage    StorageCapability
 	Platform   PlatformCapability
+	Execution  ExecutionCapability
 	Risk       RiskEvaluator
 	Audit      AuditWriter
 	Checkpoint CheckpointService
