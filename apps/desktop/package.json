@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@radix-ui/themes": "^3.2.1",
     "@cialloclaw/protocol": "workspace:*",
     "@cialloclaw/ui": "workspace:*",
     "@floating-ui/react": "^0.27.8",
