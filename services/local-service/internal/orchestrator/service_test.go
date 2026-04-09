@@ -2,7 +2,10 @@
 package orchestrator
 
 import (
+	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,9 +13,11 @@ import (
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
@@ -20,6 +25,51 @@ import (
 )
 
 // TestServiceStartTaskAndConfirmFlow 验证确认后的普通任务会继续执行并完成交付。
+type stubModelClient struct {
+	output string
+}
+
+func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	return model.GenerateTextResponse{
+		TaskID:     request.TaskID,
+		RunID:      request.RunID,
+		RequestID:  "req_test",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: s.output,
+	}, nil
+}
+
+func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, string) {
+	t.Helper()
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+
+	modelService := model.NewService(modelConfig(), stubModelClient{output: modelOutput})
+	deliveryService := delivery.NewService()
+	toolRegistry := tools.NewRegistry()
+	pluginService := plugin.NewService()
+	executor := execution.NewService(platform.NewLocalFileSystemAdapter(pathPolicy), modelService, deliveryService, toolRegistry, pluginService)
+
+	service := NewService(
+		contextsvc.NewService(),
+		intent.NewService(),
+		runengine.NewEngine(),
+		deliveryService,
+		memory.NewService(),
+		risk.NewService(),
+		modelService,
+		toolRegistry,
+		pluginService,
+	).WithExecutor(executor)
+
+	return service, workspaceRoot
+}
+
 func newTestService() *Service {
 	return NewService(
 		contextsvc.NewService(),
@@ -1051,6 +1101,88 @@ func TestServiceTaskControlRejectsFinishedTaskOperations(t *testing.T) {
 	})
 	if !errors.Is(err, ErrTaskAlreadyFinished) {
 		t.Fatalf("expected cancel on completed task to return ErrTaskAlreadyFinished, got %v", err)
+	}
+}
+
+func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "第一点\n第二点\n第三点")
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_exec",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请整理成文档",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	deliveryResult := result["delivery_result"].(map[string]any)
+	payload := deliveryResult["payload"].(map[string]any)
+	outputPath := payload["path"].(string)
+	if outputPath == "" {
+		t.Fatal("expected workspace document delivery to carry a payload path")
+	}
+
+	content, err := os.ReadFile(filepath.Join(workspaceRoot, strings.TrimPrefix(outputPath, "workspace/")))
+	if err != nil {
+		t.Fatalf("read written file: %v", err)
+	}
+	if !strings.Contains(string(content), "# 处理结果") {
+		t.Fatalf("expected written file to contain title header, got %s", string(content))
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LatestToolCall["tool_name"] != "write_file" {
+		t.Fatalf("expected runtime task to record write_file tool call, got %v", record.LatestToolCall["tool_name"])
+	}
+}
+
+func TestServiceStartTaskWithExecutorReturnsGeneratedBubble(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "这段内容主要在解释当前问题的原因和处理方向。")
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_exec",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请解释这段内容",
+		},
+		"intent": map[string]any{
+			"name":      "explain",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["text"] != "这段内容主要在解释当前问题的原因和处理方向。" {
+		t.Fatalf("expected bubble text to use generated output, got %v", bubble["text"])
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LatestToolCall["tool_name"] != "generate_text" {
+		t.Fatalf("expected runtime task to record generate_text tool call, got %v", record.LatestToolCall["tool_name"])
 	}
 }
 
