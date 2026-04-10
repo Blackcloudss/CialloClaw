@@ -5,6 +5,7 @@ import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import { useShellBallCoordinator } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
+import { startShellBallWindowDragging } from "../../platform/shellBallWindowController";
 
 type ShellBallAppProps = {
   isDev?: boolean;
@@ -50,6 +51,9 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       visualState={visualState}
       voicePreview={voicePreview}
       motionConfig={motionConfig}
+      onDragStart={() => {
+        void startShellBallWindowDragging();
+      }}
       onPrimaryClick={handlePrimaryClick}
       onRegionEnter={handleRegionEnter}
       onRegionLeave={handleRegionLeave}

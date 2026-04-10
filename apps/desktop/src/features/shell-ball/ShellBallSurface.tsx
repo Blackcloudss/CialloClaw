@@ -9,6 +9,7 @@ type ShellBallSurfaceProps = {
   visualState: ShellBallVisualState;
   voicePreview: ShellBallVoicePreview;
   motionConfig: ShellBallMotionConfig;
+  onDragStart: () => void;
   onPrimaryClick: () => void;
   onRegionEnter: () => void;
   onRegionLeave: () => void;
@@ -23,6 +24,7 @@ export function ShellBallSurface({
   visualState,
   voicePreview,
   motionConfig,
+  onDragStart,
   onPrimaryClick,
   onRegionEnter,
   onRegionLeave,
@@ -37,7 +39,16 @@ export function ShellBallSurface({
           <div
             className="shell-ball-surface__host-drag-zone"
             data-shell-ball-zone="host-drag"
+            data-shell-ball-drag-handle="true"
             aria-hidden="true"
+            onPointerDown={(event) => {
+              if (event.button !== 0) {
+                return;
+              }
+
+              event.preventDefault();
+              onDragStart();
+            }}
           />
           <div
             className="shell-ball-surface__interaction-zone"

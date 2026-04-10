@@ -947,6 +947,7 @@ test("shell-ball surface renders the mascot-only floating structure without the 
       onPrimaryClick: () => {},
       onRegionEnter: () => {},
       onRegionLeave: () => {},
+      onDragStart: () => {},
       onPressStart: () => {},
       onPressMove: () => {},
       onPressEnd: () => false,
@@ -970,6 +971,7 @@ test("shell-ball surface reserves a host drag zone separate from the interaction
       onPrimaryClick: () => {},
       onRegionEnter: () => {},
       onRegionLeave: () => {},
+      onDragStart: () => {},
       onPressStart: () => {},
       onPressMove: () => {},
       onPressEnd: () => false,
@@ -977,6 +979,7 @@ test("shell-ball surface reserves a host drag zone separate from the interaction
   );
 
   assert.match(markup, /data-shell-ball-zone="host-drag"/);
+  assert.match(markup, /data-shell-ball-drag-handle="true"/);
   assert.match(markup, /data-shell-ball-zone="interaction"/);
   assert.match(markup, /data-shell-ball-zone="voice-hotspot"/);
   assert.match(markup, /shell-ball-surface__host-drag-zone/);

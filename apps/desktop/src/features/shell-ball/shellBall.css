@@ -150,9 +150,15 @@
 }
 
 .shell-ball-surface__host-drag-zone {
+  cursor: grab;
   height: clamp(0.75rem, 2vw, 1rem);
-  pointer-events: none;
+  pointer-events: auto;
+  touch-action: none;
   width: min(100%, 18rem);
+}
+
+.shell-ball-surface__host-drag-zone:active {
+  cursor: grabbing;
 }
 
 .shell-ball-surface__interaction-zone {
