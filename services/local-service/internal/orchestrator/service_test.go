@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
@@ -58,7 +60,7 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 	}
 	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	pluginService := plugin.NewService()
-	executor := execution.NewService(platform.NewLocalFileSystemAdapter(pathPolicy), modelService, deliveryService, toolRegistry, toolExecutor, pluginService)
+	executor := execution.NewService(platform.NewLocalFileSystemAdapter(pathPolicy), modelService, audit.NewService(), checkpoint.NewService(), deliveryService, toolRegistry, toolExecutor, pluginService)
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -1160,6 +1162,12 @@ func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
 	}
 	if output["summary_output"] == nil {
 		t.Fatalf("expected write_file tool output to include summary_output, got %+v", output)
+	}
+	if output["audit_record"] == nil {
+		t.Fatalf("expected write_file tool output to include audit_record, got %+v", output)
+	}
+	if output["recovery_point"] != nil {
+		t.Fatalf("expected no recovery_point for create flow, got %+v", output)
 	}
 }
 

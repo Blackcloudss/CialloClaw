@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
@@ -20,6 +22,8 @@ import (
 type Service struct {
 	fileSystem platform.FileSystemAdapter
 	model      *model.Service
+	audit      *audit.Service
+	checkpoint *checkpoint.Service
 	delivery   *delivery.Service
 	tools      *tools.Registry
 	executor   *tools.ToolExecutor
@@ -53,6 +57,8 @@ type Result struct {
 func NewService(
 	fileSystem platform.FileSystemAdapter,
 	modelService *model.Service,
+	auditService *audit.Service,
+	checkpointService *checkpoint.Service,
 	deliveryService *delivery.Service,
 	toolRegistry *tools.Registry,
 	toolExecutor *tools.ToolExecutor,
@@ -61,6 +67,8 @@ func NewService(
 	return &Service{
 		fileSystem: fileSystem,
 		model:      modelService,
+		audit:      auditService,
+		checkpoint: checkpointService,
 		delivery:   deliveryService,
 		tools:      toolRegistry,
 		executor:   toolExecutor,
@@ -167,6 +175,16 @@ func (s *Service) executeThroughToolExecutor(ctx context.Context, request Reques
 		if content, ok := toolResult.RawOutput["content"].(string); ok && strings.TrimSpace(content) != "" {
 			result.Content = content
 		}
+		consumedOutput, consumedArtifact, err := s.consumeWriteFileCandidates(ctx, request.TaskID, toolResult.RawOutput)
+		if err != nil {
+			return Result{}, false, err
+		}
+		if consumedOutput != nil {
+			result.ToolOutput = mergeToolOutputs(consumedOutput, toolResult.SummaryOutput)
+		}
+		if consumedArtifact != nil {
+			result.Artifacts = append(result.Artifacts, consumedArtifact)
+		}
 	} else {
 		bubbleText := toolBubbleText(toolName, toolResult)
 		result.BubbleText = bubbleText
@@ -263,6 +281,58 @@ func toolArtifactsFromResult(taskID string, result *tools.ToolExecutionResult) [
 		})
 	}
 	return artifacts
+}
+
+func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string, rawOutput map[string]any) (map[string]any, map[string]any, error) {
+	if len(rawOutput) == 0 {
+		return nil, nil, nil
+	}
+
+	merged := cloneOutput(rawOutput)
+	if auditCandidate, ok := rawOutput["audit_candidate"].(map[string]any); ok && s.audit != nil {
+		recordInput, err := audit.BuildRecordInputFromCandidate(taskID, auditCandidate)
+		if err != nil {
+			return nil, nil, fmt.Errorf("build audit record from candidate: %w", err)
+		}
+		if record, err := s.audit.Write(ctx, recordInput); err != nil {
+			return nil, nil, fmt.Errorf("write audit record from candidate: %w", err)
+		} else {
+			merged["audit_record"] = record.Map()
+		}
+	}
+
+	if checkpointCandidate, ok := rawOutput["checkpoint_candidate"].(map[string]any); ok && s.checkpoint != nil {
+		createInput, shouldCreate, err := checkpoint.BuildCreateInputFromCandidate(taskID, checkpointCandidate)
+		if err != nil {
+			return nil, nil, fmt.Errorf("build checkpoint input from candidate: %w", err)
+		}
+		if shouldCreate {
+			point, err := s.checkpoint.Create(ctx, createInput)
+			if err != nil {
+				return nil, nil, fmt.Errorf("create recovery point from candidate: %w", err)
+			}
+			merged["recovery_point"] = map[string]any{
+				"recovery_point_id": point.RecoveryPointID,
+				"task_id":           point.TaskID,
+				"summary":           point.Summary,
+				"created_at":        point.CreatedAt,
+				"objects":           point.Objects,
+			}
+		}
+	}
+
+	return merged, nil, nil
+}
+
+func cloneOutput(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(input))
+	for key, value := range input {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func workspacePathFromDeliveryResult(deliveryResult map[string]any) string {

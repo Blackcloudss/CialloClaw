@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	ErrTaskIDRequired  = errors.New("checkpoint: task_id is required")
-	ErrSummaryRequired = errors.New("checkpoint: summary is required")
+	ErrTaskIDRequired   = errors.New("checkpoint: task_id is required")
+	ErrSummaryRequired  = errors.New("checkpoint: summary is required")
+	ErrCandidateInvalid = errors.New("checkpoint: candidate is invalid")
 )
 
 type noopWriter struct{}
@@ -61,6 +62,42 @@ func (s *Service) BuildRecoveryPoint(input CreateInput) (RecoveryPoint, error) {
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 		Objects:         objects,
 	}, nil
+}
+
+// BuildCreateInputFromCandidate 将上游 checkpoint candidate 转换为最小 checkpoint 输入。
+func BuildCreateInputFromCandidate(taskID string, candidate map[string]any) (input CreateInput, shouldCreate bool, err error) {
+	if strings.TrimSpace(taskID) == "" {
+		return CreateInput{}, false, ErrTaskIDRequired
+	}
+	if candidate == nil {
+		return CreateInput{}, false, ErrCandidateInvalid
+	}
+
+	if required, ok := candidate["required"].(bool); ok {
+		shouldCreate = required
+	}
+	if !shouldCreate {
+		return CreateInput{}, false, nil
+	}
+
+	targetPath, _ := candidate["target_path"].(string)
+	reason, _ := candidate["reason"].(string)
+	trimmedTarget := strings.TrimSpace(targetPath)
+	trimmedReason := strings.TrimSpace(reason)
+	if trimmedTarget == "" {
+		return CreateInput{}, false, ErrCandidateInvalid
+	}
+
+	summary := trimmedReason
+	if summary == "" {
+		summary = "checkpoint_requested"
+	}
+
+	return CreateInput{
+		TaskID:  strings.TrimSpace(taskID),
+		Summary: summary,
+		Objects: []string{trimmedTarget},
+	}, true, nil
 }
 
 // Create 归一化并输出一条恢复点记录。

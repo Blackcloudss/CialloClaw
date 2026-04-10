@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
@@ -49,6 +51,8 @@ func newTestExecutionService(t *testing.T, output string) (*Service, string) {
 	return NewService(
 		platform.NewLocalFileSystemAdapter(pathPolicy),
 		model.NewService(serviceconfig.ModelConfig{}, stubModelClient{output: output}),
+		audit.NewService(),
+		checkpoint.NewService(),
 		delivery.NewService(),
 		toolRegistry,
 		toolExecutor,
@@ -78,8 +82,17 @@ func TestExecuteWorkspaceDocumentWritesFile(t *testing.T) {
 	if result.ToolOutput["summary_output"] == nil {
 		t.Fatalf("expected write_file to flow through ToolExecutor summary output, got %+v", result.ToolOutput)
 	}
+	if result.ToolOutput["audit_record"] == nil {
+		t.Fatalf("expected write_file tool output to include consumed audit record, got %+v", result.ToolOutput)
+	}
+	if result.ToolOutput["recovery_point"] != nil {
+		t.Fatalf("expected no recovery point for create flow, got %+v", result.ToolOutput)
+	}
 	if len(result.Artifacts) != 1 {
-		t.Fatalf("expected one artifact, got %d", len(result.Artifacts))
+		t.Fatalf("expected one delivery artifact, got %d", len(result.Artifacts))
+	}
+	if result.Artifacts[0]["artifact_type"] != "generated_doc" {
+		t.Fatalf("expected generated_doc artifact, got %+v", result.Artifacts[0])
 	}
 	if deliveryPayloadPath(result.DeliveryResult) != "workspace/notes/output.md" {
 		t.Fatalf("expected explicit workspace output path, got %v", deliveryPayloadPath(result.DeliveryResult))

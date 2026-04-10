@@ -41,8 +41,8 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 
-	_ = audit.NewService()
-	_ = checkpoint.NewService()
+	auditService := audit.NewService()
+	checkpointService := checkpoint.NewService()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
 	_ = platform.LocalExecutionBackend{}
@@ -68,7 +68,7 @@ func New(cfg config.Config) (*App, error) {
 
 	deliveryService := delivery.NewService()
 	pluginService := plugin.NewService()
-	executionService := execution.NewService(fileSystem, modelService, deliveryService, toolRegistry, toolExecutor, pluginService)
+	executionService := execution.NewService(fileSystem, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService)
 	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
 	if err != nil {
 		_ = storageService.Close()
