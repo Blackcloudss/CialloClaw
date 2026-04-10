@@ -5,14 +5,6 @@ import "@/features/shell-ball/shellBall.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <AppProviders>
-    <ShellBallInputWindow
-      mode="interactive"
-      voicePreview={null}
-      value=""
-      onValueChange={() => {}}
-      onAttachFile={() => {}}
-      onSubmit={() => {}}
-      onFocusChange={() => {}}
-    />
+    <ShellBallInputWindow />
   </AppProviders>,
 );

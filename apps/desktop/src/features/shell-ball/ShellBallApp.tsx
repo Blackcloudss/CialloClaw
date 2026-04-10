@@ -3,6 +3,7 @@ import { shouldShowShellBallDemoSwitcher } from "./shellBall.dev";
 import { ShellBallSurface } from "./ShellBallSurface";
 import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
+import { useShellBallCoordinator } from "./useShellBallCoordinator";
 
 type ShellBallAppProps = {
   isDev?: boolean;
@@ -11,6 +12,7 @@ type ShellBallAppProps = {
 export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const {
     visualState,
+    inputValue,
     voicePreview,
     handlePrimaryClick,
     handleRegionEnter,
@@ -18,10 +20,27 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handlePressStart,
     handlePressMove,
     handlePressEnd,
+    handleSubmitText,
+    handleAttachFile,
+    handleInputFocusChange,
+    setInputValue,
     handleForceState,
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
   const showDemoSwitcher = shouldShowShellBallDemoSwitcher(isDev);
+
+  useShellBallCoordinator({
+    visualState,
+    inputValue,
+    voicePreview,
+    setInputValue,
+    onRegionEnter: handleRegionEnter,
+    onRegionLeave: handleRegionLeave,
+    onInputFocusChange: handleInputFocusChange,
+    onSubmitText: handleSubmitText,
+    onAttachFile: handleAttachFile,
+    onPrimaryClick: handlePrimaryClick,
+  });
 
   return (
     <ShellBallSurface

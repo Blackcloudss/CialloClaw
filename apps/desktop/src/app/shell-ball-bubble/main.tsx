@@ -5,6 +5,6 @@ import "@/features/shell-ball/shellBall.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <AppProviders>
-    <ShellBallBubbleWindow visualState="hover_input" />
+    <ShellBallBubbleWindow />
   </AppProviders>,
 );

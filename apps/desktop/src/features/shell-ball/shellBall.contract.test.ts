@@ -37,6 +37,11 @@ import { ShellBallInputBar } from "./components/ShellBallInputBar";
 import type { ShellBallTransitionResult } from "./shellBall.types";
 import { shellBallVisualStates } from "./shellBall.types";
 import {
+  createShellBallWindowSnapshot,
+  getShellBallHelperWindowVisibility,
+  shellBallWindowSyncEvents,
+} from "./shellBall.windowSync";
+import {
   getShellBallPostSubmitInputReset,
   getShellBallVoicePreviewFromEvent,
   shouldKeepShellBallVoicePreviewOnRegionLeave,
@@ -184,6 +189,46 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
   assert.match(capabilityConfig, /"core:window:allow-set-position"/);
   assert.match(capabilityConfig, /"core:window:allow-set-size"/);
   assert.match(capabilityConfig, /"core:window:allow-start-dragging"/);
+});
+
+test("shell-ball helper window sync maps visual states into visibility and snapshot payloads", () => {
+  assert.deepEqual(shellBallWindowSyncEvents, {
+    snapshot: "desktop-shell-ball:snapshot",
+    geometry: "desktop-shell-ball:geometry",
+    helperReady: "desktop-shell-ball:helper-ready",
+    inputHover: "desktop-shell-ball:input-hover",
+    inputFocus: "desktop-shell-ball:input-focus",
+    inputDraft: "desktop-shell-ball:input-draft",
+    primaryAction: "desktop-shell-ball:primary-action",
+  });
+
+  assert.deepEqual(getShellBallHelperWindowVisibility("idle"), {
+    bubble: false,
+    input: false,
+  });
+
+  assert.deepEqual(getShellBallHelperWindowVisibility("hover_input"), {
+    bubble: true,
+    input: true,
+  });
+
+  assert.deepEqual(
+    createShellBallWindowSnapshot({
+      visualState: "voice_locked",
+      inputValue: "draft",
+      voicePreview: "lock",
+    }),
+    {
+      visualState: "voice_locked",
+      inputBarMode: "voice",
+      inputValue: "draft",
+      voicePreview: "lock",
+      visibility: {
+        bubble: true,
+        input: true,
+      },
+    },
+  );
 });
 
 test("shell-ball interaction contract auto-advances text submission into processing", () => {
