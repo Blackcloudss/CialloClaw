@@ -3,8 +3,6 @@ package bootstrap
 
 import (
 	"context"
-	"os"
-	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
@@ -55,7 +53,6 @@ func New(cfg config.Config) (*App, error) {
 
 	modelService, err := model.NewServiceFromConfig(model.ServiceConfig{
 		ModelConfig: cfg.Model,
-		APIKey:      strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
 	})
 	if err != nil {
 		_ = storageService.Close()

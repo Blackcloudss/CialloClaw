@@ -140,11 +140,14 @@ func TestNewServiceFromConfigBuildsOpenAIClient(t *testing.T) {
 
 	service, err := NewServiceFromConfig(ServiceConfig{
 		ModelConfig: config.ModelConfig{
-			Provider: OpenAIResponsesProvider,
-			ModelID:  "gpt-5.4",
-			Endpoint: server.URL,
+			Provider:            OpenAIResponsesProvider,
+			ModelID:             "gpt-5.4",
+			Endpoint:            server.URL,
+			APIKey:              "test-key",
+			SingleTaskLimit:     10.0,
+			DailyLimit:          50.0,
+			BudgetAutoDowngrade: true,
 		},
-		APIKey: "test-key",
 	})
 	if err != nil {
 		t.Fatalf("NewServiceFromConfig returned error: %v", err)
@@ -157,6 +160,37 @@ func TestNewServiceFromConfigBuildsOpenAIClient(t *testing.T) {
 
 	if response.OutputText != "service ok" {
 		t.Fatalf("output mismatch: got %q", response.OutputText)
+	}
+}
+
+// TestNewServiceFromConfigUsesModelConfigAPIKey 验证NewServiceFromConfigUsesModelConfigAPIKey。
+func TestNewServiceFromConfigUsesModelConfigAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer model-config-key" {
+			t.Fatalf("authorization header mismatch: got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_service","output_text":"service ok","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
+	}))
+	defer server.Close()
+
+	service, err := NewServiceFromConfig(ServiceConfig{
+		ModelConfig: config.ModelConfig{
+			Provider:            OpenAIResponsesProvider,
+			ModelID:             "gpt-5.4",
+			Endpoint:            server.URL,
+			APIKey:              "model-config-key",
+			SingleTaskLimit:     10.0,
+			DailyLimit:          50.0,
+			BudgetAutoDowngrade: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewServiceFromConfig returned error: %v", err)
+	}
+
+	if _, err := service.GenerateText(context.Background(), GenerateTextRequest{Input: "hello"}); err != nil {
+		t.Fatalf("GenerateText returned error: %v", err)
 	}
 }
 

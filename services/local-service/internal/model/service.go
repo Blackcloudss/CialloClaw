@@ -19,8 +19,10 @@ type Service struct {
 
 // ErrClientNotConfigured 定义当前模块的基础变量。
 var ErrClientNotConfigured = errors.New("model client not configured")
+
 // ErrModelProviderRequired 定义当前模块的基础变量。
 var ErrModelProviderRequired = errors.New("model provider is required")
+
 // ErrModelProviderUnsupported 定义当前模块的基础变量。
 var ErrModelProviderUnsupported = errors.New("model provider unsupported")
 
@@ -114,10 +116,15 @@ func ValidateModelConfig(cfg config.ModelConfig) error {
 
 // buildClient 处理当前模块的相关逻辑。
 func buildClient(cfg ServiceConfig) (Client, error) {
+	apiKey := strings.TrimSpace(cfg.APIKey)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(cfg.ModelConfig.APIKey)
+	}
+
 	switch strings.TrimSpace(cfg.ModelConfig.Provider) {
 	case OpenAIResponsesProvider:
 		return NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
-			APIKey:   cfg.APIKey,
+			APIKey:   apiKey,
 			Endpoint: strings.TrimSpace(cfg.ModelConfig.Endpoint),
 			ModelID:  strings.TrimSpace(cfg.ModelConfig.ModelID),
 		})

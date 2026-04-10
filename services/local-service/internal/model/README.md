@@ -74,3 +74,16 @@ The live smoke test stays skipped by default when credentials are absent, so CI 
 - The minimal model request/response/invocation structures are now registered in `/packages/protocol/types/core.ts`
 - The Go structures in `internal/model/types.go` remain temporary backend mirrors until a cross-language protocol generation path is introduced
 - Field names and JSON tags are aligned with protocol naming so later migration cost is reduced
+
+## Current Config Path
+
+- `config.ModelConfig` now carries:
+  - `provider`
+  - `model_id`
+  - `endpoint`
+  - `api_key`
+  - `single_task_limit`
+  - `daily_limit`
+  - `budget_auto_downgrade`
+- `bootstrap` consumes the config-backed API key instead of directly reading the environment
+- `ServiceConfig.APIKey` remains as a temporary fallback input so the module can migrate without breaking existing tests and callers in one step

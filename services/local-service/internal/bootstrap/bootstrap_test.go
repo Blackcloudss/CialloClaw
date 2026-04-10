@@ -10,8 +10,6 @@ import (
 )
 
 func TestNewWiresStorageBackedMemoryService(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "test-key")
-
 	cfg := config.Config{
 		RPC: config.RPCConfig{
 			Transport:        "named_pipe",
@@ -21,9 +19,13 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 		WorkspaceRoot: filepath.Join(t.TempDir(), "workspace"),
 		DatabasePath:  filepath.Join(t.TempDir(), "data", "local.db"),
 		Model: config.ModelConfig{
-			Provider: "openai_responses",
-			ModelID:  "gpt-5.4",
-			Endpoint: "https://api.openai.com/v1/responses",
+			Provider:            "openai_responses",
+			ModelID:             "gpt-5.4",
+			Endpoint:            "https://api.openai.com/v1/responses",
+			APIKey:              "test-key",
+			SingleTaskLimit:     10.0,
+			DailyLimit:          50.0,
+			BudgetAutoDowngrade: true,
 		},
 	}
 
@@ -73,8 +75,6 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 }
 
 func TestNewFailsFastWhenModelServiceCannotBeConfigured(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "")
-
 	cfg := config.Config{
 		RPC: config.RPCConfig{
 			Transport:        "named_pipe",
@@ -84,9 +84,12 @@ func TestNewFailsFastWhenModelServiceCannotBeConfigured(t *testing.T) {
 		WorkspaceRoot: filepath.Join(t.TempDir(), "workspace"),
 		DatabasePath:  filepath.Join(t.TempDir(), "data", "local.db"),
 		Model: config.ModelConfig{
-			Provider: "openai_responses",
-			ModelID:  "gpt-5.4",
-			Endpoint: "https://api.openai.com/v1/responses",
+			Provider:            "openai_responses",
+			ModelID:             "gpt-5.4",
+			Endpoint:            "https://api.openai.com/v1/responses",
+			SingleTaskLimit:     10.0,
+			DailyLimit:          50.0,
+			BudgetAutoDowngrade: true,
 		},
 	}
 
