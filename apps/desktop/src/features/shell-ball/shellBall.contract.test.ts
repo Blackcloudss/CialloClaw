@@ -30,6 +30,7 @@ import { ShellBallApp } from "./ShellBallApp";
 import { ShellBallBubbleWindow } from "./ShellBallBubbleWindow";
 import { ShellBallDevLayer } from "./ShellBallDevLayer";
 import { ShellBallInputWindow } from "./ShellBallInputWindow";
+import { ShellBallMascot } from "./components/ShellBallMascot";
 import { ShellBallSurface } from "./ShellBallSurface";
 import { shouldShowShellBallDemoSwitcher } from "./shellBall.dev";
 import { shellBallWindowLabels, shellBallWindowPermissions } from "../../platform/shellBallWindowController";
@@ -197,6 +198,19 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
   assert.match(capabilityConfig, /"core:window:allow-set-position"/);
   assert.match(capabilityConfig, /"core:window:allow-set-size"/);
   assert.match(capabilityConfig, /"core:window:allow-start-dragging"/);
+});
+
+test("shell-ball entries opt into transparent window mode", () => {
+  const ballEntry = readFileSync(resolve(desktopRoot, "src/app/shell-ball/main.tsx"), "utf8");
+  const bubbleEntry = readFileSync(resolve(desktopRoot, "src/app/shell-ball-bubble/main.tsx"), "utf8");
+  const inputEntry = readFileSync(resolve(desktopRoot, "src/app/shell-ball-input/main.tsx"), "utf8");
+  const globalStyles = readFileSync(resolve(desktopRoot, "src/styles/globals.css"), "utf8");
+
+  assert.match(ballEntry, /data-app-window/);
+  assert.match(bubbleEntry, /data-app-window/);
+  assert.match(inputEntry, /data-app-window/);
+  assert.match(globalStyles, /\[data-app-window="shell-ball"\]/);
+  assert.match(globalStyles, /overflow: hidden/);
 });
 
 test("shell-ball helper window sync maps visual states into visibility and snapshot payloads", () => {
@@ -819,6 +833,18 @@ test("shell-ball input bar surfaces voice preview guidance to the UI", () => {
 
   assert.match(markup, /data-voice-preview="cancel"/);
   assert.match(markup, /Release to cancel/);
+});
+
+test("shell-ball mascot supports passive rendering outside the floating ball host", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "processing",
+      motionConfig: getShellBallMotionConfig("processing"),
+    }),
+  );
+
+  assert.match(markup, /shell-ball-mascot/);
+  assert.match(markup, /data-state="processing"/);
 });
 
 test("shell-ball release preview recomputes from the final pointer position", () => {

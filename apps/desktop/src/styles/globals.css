@@ -37,6 +37,41 @@ body {
   min-height: 100vh;
 }
 
+html[data-app-window="shell-ball"],
+html[data-app-window="shell-ball-bubble"],
+html[data-app-window="shell-ball-input"],
+body[data-app-window="shell-ball"],
+body[data-app-window="shell-ball-bubble"],
+body[data-app-window="shell-ball-input"],
+#root[data-app-window="shell-ball"],
+#root[data-app-window="shell-ball-bubble"],
+#root[data-app-window="shell-ball-input"] {
+  background: transparent;
+}
+
+html[data-app-window="shell-ball"],
+html[data-app-window="shell-ball-bubble"],
+html[data-app-window="shell-ball-input"],
+body[data-app-window="shell-ball"],
+body[data-app-window="shell-ball-bubble"],
+body[data-app-window="shell-ball-input"] {
+  overflow: hidden;
+}
+
+body[data-app-window="shell-ball"],
+body[data-app-window="shell-ball-bubble"],
+body[data-app-window="shell-ball-input"] {
+  min-height: 0;
+}
+
+#root[data-app-window="shell-ball"],
+#root[data-app-window="shell-ball-bubble"],
+#root[data-app-window="shell-ball-input"] {
+  display: grid;
+  min-height: 0;
+  width: max-content;
+}
+
 .app-shell {
   min-height: 100vh;
   padding: 24px;
