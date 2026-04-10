@@ -87,3 +87,14 @@ The live smoke test stays skipped by default when credentials are absent, so CI 
   - `budget_auto_downgrade`
 - `bootstrap` consumes the config-backed API key instead of directly reading the environment
 - `ServiceConfig.APIKey` remains as a temporary fallback input so the module can migrate without breaking existing tests and callers in one step
+
+## Secret Integration Boundary
+
+- `ServiceConfig` now supports an optional `SecretSource`
+- `SecretSource` is a Stronghold-ready boundary for resolving provider API keys without binding this module to a concrete secret backend yet
+- Current resolution order is:
+  1. `ServiceConfig.APIKey`
+  2. `ModelConfig.APIKey`
+  3. `SecretSource.ResolveModelAPIKey(provider)`
+
+This keeps the module ready for Stronghold integration while avoiding direct coupling before the secret-management path is frozen.
