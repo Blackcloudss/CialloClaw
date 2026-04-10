@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,9 +22,14 @@ import (
 
 type stubModelClient struct {
 	output string
+	err    error
 }
 
 func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if s.err != nil {
+		return model.GenerateTextResponse{}, s.err
+	}
+
 	return model.GenerateTextResponse{
 		TaskID:     request.TaskID,
 		RunID:      request.RunID,
@@ -149,6 +155,18 @@ func TestExecuteBubbleReturnsGeneratedText(t *testing.T) {
 	if len(result.Artifacts) != 0 {
 		t.Fatalf("expected bubble delivery not to create artifacts, got %d", len(result.Artifacts))
 	}
+	if result.ToolOutput["model_invocation"] == nil {
+		t.Fatalf("expected tool output to include model invocation, got %+v", result.ToolOutput)
+	}
+	if result.ToolOutput["audit_record"] == nil {
+		t.Fatalf("expected tool output to include audit record, got %+v", result.ToolOutput)
+	}
+	if result.ModelInvocation == nil {
+		t.Fatal("expected model invocation to be present")
+	}
+	if result.AuditRecord == nil {
+		t.Fatal("expected audit record to be present")
+	}
 }
 
 func TestExecuteDirectBuiltinReadFileUsesToolExecutor(t *testing.T) {
@@ -194,5 +212,45 @@ func TestExecuteDirectBuiltinReadFileUsesToolExecutor(t *testing.T) {
 	}
 	if deliveryType, ok := result.DeliveryResult["type"].(string); !ok || deliveryType != "bubble" {
 		t.Fatalf("expected bubble delivery result, got %+v", result.DeliveryResult)
+	}
+}
+
+func TestExecuteFallsBackWhenModelFails(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
+
+	service := NewService(
+		platform.NewLocalFileSystemAdapter(pathPolicy),
+		model.NewService(serviceconfig.ModelConfig{}, stubModelClient{err: errors.New("provider unavailable")}),
+		audit.NewService(),
+		checkpoint.NewService(),
+		delivery.NewService(),
+		toolRegistry,
+		toolExecutor,
+		plugin.NewService(),
+	)
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_004",
+		RunID:        "run_004",
+		Title:        "解释内容",
+		Intent:       map[string]any{"name": "explain", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text_selection", SelectionText: "需要解释的文本"},
+		DeliveryType: "bubble",
+		ResultTitle:  "解释结果",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if !strings.Contains(result.BubbleText, "需要解释的文本") {
+		t.Fatalf("expected fallback bubble to include normalized input, got %s", result.BubbleText)
 	}
 }

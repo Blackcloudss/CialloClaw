@@ -62,6 +62,9 @@ func (s *Service) BuildRecord(input RecordInput) (Record, error) {
 }
 
 // BuildRecordInputFromCandidate 将上游 candidate 结构转换为最小 audit 输入。
+//
+// 当前主要用于消费 tools 模块产出的 audit_candidate，
+// 不在此处扩展为通用协议解析器。
 func BuildRecordInputFromCandidate(taskID string, candidate map[string]any) (RecordInput, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return RecordInput{}, ErrTaskIDRequired

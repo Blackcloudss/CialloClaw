@@ -23,6 +23,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 )
@@ -60,7 +61,8 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 	}
 	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	pluginService := plugin.NewService()
-	executor := execution.NewService(platform.NewLocalFileSystemAdapter(pathPolicy), modelService, audit.NewService(), checkpoint.NewService(), deliveryService, toolRegistry, toolExecutor, pluginService)
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	executor := execution.NewService(fileSystem, modelService, audit.NewService(), checkpoint.NewService(), deliveryService, toolRegistry, toolExecutor, pluginService)
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -72,7 +74,7 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 		modelService,
 		toolRegistry,
 		pluginService,
-	).WithExecutor(executor)
+	).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem))
 
 	return service, workspaceRoot
 }
@@ -156,6 +158,50 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	}
 	if record.DeliveryResult == nil {
 		t.Fatal("expected confirmation flow to persist delivery result")
+	}
+}
+
+func TestTaskInspectorRunAggregatesRuntimeState(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "inspector output")
+
+	todosDir := filepath.Join(workspaceRoot, "todos")
+	if err := os.MkdirAll(todosDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(todosDir, "inbox.md"), []byte("- [ ] review task\n- [x] archive task\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	result, err := service.TaskInspectorRun(map[string]any{
+		"reason":         "startup_scan",
+		"target_sources": []any{"workspace/todos"},
+	})
+	if err != nil {
+		t.Fatalf("TaskInspectorRun returned error: %v", err)
+	}
+
+	inspectionID, ok := result["inspection_id"].(string)
+	if !ok || !strings.HasPrefix(inspectionID, "insp_") {
+		t.Fatalf("expected runtime inspection_id, got %+v", result["inspection_id"])
+	}
+
+	summary, ok := result["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected summary payload, got %+v", result["summary"])
+	}
+	if summary["parsed_files"] != 1 {
+		t.Fatalf("expected parsed_files to reflect workspace scan, got %+v", summary)
+	}
+	if summary["identified_items"] == nil || summary["identified_items"].(int) < 3 {
+		t.Fatalf("expected identified_items to include file and notepad items, got %+v", summary)
+	}
+	if summary["due_today"] != 1 {
+		t.Fatalf("expected due_today to reflect runtime notepad state, got %+v", summary)
+	}
+
+	suggestions, ok := result["suggestions"].([]string)
+	if !ok || len(suggestions) == 0 {
+		t.Fatalf("expected runtime suggestions, got %+v", result["suggestions"])
 	}
 }
 
@@ -1159,15 +1205,18 @@ func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
 	output, ok := record.LatestToolCall["output"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected latest tool call output map, got %+v", record.LatestToolCall)
-	}
-	if output["summary_output"] == nil {
-		t.Fatalf("expected write_file tool output to include summary_output, got %+v", output)
-	}
-	if output["audit_record"] == nil {
-		t.Fatalf("expected write_file tool output to include audit_record, got %+v", output)
-	}
-	if output["recovery_point"] != nil {
-		t.Fatalf("expected no recovery_point for create flow, got %+v", output)
+		if output["summary_output"] == nil {
+			t.Fatalf("expected write_file tool output to include summary_output, got %+v", output)
+		}
+		if output["model_invocation"] == nil {
+			t.Fatalf("expected latest tool call to include model invocation, got %+v", output)
+		}
+		if output["audit_record"] == nil {
+			t.Fatalf("expected latest tool call to include audit record, got %+v", output)
+		}
+		if output["recovery_point"] != nil {
+			t.Fatalf("expected no recovery_point for create flow, got %+v", output)
+		}
 	}
 }
 
@@ -1203,6 +1252,16 @@ func TestServiceStartTaskWithExecutorReturnsGeneratedBubble(t *testing.T) {
 	}
 	if record.LatestToolCall["tool_name"] != "generate_text" {
 		t.Fatalf("expected runtime task to record generate_text tool call, got %v", record.LatestToolCall["tool_name"])
+	}
+	output, ok := record.LatestToolCall["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected latest tool call output map, got %+v", record.LatestToolCall)
+	}
+	if output["model_invocation"] == nil {
+		t.Fatalf("expected latest tool call to include model invocation, got %+v", output)
+	}
+	if output["audit_record"] == nil {
+		t.Fatalf("expected latest tool call to include audit record, got %+v", output)
 	}
 }
 

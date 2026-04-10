@@ -3,8 +3,6 @@ package bootstrap
 
 import (
 	"context"
-	"os"
-	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
@@ -22,6 +20,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/rpc"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 )
@@ -55,20 +54,18 @@ func New(cfg config.Config) (*App, error) {
 		tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())),
 	)
 
-	modelService := model.NewService(cfg.Model)
-	apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
-	if apiKey != "" {
-		if configuredModelService, err := model.NewServiceFromConfig(model.ServiceConfig{
-			ModelConfig: cfg.Model,
-			APIKey:      apiKey,
-		}); err == nil {
-			modelService = configuredModelService
-		}
+	modelService, err := model.NewServiceFromConfig(model.ServiceConfig{
+		ModelConfig: cfg.Model,
+	})
+	if err != nil {
+		_ = storageService.Close()
+		return nil, err
 	}
 
 	deliveryService := delivery.NewService()
 	pluginService := plugin.NewService()
 	executionService := execution.NewService(fileSystem, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService)
+	inspectorService := taskinspector.NewService(fileSystem)
 	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
 	if err != nil {
 		_ = storageService.Close()
@@ -85,7 +82,7 @@ func New(cfg config.Config) (*App, error) {
 		modelService,
 		toolRegistry,
 		pluginService,
-	).WithExecutor(executionService)
+	).WithExecutor(executionService).WithTaskInspector(inspectorService)
 
 	return &App{server: rpc.NewServer(cfg.RPC, orchestratorService), storage: storageService, toolRegistry: toolRegistry, toolExecutor: toolExecutor}, nil
 }

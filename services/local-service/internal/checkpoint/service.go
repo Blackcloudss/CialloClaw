@@ -65,6 +65,9 @@ func (s *Service) BuildRecoveryPoint(input CreateInput) (RecoveryPoint, error) {
 }
 
 // BuildCreateInputFromCandidate 将上游 checkpoint candidate 转换为最小 checkpoint 输入。
+//
+// shouldCreate 表示当前 candidate 是否要求真正创建恢复点；
+// 当前主要用于消费 tools 模块中的 checkpoint_candidate。
 func BuildCreateInputFromCandidate(taskID string, candidate map[string]any) (input CreateInput, shouldCreate bool, err error) {
 	if strings.TrimSpace(taskID) == "" {
 		return CreateInput{}, false, ErrTaskIDRequired

@@ -43,14 +43,16 @@ type Request struct {
 
 // Result 描述执行完成后需要回填给 orchestrator 的交付与痕迹。
 type Result struct {
-	Content        string
-	DeliveryResult map[string]any
-	Artifacts      []map[string]any
-	BubbleText     string
-	ToolName       string
-	ToolInput      map[string]any
-	ToolOutput     map[string]any
-	DurationMS     int64
+	Content         string
+	DeliveryResult  map[string]any
+	Artifacts       []map[string]any
+	BubbleText      string
+	ModelInvocation map[string]any
+	AuditRecord     map[string]any
+	ToolName        string
+	ToolInput       map[string]any
+	ToolOutput      map[string]any
+	DurationMS      int64
 }
 
 // NewService 创建执行服务。
@@ -80,16 +82,25 @@ func NewService(
 func (s *Service) Execute(ctx context.Context, request Request) (Result, error) {
 	startedAt := time.Now()
 	inputText := s.buildExecutionInput(request.Snapshot)
-	outputText := s.generateOutput(ctx, request, inputText)
+	outputText, invocationRecord, err := s.generateOutput(ctx, request, inputText)
+	if err != nil {
+		return Result{}, err
+	}
 	deliveryType := firstNonEmpty(request.DeliveryType, "workspace_document")
 	targetPath := targetPathFromIntent(request.Intent)
 	previewText := previewTextForOutput(outputText, deliveryType)
 	deliveryResult := s.delivery.BuildDeliveryResultWithTargetPath(request.TaskID, deliveryType, request.ResultTitle, previewText, targetPath)
+	auditRecord, err := s.buildModelAuditRecord(ctx, request, invocationRecord)
+	if err != nil {
+		return Result{}, err
+	}
 
 	result := Result{
-		Content:        outputText,
-		DeliveryResult: deliveryResult,
-		DurationMS:     time.Since(startedAt).Milliseconds(),
+		Content:         outputText,
+		DeliveryResult:  deliveryResult,
+		DurationMS:      time.Since(startedAt).Milliseconds(),
+		ModelInvocation: invocationRecordMap(invocationRecord),
+		AuditRecord:     auditRecord,
 		ToolInput: map[string]any{
 			"intent_name":     stringValue(request.Intent, "name", "summarize"),
 			"delivery_type":   deliveryType,
@@ -129,9 +140,11 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		result.BubbleText = fmt.Sprintf("结果已写入 %s，可直接查看。", targetPath)
 		result.ToolName = "write_file"
 		result.ToolOutput = map[string]any{
-			"path":           targetPath,
-			"artifact_count": len(result.Artifacts),
-			"content_bytes":  len(documentContent),
+			"path":             targetPath,
+			"artifact_count":   len(result.Artifacts),
+			"content_bytes":    len(documentContent),
+			"model_invocation": result.ModelInvocation,
+			"audit_record":     result.AuditRecord,
 		}
 		return result, nil
 	}
@@ -139,8 +152,10 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 	result.BubbleText = truncateBubbleText(outputText)
 	result.ToolName = "generate_text"
 	result.ToolOutput = map[string]any{
-		"preview_text": previewText,
-		"content_size": len(outputText),
+		"preview_text":     previewText,
+		"content_size":     len(outputText),
+		"model_invocation": result.ModelInvocation,
+		"audit_record":     result.AuditRecord,
 	}
 	return result, nil
 }
@@ -430,7 +445,7 @@ func (s *Service) fileSection(filePath string) string {
 	return fmt.Sprintf("文件 %s 内容:\n%s", trimmedPath, truncateText(string(content), 1600))
 }
 
-func (s *Service) generateOutput(ctx context.Context, request Request, inputText string) string {
+func (s *Service) generateOutput(ctx context.Context, request Request, inputText string) (string, *model.InvocationRecord, error) {
 	prompt := buildPrompt(request, inputText)
 	if s.model != nil {
 		response, err := s.model.GenerateText(ctx, model.GenerateTextRequest{
@@ -440,12 +455,41 @@ func (s *Service) generateOutput(ctx context.Context, request Request, inputText
 		})
 		if err == nil {
 			if outputText := strings.TrimSpace(response.OutputText); outputText != "" {
-				return outputText
+				record := response.InvocationRecord()
+				return outputText, &record, nil
 			}
+			return fallbackOutput(request, inputText), nil, nil
 		}
+		return fallbackOutput(request, inputText), nil, nil
 	}
 
-	return fallbackOutput(request, inputText)
+	return fallbackOutput(request, inputText), nil, nil
+}
+
+func (s *Service) buildModelAuditRecord(ctx context.Context, request Request, invocation *model.InvocationRecord) (map[string]any, error) {
+	if s.audit == nil || invocation == nil {
+		return nil, nil
+	}
+
+	record, err := s.audit.Write(ctx, audit.RecordInput{
+		TaskID:  request.TaskID,
+		Type:    "model",
+		Action:  "generate_text",
+		Summary: "model invocation completed",
+		Target:  invocation.Provider + ":" + invocation.ModelID,
+		Result:  "success",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("write model audit record: %w", err)
+	}
+	return record.Map(), nil
+}
+
+func invocationRecordMap(record *model.InvocationRecord) map[string]any {
+	if record == nil {
+		return nil
+	}
+	return record.Map()
 }
 
 func buildPrompt(request Request, inputText string) string {
