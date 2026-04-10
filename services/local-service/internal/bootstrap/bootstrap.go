@@ -50,7 +50,10 @@ func New(cfg config.Config) (*App, error) {
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
 		return nil, err
 	}
-	toolExecutor := tools.NewToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(
+		toolRegistry,
+		tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())),
+	)
 
 	modelService := model.NewService(cfg.Model)
 	apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
