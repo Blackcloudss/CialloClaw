@@ -94,3 +94,37 @@ func TestServiceWritePropagatesWriterError(t *testing.T) {
 		t.Fatal("expected writer error")
 	}
 }
+
+func TestBuildRecordInputFromCandidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		taskID    string
+		candidate map[string]any
+		wantErr   error
+	}{
+		{name: "missing_task_id", taskID: "", candidate: map[string]any{"type": "file", "action": "write_file", "result": "success"}, wantErr: ErrTaskIDRequired},
+		{name: "nil_candidate", taskID: "task_001", candidate: nil, wantErr: ErrCandidateInvalid},
+		{name: "missing_type", taskID: "task_001", candidate: map[string]any{"action": "write_file", "result": "success"}, wantErr: ErrTypeRequired},
+		{name: "missing_action", taskID: "task_001", candidate: map[string]any{"type": "file", "result": "success"}, wantErr: ErrActionRequired},
+		{name: "missing_result", taskID: "task_001", candidate: map[string]any{"type": "file", "action": "write_file"}, wantErr: ErrResultRequired},
+		{name: "valid_candidate", taskID: "task_001", candidate: map[string]any{"type": "file", "action": "write_file", "summary": "write file", "target": "D:/workspace/report.md", "result": "success"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input, err := BuildRecordInputFromCandidate(tc.taskID, tc.candidate)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("expected %v, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("BuildRecordInputFromCandidate returned error: %v", err)
+			}
+			if input.TaskID != "task_001" || input.Action != "write_file" {
+				t.Fatalf("unexpected converted input: %+v", input)
+			}
+		})
+	}
+}

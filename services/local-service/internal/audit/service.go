@@ -11,10 +11,11 @@ import (
 )
 
 var (
-	ErrTaskIDRequired = errors.New("audit: task_id is required")
-	ErrTypeRequired   = errors.New("audit: type is required")
-	ErrActionRequired = errors.New("audit: action is required")
-	ErrResultRequired = errors.New("audit: result is required")
+	ErrTaskIDRequired   = errors.New("audit: task_id is required")
+	ErrTypeRequired     = errors.New("audit: type is required")
+	ErrActionRequired   = errors.New("audit: action is required")
+	ErrResultRequired   = errors.New("audit: result is required")
+	ErrCandidateInvalid = errors.New("audit: candidate is invalid")
 )
 
 type noopWriter struct{}
@@ -57,6 +58,44 @@ func (s *Service) BuildRecord(input RecordInput) (Record, error) {
 		Target:    strings.TrimSpace(input.Target),
 		Result:    strings.TrimSpace(input.Result),
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}, nil
+}
+
+// BuildRecordInputFromCandidate 将上游 candidate 结构转换为最小 audit 输入。
+//
+// 当前主要用于消费 tools 模块产出的 audit_candidate，
+// 不在此处扩展为通用协议解析器。
+func BuildRecordInputFromCandidate(taskID string, candidate map[string]any) (RecordInput, error) {
+	if strings.TrimSpace(taskID) == "" {
+		return RecordInput{}, ErrTaskIDRequired
+	}
+	if candidate == nil {
+		return RecordInput{}, ErrCandidateInvalid
+	}
+
+	typeValue, ok := candidate["type"].(string)
+	if !ok || strings.TrimSpace(typeValue) == "" {
+		return RecordInput{}, ErrTypeRequired
+	}
+	actionValue, ok := candidate["action"].(string)
+	if !ok || strings.TrimSpace(actionValue) == "" {
+		return RecordInput{}, ErrActionRequired
+	}
+	resultValue, ok := candidate["result"].(string)
+	if !ok || strings.TrimSpace(resultValue) == "" {
+		return RecordInput{}, ErrResultRequired
+	}
+
+	summaryValue, _ := candidate["summary"].(string)
+	targetValue, _ := candidate["target"].(string)
+
+	return RecordInput{
+		TaskID:  strings.TrimSpace(taskID),
+		Type:    strings.TrimSpace(typeValue),
+		Action:  strings.TrimSpace(actionValue),
+		Summary: strings.TrimSpace(summaryValue),
+		Target:  strings.TrimSpace(targetValue),
+		Result:  strings.TrimSpace(resultValue),
 	}, nil
 }
 
