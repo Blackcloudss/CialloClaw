@@ -24,6 +24,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 )
 
 // TestServiceStartTaskAndConfirmFlow 验证确认后的普通任务会继续执行并完成交付。
@@ -54,9 +55,12 @@ func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, st
 	modelService := model.NewService(modelConfig(), stubModelClient{output: modelOutput})
 	deliveryService := delivery.NewService()
 	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("RegisterBuiltinTools returned error: %v", err)
+	}
 	pluginService := plugin.NewService()
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, modelService, audit.NewService(), deliveryService, toolRegistry, pluginService)
+	executor := execution.NewService(fileSystem, modelService, audit.NewService(), deliveryService, toolRegistry, nil, pluginService)
 
 	service := NewService(
 		contextsvc.NewService(),
