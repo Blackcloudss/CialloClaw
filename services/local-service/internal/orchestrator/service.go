@@ -576,6 +576,10 @@ func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, e
 	if !hasRestorePoint {
 		hasRestorePoint = s.latestRestorePointFromStorage("") != nil
 	}
+	latestAudit := latestAuditRecordFromTasks(allTasks)
+	if latestAudit == nil {
+		latestAudit = s.latestAuditRecordFromStorage("")
+	}
 
 	return map[string]any{
 		"overview": map[string]any{
@@ -588,7 +592,7 @@ func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, e
 			},
 			"quick_actions":     buildDashboardQuickActions(hasFocusTask, pendingTotal, len(finishedTasks)),
 			"global_state":      s.Snapshot(),
-			"high_value_signal": buildDashboardSignalsWithAudit(unfinishedTasks, finishedTasks, pendingApprovals),
+			"high_value_signal": buildDashboardSignalsWithAudit(unfinishedTasks, finishedTasks, pendingApprovals, latestAudit),
 		},
 	}, nil
 }
@@ -602,6 +606,10 @@ func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, err
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
 	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
 	_, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+	latestAudit := latestAuditRecordFromTasks(append(append([]runengine.TaskRecord{}, unfinishedTasks...), finishedTasks...))
+	if latestAudit == nil {
+		latestAudit = s.latestAuditRecordFromStorage("")
+	}
 	return map[string]any{
 		"module": module,
 		"tab":    tab,
@@ -611,7 +619,7 @@ func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, err
 			"authorizations_used": countAuthorizedTasks(unfinishedTasks, finishedTasks),
 			"exceptions":          countExceptionTasks(unfinishedTasks, finishedTasks),
 		},
-		"highlights": buildDashboardModuleHighlightsWithAudit(unfinishedTasks, finishedTasks, pendingTotal),
+		"highlights": buildDashboardModuleHighlightsWithAudit(unfinishedTasks, finishedTasks, pendingTotal, latestAudit),
 	}, nil
 }
 
@@ -1130,17 +1138,17 @@ func countGeneratedOutputs(tasks []runengine.TaskRecord) int {
 	return total
 }
 
-func buildDashboardSignalsWithAudit(unfinishedTasks, finishedTasks []runengine.TaskRecord, pendingApprovals []map[string]any) []string {
+func buildDashboardSignalsWithAudit(unfinishedTasks, finishedTasks []runengine.TaskRecord, pendingApprovals []map[string]any, latestAudit map[string]any) []string {
 	signals := buildDashboardSignals(unfinishedTasks, finishedTasks, pendingApprovals)
-	if latestAudit := latestAuditRecordFromTasks(append(append([]runengine.TaskRecord{}, unfinishedTasks...), finishedTasks...)); latestAudit != nil {
+	if latestAudit != nil {
 		signals = append(signals, fmt.Sprintf("最近审计摘要：%s。", truncateText(stringValue(latestAudit, "summary", "runtime audit recorded"), 48)))
 	}
 	return signals
 }
 
-func buildDashboardModuleHighlightsWithAudit(unfinishedTasks, finishedTasks []runengine.TaskRecord, pendingTotal int) []string {
+func buildDashboardModuleHighlightsWithAudit(unfinishedTasks, finishedTasks []runengine.TaskRecord, pendingTotal int, latestAudit map[string]any) []string {
 	highlights := buildDashboardModuleHighlights(unfinishedTasks, finishedTasks, pendingTotal)
-	if latestAudit := latestAuditRecordFromTasks(append(append([]runengine.TaskRecord{}, unfinishedTasks...), finishedTasks...)); latestAudit != nil {
+	if latestAudit != nil {
 		highlights = append(highlights, fmt.Sprintf("最近审计动作：%s -> %s。", truncateText(stringValue(latestAudit, "action", "audit"), 24), truncateText(stringValue(latestAudit, "target", "main_flow"), 36)))
 	}
 	return highlights
@@ -1299,6 +1307,17 @@ func latestAuditRecordFromTasks(tasks []runengine.TaskRecord) map[string]any {
 		}
 	}
 	return latestAudit
+}
+
+func (s *Service) latestAuditRecordFromStorage(taskID string) map[string]any {
+	if s.storage == nil {
+		return nil
+	}
+	items, _, err := s.storage.AuditStore().ListAuditRecords(context.Background(), taskID, 1, 0)
+	if err != nil || len(items) == 0 {
+		return nil
+	}
+	return items[0].Map()
 }
 
 func aggregateTokenCostSummary(unfinishedTasks, finishedTasks []runengine.TaskRecord, budgetAutoDowngrade bool) map[string]any {
