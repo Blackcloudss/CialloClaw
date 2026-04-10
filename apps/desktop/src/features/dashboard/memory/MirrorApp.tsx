@@ -25,12 +25,22 @@ const MODULE_KEYS = [
 ] as const;
 
 type DraggableModuleKey = (typeof MODULE_KEYS)[number];
+type FloatingModuleKey = Exclude<DraggableModuleKey, "memory">;
 type ModulePosition = { x: number; y: number };
 type ModulePositions = Record<DraggableModuleKey, ModulePosition>;
 type ModuleSize = { width: number; height: number };
+type ModuleSizes = Record<DraggableModuleKey, ModuleSize>;
 type BoardBounds = { minX: number; minY: number; maxX: number; maxY: number };
 type BoardGrid = { columns: number; rows: number };
-type BoardLayout = { bounds: BoardBounds; size: ModuleSize; grid: BoardGrid; candidates: ModulePosition[] };
+type OccupiedModule = { position: ModulePosition; size: ModuleSize };
+type BoardLayout = {
+  bounds: BoardBounds;
+  memoryBounds: BoardBounds;
+  regularSize: ModuleSize;
+  moduleSizes: ModuleSizes;
+  grid: BoardGrid;
+  candidates: ModulePosition[];
+};
 type CardSummary = {
   badge: string;
   tone: string;
@@ -50,12 +60,24 @@ type DragState = {
 };
 
 const INITIAL_MODULE_STACK: DraggableModuleKey[] = [...MODULE_KEYS];
+const FLOATING_MODULE_KEYS = MODULE_KEYS.filter((key): key is FloatingModuleKey => key !== "memory");
 const DRAG_THRESHOLD = 8;
 const BOARD_PADDING = 12;
 const CARD_CLEARANCE = 10;
 const CARD_STEP = 16;
 const DEFAULT_CARD_SIZE: ModuleSize = { width: 260, height: 168 };
+const DEFAULT_MEMORY_CARD_SIZE: ModuleSize = { width: 480, height: 320 };
 const PINNED_MEMORY_CARD_OFFSET = { x: 20, y: 104 };
+const DEFAULT_MODULE_SIZES: ModuleSizes = {
+  history: DEFAULT_CARD_SIZE,
+  profile: DEFAULT_CARD_SIZE,
+  activeHours: DEFAULT_CARD_SIZE,
+  preferredOutput: DEFAULT_CARD_SIZE,
+  daily: DEFAULT_CARD_SIZE,
+  completedTasks: DEFAULT_CARD_SIZE,
+  generatedOutputs: DEFAULT_CARD_SIZE,
+  memory: DEFAULT_MEMORY_CARD_SIZE,
+};
 const DEFAULT_MODULE_POSITIONS: ModulePositions = {
   history: { x: 0, y: 0 },
   profile: { x: 0, y: 0 },
@@ -133,12 +155,21 @@ function buildAxisPositions(min: number, max: number) {
   return Array.from(new Set(values));
 }
 
+function clampDimension(value: number, min: number, max: number) {
+  if (max <= 1) {
+    return 1;
+  }
+
+  const effectiveMin = Math.min(min, max);
+  return Math.min(Math.max(value, effectiveMin), max);
+}
+
 function getBoardGrid(canvasWidth: number, canvasHeight: number): BoardGrid {
-  let bestGrid: BoardGrid = { columns: MODULE_KEYS.length, rows: 1 };
+  let bestGrid: BoardGrid = { columns: FLOATING_MODULE_KEYS.length, rows: 1 };
   let bestScore = Number.NEGATIVE_INFINITY;
 
-  for (let columns = 1; columns <= MODULE_KEYS.length; columns += 1) {
-    const rows = Math.ceil(MODULE_KEYS.length / columns);
+  for (let columns = 1; columns <= FLOATING_MODULE_KEYS.length; columns += 1) {
+    const rows = Math.ceil(FLOATING_MODULE_KEYS.length / columns);
     const width = (canvasWidth - BOARD_PADDING * 2 - CARD_CLEARANCE * (columns - 1)) / columns;
     const height = (canvasHeight - BOARD_PADDING * 2 - CARD_CLEARANCE * (rows - 1)) / rows;
     const score = Math.min(width, height);
@@ -160,6 +191,29 @@ function getBoardCardSize(canvasWidth: number, canvasHeight: number, grid: Board
     width: clampValue(width, 1, 264),
     height: clampValue(height, 1, 172),
   } satisfies ModuleSize;
+}
+
+function getMemoryCardSize(canvasWidth: number, canvasHeight: number) {
+  const maxWidth = Math.max(1, canvasWidth - BOARD_PADDING * 2);
+  const maxHeight = Math.max(1, canvasHeight - BOARD_PADDING * 2);
+
+  return {
+    width: clampDimension(Math.floor(canvasWidth * 0.42), 360, Math.min(640, maxWidth)),
+    height: clampDimension(Math.floor(canvasHeight * 0.38), 272, Math.min(420, maxHeight)),
+  } satisfies ModuleSize;
+}
+
+function getModuleSizes(regularSize: ModuleSize, memorySize: ModuleSize): ModuleSizes {
+  return {
+    history: regularSize,
+    profile: regularSize,
+    activeHours: regularSize,
+    preferredOutput: regularSize,
+    daily: regularSize,
+    completedTasks: regularSize,
+    generatedOutputs: regularSize,
+    memory: memorySize,
+  } satisfies ModuleSizes;
 }
 
 function getBoardBounds(canvasWidth: number, canvasHeight: number, size: ModuleSize) {
@@ -188,19 +242,23 @@ function buildBoardCandidates(bounds: BoardBounds) {
   return positions;
 }
 
-function overlapsOccupied(position: ModulePosition, occupied: ModulePosition[], size: ModuleSize) {
+function overlapsOccupied(position: ModulePosition, size: ModuleSize, occupied: OccupiedModule[]) {
   return occupied.some((item) => {
-    const separatedHorizontally = position.x + size.width + CARD_CLEARANCE <= item.x || item.x + size.width + CARD_CLEARANCE <= position.x;
-    const separatedVertically = position.y + size.height + CARD_CLEARANCE <= item.y || item.y + size.height + CARD_CLEARANCE <= position.y;
+    const separatedHorizontally =
+      position.x + size.width + CARD_CLEARANCE <= item.position.x ||
+      item.position.x + item.size.width + CARD_CLEARANCE <= position.x;
+    const separatedVertically =
+      position.y + size.height + CARD_CLEARANCE <= item.position.y ||
+      item.position.y + item.size.height + CARD_CLEARANCE <= position.y;
 
     return !(separatedHorizontally || separatedVertically);
   });
 }
 
-function resolveSettledPosition(target: ModulePosition, occupied: ModulePosition[], layout: BoardLayout) {
+function resolveSettledPosition(target: ModulePosition, size: ModuleSize, occupied: OccupiedModule[], layout: BoardLayout) {
   const clampedTarget = clampPosition(target, layout.bounds);
 
-  if (!overlapsOccupied(clampedTarget, occupied, layout.size)) {
+  if (!overlapsOccupied(clampedTarget, size, occupied)) {
     return clampedTarget;
   }
 
@@ -208,7 +266,7 @@ function resolveSettledPosition(target: ModulePosition, occupied: ModulePosition
   let bestDistance = Number.POSITIVE_INFINITY;
 
   for (const candidate of layout.candidates) {
-    if (overlapsOccupied(candidate, occupied, layout.size)) {
+    if (overlapsOccupied(candidate, size, occupied)) {
       continue;
     }
 
@@ -230,10 +288,10 @@ function getGridModuleTargets(bounds: BoardBounds, grid: BoardGrid, size: Module
   const gridStartY = bounds.minY + Math.max(0, (availableHeight - gridHeight) / 2);
   const positions = { ...DEFAULT_MODULE_POSITIONS };
 
-  MODULE_KEYS.forEach((key, index) => {
+  FLOATING_MODULE_KEYS.forEach((key, index) => {
     const row = Math.floor(index / grid.columns);
     const indexInRow = index % grid.columns;
-    const remainingCards = MODULE_KEYS.length - row * grid.columns;
+    const remainingCards = FLOATING_MODULE_KEYS.length - row * grid.columns;
     const cardsInRow = Math.min(grid.columns, remainingCards);
     const rowWidth = cardsInRow * size.width + Math.max(0, cardsInRow - 1) * CARD_CLEARANCE;
     const gridStartX = bounds.minX + Math.max(0, (availableWidth - rowWidth) / 2);
@@ -252,7 +310,7 @@ function getOrbitalModuleTargets(bounds: BoardBounds) {
   const travelX = Math.max(0, bounds.maxX - bounds.minX);
   const travelY = Math.max(0, bounds.maxY - bounds.minY);
 
-  MODULE_KEYS.forEach((key) => {
+  FLOATING_MODULE_KEYS.forEach((key) => {
     const target = ORBITAL_MODULE_TARGETS[key];
     positions[key] = {
       x: Math.round(bounds.minX + travelX * target.x),
@@ -287,24 +345,20 @@ function getPinnedMemoryTarget(bounds: BoardBounds) {
 
 function normalizeModulePositions(targets: ModulePositions, layout: BoardLayout) {
   const nextPositions = { ...DEFAULT_MODULE_POSITIONS };
-  const pinnedMemoryPosition = getPinnedMemoryTarget(layout.bounds);
-  const occupied: ModulePosition[] = [pinnedMemoryPosition];
+  const pinnedMemoryPosition = getPinnedMemoryTarget(layout.memoryBounds);
+  const occupied: OccupiedModule[] = [{ position: pinnedMemoryPosition, size: layout.moduleSizes.memory }];
 
   nextPositions.memory = pinnedMemoryPosition;
 
-  for (const key of MODULE_KEYS) {
-    if (key === "memory") {
-      continue;
-    }
-
-    const settledPosition = resolveSettledPosition(targets[key], occupied, layout);
+  for (const key of FLOATING_MODULE_KEYS) {
+    const settledPosition = resolveSettledPosition(targets[key], layout.moduleSizes[key], occupied, layout);
 
     if (!settledPosition) {
       throw new Error("Mirror board could not find a non-overlapping position for every card.");
     }
 
     nextPositions[key] = settledPosition;
-    occupied.push(settledPosition);
+    occupied.push({ position: settledPosition, size: layout.moduleSizes[key] });
   }
 
   return nextPositions;
@@ -394,7 +448,7 @@ export function MirrorApp() {
   const [mirrorData, setMirrorData] = useState<MirrorOverviewData | null>(null);
   const [modulePositions, setModulePositions] = useState<ModulePositions>(DEFAULT_MODULE_POSITIONS);
   const [moduleStack, setModuleStack] = useState<DraggableModuleKey[]>(INITIAL_MODULE_STACK);
-  const [cardSize, setCardSize] = useState<ModuleSize>(DEFAULT_CARD_SIZE);
+  const [moduleSizes, setModuleSizes] = useState<ModuleSizes>(DEFAULT_MODULE_SIZES);
   const [draggingKey, setDraggingKey] = useState<DraggableModuleKey | null>(null);
   const [activeDetailKey, setActiveDetailKey] = useState<DraggableModuleKey | null>(null);
   const [boardReady, setBoardReady] = useState(false);
@@ -461,12 +515,16 @@ export function MirrorApp() {
     }
 
     const grid = getBoardGrid(canvas.clientWidth, canvas.clientHeight);
-    const nextSize = getBoardCardSize(canvas.clientWidth, canvas.clientHeight, grid);
-    const bounds = getBoardBounds(canvas.clientWidth, canvas.clientHeight, nextSize);
+    const regularSize = getBoardCardSize(canvas.clientWidth, canvas.clientHeight, grid);
+    const memorySize = getMemoryCardSize(canvas.clientWidth, canvas.clientHeight);
+    const bounds = getBoardBounds(canvas.clientWidth, canvas.clientHeight, regularSize);
+    const memoryBounds = getBoardBounds(canvas.clientWidth, canvas.clientHeight, memorySize);
 
     return {
       bounds,
-      size: nextSize,
+      memoryBounds,
+      regularSize,
+      moduleSizes: getModuleSizes(regularSize, memorySize),
       grid,
       candidates: buildBoardCandidates(bounds),
     } satisfies BoardLayout;
@@ -480,8 +538,11 @@ export function MirrorApp() {
         return target;
       }
 
-      const occupied = MODULE_KEYS.filter((item) => item !== key).map((item) => positions[item]);
-      return resolveSettledPosition(target, occupied, layout) ?? positions[key];
+      const occupied = MODULE_KEYS.filter((item) => item !== key).map((item) => ({
+        position: positions[item],
+        size: layout.moduleSizes[item],
+      }));
+      return resolveSettledPosition(target, layout.moduleSizes[key], occupied, layout) ?? positions[key];
     },
     [getBoardLayout],
   );
@@ -498,11 +559,11 @@ export function MirrorApp() {
         return;
       }
 
-      setCardSize(layout.size);
+      setModuleSizes(layout.moduleSizes);
       setModulePositions((currentPositions) => {
         const targets = hasPlacedModulesRef.current
           ? currentPositions
-          : getDefaultModuleTargets(layout.bounds, layout.grid, layout.size);
+          : getDefaultModuleTargets(layout.bounds, layout.grid, layout.regularSize);
         return normalizeModulePositions(targets, layout);
       });
       hasPlacedModulesRef.current = true;
@@ -906,6 +967,7 @@ export function MirrorApp() {
     const isDragging = draggingKey === key;
     const isExpanded = activeDetailKey === key;
     const isPinnedMemoryCard = key === "memory";
+    const moduleSize = moduleSizes[key];
     const summary = getCardSummary(key);
     const moduleHint = isPinnedMemoryCard ? "点按查看详情" : "拖动整理 · 点按查看";
     const summaryClassName = [
@@ -935,9 +997,9 @@ export function MirrorApp() {
         className={`mirror-page__draggable mirror-page__draggable--${key}${isPinnedMemoryCard ? " mirror-page__draggable--pinned" : ""}${isDragging ? " is-dragging" : ""}${isExpanded ? " is-active" : ""}${boardReady ? " is-ready" : ""}`}
         data-accent={summary.accent}
         style={{
-          height: `${cardSize.height}px`,
+          height: `${moduleSize.height}px`,
           transform: `translate3d(${modulePositions[key].x}px, ${modulePositions[key].y}px, 0)`,
-          width: `${cardSize.width}px`,
+          width: `${moduleSize.width}px`,
         }}
         role="button"
         tabIndex={0}

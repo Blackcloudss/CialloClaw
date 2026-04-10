@@ -495,6 +495,41 @@
   z-index: 4;
 }
 
+.mirror-page__draggable--pinned .mirror-page__card-surface {
+  padding: 1.4rem 1.45rem 1.35rem;
+}
+
+.mirror-page__draggable--pinned .mirror-page__card-shell {
+  gap: 1rem;
+}
+
+.mirror-page__draggable--pinned .mirror-page__card-top {
+  align-items: flex-start;
+}
+
+.mirror-page__draggable--pinned .mirror-page__card-title {
+  font-size: 1.08rem;
+}
+
+.mirror-page__draggable--pinned .mirror-page__card-line {
+  font-size: clamp(1.32rem, 1.95vw, 1.72rem);
+  -webkit-line-clamp: 3;
+}
+
+.mirror-page__draggable--pinned .mirror-page__card-line--memory {
+  font-size: clamp(1.12rem, 1.5vw, 1.34rem);
+}
+
+.mirror-page__draggable--pinned .mirror-page__card-detail {
+  font-size: 0.92rem;
+  line-height: 1.72;
+  -webkit-line-clamp: 6;
+}
+
+.mirror-page__draggable--pinned .mirror-page__module-hint {
+  margin-top: 0;
+}
+
 .mirror-page__draggable.is-ready {
   opacity: 1;
 }
@@ -861,6 +896,19 @@
 
   .mirror-page__summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .mirror-page__draggable--pinned .mirror-page__card-surface {
+    padding: 1.2rem 1.2rem 1.15rem;
+  }
+
+  .mirror-page__draggable--pinned .mirror-page__card-line {
+    font-size: clamp(1.14rem, 3.8vw, 1.4rem);
+  }
+
+  .mirror-page__draggable--pinned .mirror-page__card-detail {
+    font-size: 0.84rem;
+    -webkit-line-clamp: 5;
   }
 }
 
