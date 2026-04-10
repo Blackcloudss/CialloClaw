@@ -87,11 +87,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 	if err != nil {
 		return nil, tools.ErrWorkspaceBoundaryDenied
 	}
-	if absPath, err := execCtx.Platform.Abs(safePath); err == nil {
-		pathStr = absPath
-	} else {
-		return nil, fmt.Errorf("%w: resolve absolute path: %v", tools.ErrToolExecutionFailed, err)
-	}
+	pathStr = safePath
 
 	content, err := execCtx.Platform.ReadFile(pathStr)
 	if err != nil {
@@ -130,11 +126,7 @@ func (t *ReadFileTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteCon
 	if err != nil {
 		return nil, tools.ErrWorkspaceBoundaryDenied
 	}
-	if absPath, err := execCtx.Platform.Abs(safePath); err == nil {
-		pathStr = absPath
-	} else {
-		return nil, fmt.Errorf("%w: resolve absolute path: %v", tools.ErrToolExecutionFailed, err)
-	}
+	pathStr = safePath
 
 	return &tools.ToolResult{
 		ToolName: t.meta.Name,

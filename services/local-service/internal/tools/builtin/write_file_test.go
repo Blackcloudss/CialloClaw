@@ -31,7 +31,7 @@ func newStubWriteFilePlatform(workspaceRoot string) *stubWriteFilePlatform {
 func (s *stubWriteFilePlatform) Join(elem ...string) string { return filepath.Join(elem...) }
 
 func (s *stubWriteFilePlatform) Abs(path string) (string, error) {
-	if filepath.IsAbs(path) {
+	if isStubAbsolutePath(path) {
 		return filepath.Clean(path), nil
 	}
 	return filepath.Join(s.workspaceRoot, path), nil
@@ -42,7 +42,10 @@ func (s *stubWriteFilePlatform) EnsureWithinWorkspace(path string) (string, erro
 	if s.outOfScope[clean] {
 		return "", errors.New("path outside workspace")
 	}
-	return clean, nil
+	if isStubAbsolutePath(clean) {
+		return clean, nil
+	}
+	return filepath.Join(s.workspaceRoot, clean), nil
 }
 
 func (s *stubWriteFilePlatform) ReadFile(path string) ([]byte, error) {

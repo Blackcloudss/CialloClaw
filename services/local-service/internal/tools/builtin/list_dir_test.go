@@ -59,7 +59,7 @@ func newStubListDirPlatform(workspaceRoot string) *stubListDirPlatform {
 
 func (s *stubListDirPlatform) Join(elem ...string) string { return filepath.Join(elem...) }
 func (s *stubListDirPlatform) Abs(path string) (string, error) {
-	if filepath.IsAbs(path) {
+	if isStubAbsolutePath(path) {
 		return filepath.Clean(path), nil
 	}
 	return filepath.Join(s.workspaceRoot, path), nil
@@ -69,7 +69,10 @@ func (s *stubListDirPlatform) EnsureWithinWorkspace(path string) (string, error)
 	if s.outOfScope[clean] {
 		return "", errors.New("outside workspace")
 	}
-	return clean, nil
+	if isStubAbsolutePath(clean) {
+		return clean, nil
+	}
+	return filepath.Join(s.workspaceRoot, clean), nil
 }
 func (s *stubListDirPlatform) ReadDir(path string) ([]fs.DirEntry, error) {
 	if s.readDirErr != nil {

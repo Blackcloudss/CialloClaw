@@ -56,12 +56,6 @@ func (t *ListDirTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCon
 		return nil, tools.ErrWorkspaceBoundaryDenied
 	}
 
-	absPath, err := execCtx.Platform.Abs(safePath)
-	if err != nil {
-		return nil, fmt.Errorf("%w: resolve absolute path: %v", tools.ErrToolExecutionFailed, err)
-	}
-	safePath = absPath
-
 	entries, err := execCtx.Platform.ReadDir(safePath)
 	if err != nil {
 		return nil, fmt.Errorf("%w: list directory failed: %v", tools.ErrToolExecutionFailed, err)
@@ -98,12 +92,6 @@ func (t *ListDirTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteCont
 	if err != nil {
 		return nil, tools.ErrWorkspaceBoundaryDenied
 	}
-
-	absPath, err := execCtx.Platform.Abs(safePath)
-	if err != nil {
-		return nil, fmt.Errorf("%w: resolve absolute path: %v", tools.ErrToolExecutionFailed, err)
-	}
-	safePath = absPath
 
 	rawOutput := map[string]any{
 		"path":      safePath,

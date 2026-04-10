@@ -74,12 +74,6 @@ func (t *WriteFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteC
 		return nil, tools.ErrWorkspaceBoundaryDenied
 	}
 
-	absPath, err := execCtx.Platform.Abs(safePath)
-	if err != nil {
-		return nil, fmt.Errorf("%w: resolve absolute path: %v", tools.ErrToolExecutionFailed, err)
-	}
-	safePath = absPath
-
 	created, overwritten, err := detectWriteMode(execCtx.Platform, safePath)
 	if err != nil {
 		return nil, fmt.Errorf("%w: inspect target path: %v", tools.ErrToolExecutionFailed, err)
@@ -113,12 +107,6 @@ func (t *WriteFileTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteCo
 	if err != nil {
 		return nil, tools.ErrWorkspaceBoundaryDenied
 	}
-
-	absPath, err := execCtx.Platform.Abs(safePath)
-	if err != nil {
-		return nil, fmt.Errorf("%w: resolve absolute path: %v", tools.ErrToolExecutionFailed, err)
-	}
-	safePath = absPath
 
 	created, overwritten, err := detectWriteMode(execCtx.Platform, safePath)
 	if err != nil {
