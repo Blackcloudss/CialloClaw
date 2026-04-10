@@ -1,13 +1,17 @@
 package bootstrap
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 )
 
 func TestNewWiresStorageBackedMemoryService(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
 	cfg := config.Config{
 		RPC: config.RPCConfig{
 			Transport:        "named_pipe",
@@ -65,5 +69,29 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	}
 	if _, err := app.toolRegistry.Get("exec_command"); err != nil {
 		t.Fatalf("expected exec_command to be registered, got %v", err)
+	}
+}
+
+func TestNewFailsFastWhenModelServiceCannotBeConfigured(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+
+	cfg := config.Config{
+		RPC: config.RPCConfig{
+			Transport:        "named_pipe",
+			NamedPipeName:    `\\.\pipe\cialloclaw-rpc-test`,
+			DebugHTTPAddress: ":0",
+		},
+		WorkspaceRoot: filepath.Join(t.TempDir(), "workspace"),
+		DatabasePath:  filepath.Join(t.TempDir(), "data", "local.db"),
+		Model: config.ModelConfig{
+			Provider: "openai_responses",
+			ModelID:  "gpt-5.4",
+			Endpoint: "https://api.openai.com/v1/responses",
+		},
+	}
+
+	_, err := New(cfg)
+	if !errors.Is(err, model.ErrOpenAIAPIKeyRequired) {
+		t.Fatalf("expected ErrOpenAIAPIKeyRequired, got %v", err)
 	}
 }

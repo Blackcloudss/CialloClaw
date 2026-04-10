@@ -53,15 +53,13 @@ func New(cfg config.Config) (*App, error) {
 	}
 	toolExecutor := tools.NewToolExecutor(toolRegistry)
 
-	modelService := model.NewService(cfg.Model)
-	apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
-	if apiKey != "" {
-		if configuredModelService, err := model.NewServiceFromConfig(model.ServiceConfig{
-			ModelConfig: cfg.Model,
-			APIKey:      apiKey,
-		}); err == nil {
-			modelService = configuredModelService
-		}
+	modelService, err := model.NewServiceFromConfig(model.ServiceConfig{
+		ModelConfig: cfg.Model,
+		APIKey:      strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
+	})
+	if err != nil {
+		_ = storageService.Close()
+		return nil, err
 	}
 
 	deliveryService := delivery.NewService()
