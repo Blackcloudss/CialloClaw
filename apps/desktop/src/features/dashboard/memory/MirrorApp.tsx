@@ -12,6 +12,7 @@ import { PanelSurface, StatusBadge } from "@cialloclaw/ui";
 import { subscribeMirrorOverviewUpdated } from "@/rpc/subscriptions";
 import { loadMirrorOverviewData, type MirrorOverviewData } from "./mirrorService";
 import { loadMirrorFloatingPositions, saveMirrorFloatingPositions } from "./mirrorLayoutStorage";
+import { MirrorDecorativeBirds } from "./MirrorDecorativeBirds";
 import {
   DEFAULT_MIRROR_DIRECTION_STACK,
   FLOATING_MIRROR_DIRECTION_KEYS,
@@ -993,6 +994,7 @@ export function MirrorApp() {
             <span className="mirror-page__inspection-pin mirror-page__inspection-pin--top" />
             <span className="mirror-page__inspection-pin mirror-page__inspection-pin--right" />
           </div>
+          <MirrorDecorativeBirds />
         </section>
         {moduleStack.map(renderDraggableModule)}
         {renderDetailOverlay()}

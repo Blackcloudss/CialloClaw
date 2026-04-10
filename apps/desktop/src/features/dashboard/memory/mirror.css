@@ -314,6 +314,285 @@
   width: 0.3rem;
 }
 
+.mirror-page__decor-birds {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 2;
+}
+
+.mirror-page__decor-bird {
+  --mirror-bird-aura: radial-gradient(circle, rgba(255, 255, 255, 0.56), transparent 74%);
+  --mirror-bird-aura-blur: 16px;
+  --mirror-bird-aura-inset: 18% 14% 26%;
+  --mirror-bird-aura-opacity: 0.3;
+  --mirror-bird-aura-rotate: 0deg;
+  --mirror-bird-orbital-back-opacity: 0.74;
+  --mirror-bird-orbital-back-scale: 1;
+  --mirror-bird-orbital-back-shift-x: -50%;
+  --mirror-bird-orbital-back-shift-y: -50%;
+  --mirror-bird-orbital-front-opacity: 0.72;
+  --mirror-bird-orbital-front-scale: 1;
+  --mirror-bird-orbital-front-shift-x: -50%;
+  --mirror-bird-orbital-front-shift-y: -50%;
+  --mirror-bird-perch-bottom: 1rem;
+  --mirror-bird-perch-opacity: 1;
+  --mirror-bird-perch-rotate: 0deg;
+  --mirror-bird-perch-shift-x: -50%;
+  --mirror-bird-perch-width: 9.8rem;
+  --mirror-bird-saturate: 0.92;
+  --mirror-bird-shadow-alpha: 0.18;
+  --mirror-bird-shadow-bottom: 2.1rem;
+  --mirror-bird-shadow-height: 2.9rem;
+  --mirror-bird-shadow-opacity: 1;
+  --mirror-bird-shadow-scale: 1;
+  --mirror-bird-shadow-shift-x: -50%;
+  --mirror-bird-shadow-width: 10rem;
+  --mirror-bird-shell-opacity: 0.9;
+  --mirror-bird-shell-rotate: 0deg;
+  --mirror-bird-shell-scale-x: 0.88;
+  --mirror-bird-shell-scale-y: 0.88;
+  --mirror-bird-shell-shift-x: 0rem;
+  --mirror-bird-shell-shift-y: 0rem;
+  pointer-events: none;
+  position: absolute;
+}
+
+.mirror-page__decor-bird-shell {
+  filter: saturate(var(--mirror-bird-saturate)) drop-shadow(0 24px 36px rgba(111, 84, 54, var(--mirror-bird-shadow-alpha)));
+  isolation: isolate;
+  opacity: var(--mirror-bird-shell-opacity);
+  position: relative;
+  transform-origin: center;
+  transform:
+    translate3d(var(--mirror-bird-shell-shift-x), var(--mirror-bird-shell-shift-y), 0)
+    rotate(var(--mirror-bird-shell-rotate))
+    scaleX(var(--mirror-bird-shell-scale-x))
+    scaleY(var(--mirror-bird-shell-scale-y));
+}
+
+.mirror-page__decor-bird,
+.mirror-page__decor-bird * {
+  pointer-events: none;
+}
+
+.mirror-page__decor-bird-shell::before {
+  background: var(--mirror-bird-aura);
+  border-radius: 999px;
+  content: "";
+  filter: blur(var(--mirror-bird-aura-blur));
+  inset: var(--mirror-bird-aura-inset);
+  opacity: var(--mirror-bird-aura-opacity);
+  pointer-events: none;
+  position: absolute;
+  transform: rotate(var(--mirror-bird-aura-rotate));
+  z-index: 0;
+}
+
+.mirror-page__decor-bird-shell > .shell-ball-mascot {
+  position: relative;
+  z-index: 1;
+}
+
+.mirror-page__decor-bird .shell-ball-mascot {
+  --shell-ball-size: 11.5rem;
+  opacity: 0.95;
+  pointer-events: none;
+}
+
+.mirror-page__decor-bird .shell-ball-mascot__hotspot {
+  display: none;
+}
+
+.mirror-page__decor-bird .shell-ball-mascot__shadow {
+  bottom: var(--mirror-bird-shadow-bottom);
+  height: var(--mirror-bird-shadow-height);
+  opacity: var(--mirror-bird-shadow-opacity);
+  transform: translateX(var(--mirror-bird-shadow-shift-x)) scaleX(var(--mirror-bird-shadow-scale));
+  width: var(--mirror-bird-shadow-width);
+}
+
+.mirror-page__decor-bird .shell-ball-mascot__orbital--back {
+  opacity: var(--mirror-bird-orbital-back-opacity);
+  transform: translate(var(--mirror-bird-orbital-back-shift-x), var(--mirror-bird-orbital-back-shift-y)) scale(var(--mirror-bird-orbital-back-scale));
+}
+
+.mirror-page__decor-bird .shell-ball-mascot__orbital--front {
+  opacity: var(--mirror-bird-orbital-front-opacity);
+  transform: translate(var(--mirror-bird-orbital-front-shift-x), var(--mirror-bird-orbital-front-shift-y)) scale(var(--mirror-bird-orbital-front-scale));
+}
+
+.mirror-page__decor-bird .shell-ball-mascot__perch {
+  bottom: var(--mirror-bird-perch-bottom);
+  opacity: var(--mirror-bird-perch-opacity);
+  transform: translateX(var(--mirror-bird-perch-shift-x)) rotate(var(--mirror-bird-perch-rotate));
+  width: var(--mirror-bird-perch-width);
+}
+
+.mirror-page__decor-bird--top-right {
+  right: 4.5%;
+  top: 4.5%;
+}
+
+.mirror-page__decor-bird[data-role="lookout"] {
+  --mirror-bird-aura: radial-gradient(circle at 34% 48%, rgba(180, 211, 235, 0.56), rgba(255, 255, 255, 0.14) 48%, transparent 76%);
+  --mirror-bird-aura-inset: 18% 18% 26% 4%;
+  --mirror-bird-aura-opacity: 0.48;
+  --mirror-bird-aura-rotate: -8deg;
+  --mirror-bird-orbital-back-opacity: 0.82;
+  --mirror-bird-orbital-back-scale: 0.92;
+  --mirror-bird-orbital-back-shift-x: -46%;
+  --mirror-bird-orbital-front-opacity: 0.58;
+  --mirror-bird-orbital-front-scale: 0.88;
+  --mirror-bird-orbital-front-shift-x: -45%;
+  --mirror-bird-orbital-front-shift-y: -52%;
+  --mirror-bird-perch-bottom: 1.18rem;
+  --mirror-bird-perch-rotate: -6deg;
+  --mirror-bird-perch-shift-x: -58%;
+  --mirror-bird-perch-width: 8rem;
+  --mirror-bird-shadow-bottom: 2.2rem;
+  --mirror-bird-shadow-scale: 0.94;
+  --mirror-bird-shadow-shift-x: -56%;
+  --mirror-bird-shadow-width: 8.8rem;
+  --mirror-bird-shell-opacity: 0.86;
+  --mirror-bird-shell-rotate: -11deg;
+  --mirror-bird-shell-scale-x: 0.8;
+  --mirror-bird-shell-scale-y: 0.84;
+  --mirror-bird-shell-shift-x: -0.55rem;
+  --mirror-bird-shell-shift-y: -0.2rem;
+}
+
+.mirror-page__decor-bird--bottom-right {
+  bottom: 3.8%;
+  right: 5.4%;
+}
+
+.mirror-page__decor-bird[data-role="dozer"] {
+  --mirror-bird-aura: radial-gradient(circle at 56% 58%, rgba(255, 234, 203, 0.58), rgba(255, 248, 236, 0.18) 52%, transparent 80%);
+  --mirror-bird-aura-blur: 20px;
+  --mirror-bird-aura-inset: 24% 10% 18% 14%;
+  --mirror-bird-aura-opacity: 0.46;
+  --mirror-bird-orbital-back-opacity: 0.56;
+  --mirror-bird-orbital-back-scale: 1.05;
+  --mirror-bird-orbital-front-opacity: 0.42;
+  --mirror-bird-orbital-front-scale: 0.82;
+  --mirror-bird-orbital-front-shift-y: -46%;
+  --mirror-bird-perch-bottom: 0.7rem;
+  --mirror-bird-perch-opacity: 0.94;
+  --mirror-bird-perch-rotate: 7deg;
+  --mirror-bird-perch-shift-x: -48%;
+  --mirror-bird-perch-width: 11rem;
+  --mirror-bird-saturate: 0.86;
+  --mirror-bird-shadow-alpha: 0.14;
+  --mirror-bird-shadow-bottom: 1.55rem;
+  --mirror-bird-shadow-height: 3.3rem;
+  --mirror-bird-shadow-opacity: 0.88;
+  --mirror-bird-shadow-shift-x: -48%;
+  --mirror-bird-shadow-width: 11rem;
+  --mirror-bird-shell-opacity: 0.92;
+  --mirror-bird-shell-rotate: 11deg;
+  --mirror-bird-shell-scale-x: 0.95;
+  --mirror-bird-shell-scale-y: 0.9;
+  --mirror-bird-shell-shift-y: 0.3rem;
+}
+
+.mirror-page__decor-bird--bottom-left {
+  bottom: 4.6%;
+  left: 3.8%;
+}
+
+.mirror-page__decor-bird[data-role="tinkerer"] {
+  --mirror-bird-aura: linear-gradient(122deg, rgba(94, 164, 157, 0.38), rgba(255, 255, 255, 0) 52%), radial-gradient(circle at 66% 58%, rgba(245, 227, 177, 0.22), rgba(175, 223, 217, 0.12) 42%, transparent 76%);
+  --mirror-bird-aura-blur: 18px;
+  --mirror-bird-aura-inset: 18% 10% 18% 12%;
+  --mirror-bird-aura-opacity: 0.58;
+  --mirror-bird-aura-rotate: -14deg;
+  --mirror-bird-orbital-back-opacity: 0.8;
+  --mirror-bird-orbital-back-scale: 1.02;
+  --mirror-bird-orbital-back-shift-x: -48%;
+  --mirror-bird-orbital-back-shift-y: -46%;
+  --mirror-bird-orbital-front-opacity: 0.54;
+  --mirror-bird-orbital-front-scale: 0.9;
+  --mirror-bird-orbital-front-shift-x: -46%;
+  --mirror-bird-orbital-front-shift-y: -45%;
+  --mirror-bird-perch-bottom: 0.84rem;
+  --mirror-bird-perch-rotate: 16deg;
+  --mirror-bird-perch-shift-x: -34%;
+  --mirror-bird-perch-width: 9.4rem;
+  --mirror-bird-saturate: 1.04;
+  --mirror-bird-shadow-bottom: 1.7rem;
+  --mirror-bird-shadow-height: 3.1rem;
+  --mirror-bird-shadow-scale: 0.88;
+  --mirror-bird-shadow-shift-x: -36%;
+  --mirror-bird-shadow-width: 9.8rem;
+  --mirror-bird-shell-opacity: 0.9;
+  --mirror-bird-shell-rotate: 18deg;
+  --mirror-bird-shell-scale-x: 0.84;
+  --mirror-bird-shell-scale-y: 0.88;
+  --mirror-bird-shell-shift-x: 0.95rem;
+  --mirror-bird-shell-shift-y: 0.22rem;
+}
+
+.mirror-page__decor-bird[data-role="lookout"] .shell-ball-mascot__perch {
+  box-shadow: 0 14px 24px -24px rgba(96, 129, 170, 0.34);
+}
+
+.mirror-page__decor-bird[data-role="dozer"] .shell-ball-mascot__perch {
+  background: linear-gradient(180deg, rgba(255, 251, 246, 0.94), rgba(236, 221, 201, 0.94));
+  box-shadow: 0 16px 28px -24px rgba(139, 107, 63, 0.34);
+}
+
+.mirror-page__decor-bird[data-role="tinkerer"] .shell-ball-mascot__perch {
+  background:
+    linear-gradient(90deg, rgba(255, 249, 242, 0.92), rgba(227, 241, 239, 0.95) 42%, rgba(240, 227, 196, 0.94) 76%, rgba(255, 249, 242, 0.9));
+  box-shadow: 0 14px 24px -20px rgba(82, 142, 137, 0.28);
+}
+
+.mirror-page__decor-bird[data-role="tinkerer"] .mirror-page__decor-bird-shell::after {
+  background:
+    linear-gradient(104deg, rgba(242, 228, 191, 0), rgba(242, 228, 191, 0.76) 36%, rgba(121, 183, 174, 0.7) 64%, rgba(121, 183, 174, 0)),
+    radial-gradient(circle at 52% 52%, rgba(255, 247, 222, 0.74), rgba(255, 247, 222, 0));
+  border-radius: 999px;
+  bottom: 1.5rem;
+  content: "";
+  height: 1.6rem;
+  left: 2.8rem;
+  opacity: 0.62;
+  position: absolute;
+  transform: rotate(16deg);
+  width: 5.6rem;
+  z-index: 0;
+}
+
+.mirror-page__decor-bird[data-role="tinkerer"] .shell-ball-mascot__shadow {
+  filter: blur(13px);
+}
+
+.mirror-page__decor-bird[data-role="tinkerer"] .shell-ball-mascot__tail-shell {
+  left: calc(50% + 2.45rem);
+}
+
+.mirror-page__decor-bird[data-role="tinkerer"] .shell-ball-mascot__wing-shell--left {
+  left: -0.75rem;
+}
+
+.mirror-page__decor-bird[data-role="tinkerer"] .shell-ball-mascot__wing-shell--right {
+  right: -1.25rem;
+  top: 4rem;
+}
+
+.mirror-page__decor-bird[data-role="tinkerer"] .shell-ball-mascot__body {
+  border-radius: 46% 50% 44% 50% / 40% 42% 56% 58%;
+}
+
+.mirror-page__decor-bird[data-role="tinkerer"] .shell-ball-mascot__face {
+  top: 2.78rem;
+}
+
+.mirror-page__decor-bird[data-role="tinkerer"] .shell-ball-mascot__crest {
+  left: 48%;
+}
+
 .mirror-page :where(span.inline-flex.rounded-full.px-3.py-1.text-xs.font-medium) {
   background: rgba(255, 251, 244, 0.82);
   border: 1px solid rgba(151, 122, 90, 0.18);
@@ -938,6 +1217,10 @@
     height: min(31rem, 52vw);
     width: min(50rem, 78vw);
   }
+
+  .mirror-page__decor-bird .shell-ball-mascot {
+    --shell-ball-size: 10rem;
+  }
 }
 
 @media (max-width: 860px) {
@@ -945,6 +1228,25 @@
     border-radius: 1.9rem;
     height: min(27rem, 58vw);
     width: min(44rem, 86vw);
+  }
+
+  .mirror-page__decor-bird--top-right {
+    right: 2.2%;
+    top: 2.8%;
+  }
+
+  .mirror-page__decor-bird--bottom-right {
+    bottom: 1.8%;
+    right: 2.2%;
+  }
+
+  .mirror-page__decor-bird--bottom-left {
+    bottom: 2.6%;
+    left: 1.6%;
+  }
+
+  .mirror-page__decor-bird .shell-ball-mascot {
+    --shell-ball-size: 8.8rem;
   }
 }
 
@@ -969,6 +1271,10 @@
     -webkit-line-clamp: 5;
     font-size: 0.84rem;
   }
+
+  .mirror-page__decor-bird {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -976,9 +1282,14 @@
     animation: none;
   }
 
+  .mirror-page__decor-bird-shell {
+    filter: saturate(0.92) drop-shadow(0 24px 36px rgba(111, 84, 54, 0.12));
+  }
+
   .mirror-page__card-surface,
   .mirror-page__draggable,
-  .mirror-page__close-button {
+  .mirror-page__close-button,
+  .mirror-page__decor-bird .shell-ball-mascot * {
     transition: none;
   }
 }
