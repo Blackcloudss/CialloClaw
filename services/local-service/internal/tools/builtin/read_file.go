@@ -62,15 +62,8 @@ func (t *ReadFileTool) Metadata() tools.ToolMetadata {
 //
 // 必须包含 "path" 字段且不为空。
 func (t *ReadFileTool) Validate(input map[string]any) error {
-	pathVal, ok := input["path"]
-	if !ok {
-		return fmt.Errorf("input field 'path' is required")
-	}
-	pathStr, ok := pathVal.(string)
-	if !ok || strings.TrimSpace(pathStr) == "" {
-		return fmt.Errorf("input field 'path' must be a non-empty string")
-	}
-	return nil
+	_, err := requireStringField(input, "path")
+	return err
 }
 
 // Execute 执行文件读取。
@@ -81,9 +74,12 @@ func (t *ReadFileTool) Validate(input map[string]any) error {
 func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteContext, input map[string]any) (*tools.ToolResult, error) {
 	_ = ctx
 
-	pathStr := input["path"].(string)
-	if execCtx == nil || execCtx.Platform == nil {
-		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
+	pathStr, err := requireStringField(input, "path")
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", tools.ErrToolValidationFailed, err)
+	}
+	if err := ensurePlatform(execCtx); err != nil {
+		return nil, err
 	}
 
 	normalizedPath := normalizeWorkspaceToolPath(pathStr)
@@ -127,9 +123,12 @@ func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 func (t *ReadFileTool) DryRun(ctx context.Context, execCtx *tools.ToolExecuteContext, input map[string]any) (*tools.ToolResult, error) {
 	_ = ctx
 
-	pathStr := input["path"].(string)
-	if execCtx == nil || execCtx.Platform == nil {
-		return nil, fmt.Errorf("%w: platform adapter is required", tools.ErrCapabilityDenied)
+	pathStr, err := requireStringField(input, "path")
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", tools.ErrToolValidationFailed, err)
+	}
+	if err := ensurePlatform(execCtx); err != nil {
+		return nil, err
 	}
 
 	normalizedPath := normalizeWorkspaceToolPath(pathStr)
@@ -177,11 +176,7 @@ func buildReadFileSummary(raw map[string]any) map[string]any {
 }
 
 func previewReadFileText(input string, limit int) string {
-	trimmed := strings.TrimSpace(input)
-	if len(trimmed) <= limit {
-		return trimmed
-	}
-	return trimmed[:limit]
+	return previewString(input, limit)
 }
 
 func detectReadFileTypes(path string, content []byte) (string, string) {
