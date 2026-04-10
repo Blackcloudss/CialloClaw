@@ -53,9 +53,24 @@ Because the current change scope is limited to `services/local-service/internal/
 
 The remaining blockers that require changes outside this directory are:
 
-- Replace the temporary local HTTP payload implementation with the official OpenAI Responses SDK
 - Move model input/output contracts into `/packages/protocol`
 - Add `api_key` and budget-related settings into the shared config and secret-management path
-- Switch bootstrap wiring to `NewServiceFromConfig(...)` so startup fails fast on invalid model configuration
 
-Inside the current module-only scope, the package now preserves `task_id`, `run_id`, `request_id`, usage, and latency through `GenerateTextResponse` and `InvocationRecord`, but this is still a temporary local contract until protocol-level types are introduced.
+Inside the current module-only scope, the package now preserves `task_id`, `run_id`, `request_id`, usage, and latency through `GenerateTextResponse` and `InvocationRecord`, and those structures are mirrored to `/packages/protocol/types/core.ts`. The Go types remain temporary backend mirrors until a cross-language protocol generation path is introduced.
+
+## Current Validation Path
+
+- Unit tests cover the minimal request/response path with `httptest`
+- `bootstrap` now wires model service through `NewServiceFromConfig(...)` and fails fast on invalid configuration
+- An opt-in live smoke test can be run with:
+  - `OPENAI_API_KEY`
+  - optional `OPENAI_RESPONSES_ENDPOINT`
+  - optional `OPENAI_RESPONSES_MODEL`
+
+The live smoke test stays skipped by default when credentials are absent, so CI remains deterministic.
+
+## Current Protocol Alignment
+
+- The minimal model request/response/invocation structures are now registered in `/packages/protocol/types/core.ts`
+- The Go structures in `internal/model/types.go` remain temporary backend mirrors until a cross-language protocol generation path is introduced
+- Field names and JSON tags are aligned with protocol naming so later migration cost is reduced
