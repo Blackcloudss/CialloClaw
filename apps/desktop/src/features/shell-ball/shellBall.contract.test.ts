@@ -213,6 +213,17 @@ test("shell-ball entries opt into transparent window mode", () => {
   assert.match(globalStyles, /overflow: hidden/);
 });
 
+test("shell-ball bubble focus behavior is applied at runtime instead of static config", () => {
+  const tauriConfig = readFileSync(resolve(desktopRoot, "src-tauri/tauri.conf.json"), "utf8");
+  const metricsSource = readFileSync(
+    resolve(desktopRoot, "src/features/shell-ball/useShellBallWindowMetrics.ts"),
+    "utf8",
+  );
+
+  assert.doesNotMatch(tauriConfig, /"focusable": false/);
+  assert.match(metricsSource, /setFocusable\(false\)/);
+});
+
 test("shell-ball helper window sync maps visual states into visibility and snapshot payloads", () => {
   assert.deepEqual(shellBallWindowSyncEvents, {
     snapshot: "desktop-shell-ball:snapshot",

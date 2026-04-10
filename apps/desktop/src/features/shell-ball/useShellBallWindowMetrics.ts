@@ -243,6 +243,10 @@ export function useShellBallWindowMetrics({ role, visible = true }: UseShellBall
     }
     const helperFrame = windowFrame;
 
+    if (role === "bubble") {
+      void currentWindow.setFocusable(false);
+    }
+
     let cleanup: (() => void) | null = null;
     let disposed = false;
 
