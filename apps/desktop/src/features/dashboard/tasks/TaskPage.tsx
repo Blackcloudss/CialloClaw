@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { Link, NavLink, useNavigate } from "react-router-dom";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, CircleDashed, LayoutList } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -15,22 +15,32 @@ import { TaskPreviewCard } from "./components/TaskPreviewCard";
 import "./taskPage.css";
 
 export function TaskPage() {
+  const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const INITIAL_UNFINISHED_LIMIT = 12;
+  const INITIAL_FINISHED_LIMIT = 24;
+  const LOAD_MORE_UNFINISHED_STEP = 12;
+  const LOAD_MORE_FINISHED_STEP = 24;
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [showMoreFinished, setShowMoreFinished] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [unfinishedLimit, setUnfinishedLimit] = useState(INITIAL_UNFINISHED_LIMIT);
+  const [finishedLimit, setFinishedLimit] = useState(INITIAL_FINISHED_LIMIT);
   const feedbackTimeoutRef = useRef<number | null>(null);
 
   const taskBucketsQuery = useQuery({
-    queryKey: ["dashboard", "tasks", "buckets"],
-    queryFn: loadTaskBuckets,
+    queryKey: ["dashboard", "tasks", "buckets", unfinishedLimit, finishedLimit],
+    queryFn: () => loadTaskBuckets({ finishedLimit, unfinishedLimit }),
+    placeholderData: (previousData) => previousData,
   });
 
-  const unfinishedTasks = sortTasksByLatest(taskBucketsQuery.data?.unfinished ?? []);
-  const finishedTasks = sortTasksByLatest(taskBucketsQuery.data?.finished ?? []);
+  const unfinishedTasks = sortTasksByLatest(taskBucketsQuery.data?.unfinished.items ?? []);
+  const finishedTasks = sortTasksByLatest(taskBucketsQuery.data?.finished.items ?? []);
   const finishedGroups = useMemo(() => getFinishedTaskGroups(finishedTasks, showMoreFinished), [finishedTasks, showMoreFinished]);
+  const unfinishedPage = taskBucketsQuery.data?.unfinished.page;
+  const finishedPage = taskBucketsQuery.data?.finished.page;
   const pageStyle = {
     "--task-accent": "#9FB7D8",
     "--task-accent-glow": "rgba(159, 183, 216, 0.18)",
@@ -51,6 +61,16 @@ export function TaskPage() {
       return;
     }
 
+    const focusTaskId = (location.state as { focusTaskId?: string; openDetail?: boolean } | null)?.focusTaskId;
+    if (focusTaskId && allTasks.some((item) => item.task.task_id === focusTaskId)) {
+      setSelectedTaskId(focusTaskId);
+      if ((location.state as { openDetail?: boolean } | null)?.openDetail) {
+        setDetailOpen(true);
+      }
+      navigate(location.pathname, { replace: true, state: null });
+      return;
+    }
+
     const selectedExists = selectedTaskId ? allTasks.some((item) => item.task.task_id === selectedTaskId) : false;
     if (selectedExists) {
       return;
@@ -58,13 +78,21 @@ export function TaskPage() {
 
     const nextTask = unfinishedTasks.find((item) => item.task.status === "processing") ?? unfinishedTasks[0] ?? finishedTasks[0];
     setSelectedTaskId(nextTask.task.task_id);
-  }, [finishedTasks, selectedTaskId, unfinishedTasks]);
+  }, [finishedTasks, location.pathname, location.state, navigate, selectedTaskId, unfinishedTasks]);
 
   const taskDetailQuery = useQuery({
     enabled: Boolean(selectedTaskId),
     queryKey: ["dashboard", "tasks", "detail", selectedTaskId],
     queryFn: () => loadTaskDetailData(selectedTaskId!),
   });
+
+  const pageNotice =
+    feedback ??
+    (taskBucketsQuery.isError
+      ? "任务列表加载失败，请确认本地服务可用后重试。"
+      : taskDetailQuery.isError
+        ? "任务详情加载失败，当前没有使用 mock 回退。"
+        : null);
 
   useEffect(() => {
     if (!selectedTaskId) {
@@ -123,6 +151,20 @@ export function TaskPage() {
     taskControlMutation.mutate({ action, taskId: taskDetailQuery.data.task.task_id });
   }
 
+  function handleLoadMore(group: "unfinished" | "finished") {
+    const page = group === "unfinished" ? unfinishedPage : finishedPage;
+    if (!page?.has_more) {
+      return;
+    }
+
+    if (group === "unfinished") {
+      setUnfinishedLimit((current) => current + LOAD_MORE_UNFINISHED_STEP);
+      return;
+    }
+
+    setFinishedLimit((current) => current + LOAD_MORE_FINISHED_STEP);
+  }
+
   if (taskBucketsQuery.isLoading && !taskBucketsQuery.data) {
     return (
       <main className="app-shell task-preview-page">
@@ -132,6 +174,23 @@ export function TaskPage() {
             <div className="task-preview-page__column task-preview-page__column--loading" />
             <div className="task-preview-page__detail task-preview-page__detail--loading" />
           </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (taskBucketsQuery.isError && !taskBucketsQuery.data) {
+    return (
+      <main className="dashboard-page task-preview-page" style={pageStyle}>
+        <div className="task-preview-page__frame">
+          <article className="dashboard-card task-preview-card-shell task-preview-card-shell--hint">
+            <p className="dashboard-card__kicker">任务列表</p>
+            <h1>暂时无法加载任务</h1>
+            <p className="task-preview-card-shell__description">当前任务页不会再自动伪造 mock 数据。请确认 RPC 服务可用后重试。</p>
+            <button className="task-preview-card-shell__toggle" onClick={() => void taskBucketsQuery.refetch()} type="button">
+              重新加载
+            </button>
+          </article>
         </div>
       </main>
     );
@@ -176,6 +235,7 @@ export function TaskPage() {
 
         <div className="dashboard-card dashboard-card--status task-preview-page__hero-status">
           <p className="dashboard-card__kicker">当前聚焦</p>
+          {pageNotice ? <p className="task-preview-page__hero-notice">{pageNotice}</p> : null}
           {taskDetailQuery.data ? (
             <>
               <p className="task-preview-page__hero-title">{taskDetailQuery.data.task.title}</p>
@@ -215,6 +275,13 @@ export function TaskPage() {
               />
             ))}
           </div>
+          {unfinishedPage?.has_more ? (
+            <div className="task-preview-card-shell__footer">
+              <button className="task-preview-card-shell__toggle" disabled={taskBucketsQuery.isFetching} onClick={() => handleLoadMore("unfinished")} type="button">
+                {taskBucketsQuery.isFetching ? "加载中..." : "加载更多"}
+              </button>
+            </div>
+          ) : null}
         </article>
 
         <article className="dashboard-card task-preview-card-shell">
@@ -252,6 +319,13 @@ export function TaskPage() {
               </section>
             ))}
           </div>
+          {finishedPage?.has_more ? (
+            <div className="task-preview-card-shell__footer">
+              <button className="task-preview-card-shell__toggle" disabled={taskBucketsQuery.isFetching} onClick={() => handleLoadMore("finished")} type="button">
+                {taskBucketsQuery.isFetching ? "加载中..." : "加载更多历史"}
+              </button>
+            </div>
+          ) : null}
         </article>
 
         <article className="dashboard-card task-preview-card-shell task-preview-card-shell--hint">
@@ -265,7 +339,7 @@ export function TaskPage() {
       </section>
 
       <AnimatePresence>
-        {detailOpen && taskDetailQuery.data ? (
+        {detailOpen ? (
           <>
             <motion.button
               animate={{ opacity: 1 }}
@@ -282,7 +356,32 @@ export function TaskPage() {
               initial={{ opacity: 0, scale: 0.98, y: 16 }}
               transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
             >
-              <TaskDetailPanel detailData={taskDetailQuery.data} feedback={feedback} onAction={handlePrimaryAction} onClose={() => setDetailOpen(false)} />
+              {taskDetailQuery.isLoading || (taskDetailQuery.isFetching && !taskDetailQuery.data) ? (
+                <section className="task-detail-shell">
+                  <div className="task-detail-shell__header">
+                    <div>
+                      <p className="task-detail-shell__eyebrow">任务详情</p>
+                      <h2 className="task-detail-shell__title">正在加载</h2>
+                      <p className="task-detail-shell__subtitle">任务详情正在从本地服务拉取。</p>
+                    </div>
+                  </div>
+                </section>
+              ) : taskDetailQuery.isError ? (
+                <section className="task-detail-shell">
+                  <div className="task-detail-shell__header">
+                    <div>
+                      <p className="task-detail-shell__eyebrow">任务详情</p>
+                      <h2 className="task-detail-shell__title">加载失败</h2>
+                      <p className="task-detail-shell__subtitle">详情请求没有成功返回，当前环境也没有启用 mock 回退。</p>
+                    </div>
+                    <button className="task-preview-card-shell__toggle" onClick={() => void taskDetailQuery.refetch()} type="button">
+                      重试
+                    </button>
+                  </div>
+                </section>
+              ) : taskDetailQuery.data ? (
+                <TaskDetailPanel detailData={taskDetailQuery.data} feedback={feedback} onAction={handlePrimaryAction} onClose={() => setDetailOpen(false)} />
+              ) : null}
             </motion.div>
           </>
         ) : null}
