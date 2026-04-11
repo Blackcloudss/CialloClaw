@@ -256,6 +256,23 @@ test("shell-ball helper windows avoid auto-focus behavior", () => {
   assert.match(planSource, /setIgnoreCursorEvents\(true\)/);
 });
 
+test("shell-ball desktop navigation keeps route changes separate from desktop window focus", () => {
+  const controllerSource = readFileSync(resolve(desktopRoot, "src/platform/windowController.ts"), "utf8");
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+  const dashboardAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/DashboardApp.tsx"), "utf8");
+
+  assert.match(controllerSource, /export type DesktopWindowLabel = "dashboard" \| "control-panel"/);
+  assert.match(controllerSource, /export async function openOrFocusDesktopWindow\(label: DesktopWindowLabel\)/);
+  assert.match(controllerSource, /Window\.getByLabel\(label\)/);
+  assert.match(controllerSource, /await windowHandle\.show\(\)/);
+  assert.match(controllerSource, /await windowHandle\.setFocus\(\)/);
+  assert.match(controllerSource, /if \(windowHandle === null\) \{\s+throw new Error\(`Desktop window not found: \$\{label\}`\);\s+\}/);
+  assert.doesNotMatch(controllerSource, /new Window\(/);
+  assert.match(controllerSource, /window\.location\.assign\(`\.\/\$\{label\}\.html`\)/);
+  assert.match(securityAppSource, /openOrFocusDesktopWindow\("dashboard"\)/);
+  assert.match(dashboardAppSource, /openWindow\("security"\)/);
+});
+
 test("shell-ball input bar keeps hook order stable across hidden and visible states", () => {
   const inputBarSource = readFileSync(
     resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"),
