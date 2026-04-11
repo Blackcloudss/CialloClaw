@@ -8,6 +8,9 @@ use std::io::{BufReader, BufWriter, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use tauri::ipc::Channel;
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::Manager;
 
 #[cfg(windows)]
 use once_cell::sync::Lazy;
@@ -25,6 +28,14 @@ use windows::Win32::{
 type JsonChannel = Channel<Value>;
 
 const NAMED_PIPE_PATH: &str = r"\\.\pipe\cialloclaw-rpc";
+const DASHBOARD_WINDOW_LABEL: &str = "dashboard";
+const SHELL_BALL_WINDOW_LABEL: &str = "shell-ball";
+const SHELL_BALL_BUBBLE_WINDOW_LABEL: &str = "shell-ball-bubble";
+const SHELL_BALL_INPUT_WINDOW_LABEL: &str = "shell-ball-input";
+const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
+const TRAY_ICON_ID: &str = "main-tray";
+const TRAY_MENU_HIDE_SHELL_BALL_ID: &str = "hide-shell-ball";
+const TRAY_MENU_QUIT_ID: &str = "quit-app";
 
 #[cfg(windows)]
 macro_rules! makelparam {
@@ -293,6 +304,99 @@ fn normalize_id(id: &Value) -> String {
     serde_json::to_string(id).unwrap_or_else(|_| "null".to_string())
 }
 
+fn focus_webview_window(app: &tauri::AppHandle, label: &str) -> Result<(), String> {
+    let window = app
+        .get_webview_window(label)
+        .ok_or_else(|| format!("webview window not found: {label}"))?;
+
+    window
+        .unminimize()
+        .map_err(|error| format!("failed to unminimize {label}: {error}"))?;
+    window
+        .show()
+        .map_err(|error| format!("failed to show {label}: {error}"))?;
+    window
+        .set_focus()
+        .map_err(|error| format!("failed to focus {label}: {error}"))?;
+
+    Ok(())
+}
+
+fn hide_shell_ball_cluster(app: &tauri::AppHandle) -> Result<(), String> {
+    let shell_ball_labels = [
+        SHELL_BALL_WINDOW_LABEL,
+        SHELL_BALL_BUBBLE_WINDOW_LABEL,
+        SHELL_BALL_INPUT_WINDOW_LABEL,
+    ];
+
+    for label in shell_ball_labels {
+        if let Some(window) = app.get_webview_window(label) {
+            window
+                .hide()
+                .map_err(|error| format!("failed to hide {label}: {error}"))?;
+        }
+    }
+
+    for window in app.webview_windows().values() {
+        if window.label().starts_with(SHELL_BALL_PINNED_WINDOW_PREFIX) {
+            window.hide().map_err(|error| {
+                format!(
+                    "failed to hide shell-ball pinned bubble {}: {error}",
+                    window.label()
+                )
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    let hide_shell_ball = MenuItemBuilder::with_id(TRAY_MENU_HIDE_SHELL_BALL_ID, "最小化悬浮球")
+        .build(app)?;
+    let quit_app = MenuItemBuilder::with_id(TRAY_MENU_QUIT_ID, "关闭程序").build(app)?;
+    let tray_menu = MenuBuilder::new(app)
+        .items(&[&hide_shell_ball, &quit_app])
+        .build()?;
+
+    let tray_builder = TrayIconBuilder::with_id(TRAY_ICON_ID)
+        .tooltip("CialloClaw")
+        .menu(&tray_menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            TRAY_MENU_HIDE_SHELL_BALL_ID => {
+                if let Err(error) = hide_shell_ball_cluster(app) {
+                    eprintln!("failed to hide shell-ball from tray: {error}");
+                }
+            }
+            TRAY_MENU_QUIT_ID => {
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                if let Err(error) = focus_webview_window(tray.app_handle(), DASHBOARD_WINDOW_LABEL) {
+                    eprintln!("failed to open dashboard from tray: {error}");
+                }
+            }
+        });
+
+    let tray_builder = if let Some(icon) = app.default_window_icon() {
+        tray_builder.icon(icon.clone())
+    } else {
+        tray_builder
+    };
+
+    let _ = tray_builder.build(app)?;
+    Ok(())
+}
+
 #[derive(Clone, serde::Serialize)]
 struct CursorPosition {
     client_x: i32,
@@ -457,6 +561,7 @@ fn shell_ball_get_mouse_position() -> Option<CursorPosition> {
 fn main() {
     tauri::Builder::default()
         .manage(Arc::new(NamedPipeBridgeState::default()))
+        .setup(|app| Ok(install_system_tray(app)?))
         .invoke_handler(tauri::generate_handler![
             named_pipe_request,
             named_pipe_subscribe,
