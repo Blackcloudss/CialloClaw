@@ -13,8 +13,8 @@
       {
         "label": "shell-ball",
         "title": "CialloClaw Shell Ball",
-        "width": 240,
-        "height": 260,
+        "width": 180,
+        "height": 195,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
@@ -26,8 +26,8 @@
       {
         "label": "shell-ball-bubble",
         "title": "CialloClaw Shell Ball Bubble",
-        "width": 360,
-        "height": 140,
+        "width": 270,
+        "height": 105,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
@@ -40,8 +40,8 @@
       {
         "label": "shell-ball-input",
         "title": "CialloClaw Shell Ball Input",
-        "width": 420,
-        "height": 120,
+        "width": 315,
+        "height": 90,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,

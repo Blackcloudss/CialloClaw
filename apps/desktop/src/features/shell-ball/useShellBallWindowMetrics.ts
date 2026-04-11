@@ -15,9 +15,9 @@ import { shellBallWindowSyncEvents, type ShellBallHelperWindowRole, type ShellBa
 
 type AnchoredShellBallHelperWindowRole = Exclude<ShellBallHelperWindowRole, "pinned">;
 
-export const SHELL_BALL_WINDOW_SAFE_MARGIN_PX = 12;
-export const SHELL_BALL_BUBBLE_GAP_PX = 6;
-export const SHELL_BALL_INPUT_GAP_PX = 12;
+export const SHELL_BALL_WINDOW_SAFE_MARGIN_PX = 9;
+export const SHELL_BALL_BUBBLE_GAP_PX = 5;
+export const SHELL_BALL_INPUT_GAP_PX = 9;
 
 type ShellBallContentSize = {
   width: number;
