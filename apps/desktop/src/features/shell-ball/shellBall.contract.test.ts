@@ -61,7 +61,7 @@ import {
 import {
   canOpenShellBallDashboard,
   getShellBallPostSubmitInputReset,
-  getNextShellBallInteractionConsumed,
+  getShellBallInteractionConsumedForEvent,
   shouldOpenShellBallDashboardFromDoubleClick,
   getShellBallVoicePreviewFromEvent,
   shouldKeepShellBallVoicePreviewOnRegionLeave,
@@ -1431,6 +1431,7 @@ test("shell-ball dashboard open gate only allows resting states", () => {
 test("shell-ball dashboard double-click arbitration blocks consumed or active interactions", () => {
   assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "idle", interactionConsumed: false }), true);
   assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "hover_input", interactionConsumed: false }), true);
+  assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "hover_input", interactionConsumed: true }), false);
   assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "idle", interactionConsumed: true }), false);
   assert.equal(
     shouldOpenShellBallDashboardFromDoubleClick({ state: "voice_listening", interactionConsumed: false }),
@@ -1439,22 +1440,11 @@ test("shell-ball dashboard double-click arbitration blocks consumed or active in
   assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "voice_locked", interactionConsumed: false }), false);
 });
 
-test("shell-ball single clicks stay as a dashboard no-op in resting states", () => {
-  assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "idle", interactionConsumed: true }), false);
-  assert.equal(shouldOpenShellBallDashboardFromDoubleClick({ state: "hover_input", interactionConsumed: true }), false);
-});
-
 test("shell-ball interaction consumed sequence lifecycle stays explicit", () => {
-  const afterPressStart = getNextShellBallInteractionConsumed({
-    interactionConsumed: true,
-    event: "press_start",
-  });
+  const afterPressStart = getShellBallInteractionConsumedForEvent("press_start");
   assert.equal(afterPressStart, false);
 
-  const afterLongPressVoiceEntry = getNextShellBallInteractionConsumed({
-    interactionConsumed: afterPressStart,
-    event: "long_press_voice_entry",
-  });
+  const afterLongPressVoiceEntry = getShellBallInteractionConsumedForEvent("long_press_voice_entry");
   assert.equal(afterLongPressVoiceEntry, true);
   assert.equal(
     shouldOpenShellBallDashboardFromDoubleClick({
@@ -1464,10 +1454,10 @@ test("shell-ball interaction consumed sequence lifecycle stays explicit", () => 
     false,
   );
 
-  const afterForceStateReset = getNextShellBallInteractionConsumed({
-    interactionConsumed: afterLongPressVoiceEntry,
-    event: "force_state_reset",
-  });
+  const afterVoiceFlowConsumed = getShellBallInteractionConsumedForEvent("voice_flow_consumed");
+  assert.equal(afterVoiceFlowConsumed, true);
+
+  const afterForceStateReset = getShellBallInteractionConsumedForEvent("force_state_reset");
   assert.equal(afterForceStateReset, false);
   assert.equal(
     shouldOpenShellBallDashboardFromDoubleClick({
