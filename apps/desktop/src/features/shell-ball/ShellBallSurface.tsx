@@ -6,6 +6,7 @@ import { ShellBallMascot } from "./components/ShellBallMascot";
 type ShellBallSurfaceProps = {
   children?: ReactNode;
   containerRef?: RefObject<HTMLDivElement>;
+  dashboardTransitionPhase?: "idle" | "opening" | "hidden" | "closing";
   visualState: ShellBallVisualState;
   voicePreview: ShellBallVoicePreview;
   voiceHoldProgress?: number;
@@ -26,6 +27,7 @@ type ShellBallSurfaceProps = {
 export function ShellBallSurface({
   children,
   containerRef,
+  dashboardTransitionPhase = "idle",
   visualState,
   voicePreview,
   voiceHoldProgress = 0,
@@ -43,7 +45,12 @@ export function ShellBallSurface({
   onPressCancel,
 }: ShellBallSurfaceProps) {
   return (
-    <div ref={containerRef} className="shell-ball-surface">
+    <div
+      ref={containerRef}
+      className="shell-ball-surface"
+      data-dashboard-transition-phase={dashboardTransitionPhase}
+      aria-label="Shell-ball floating surface"
+    >
       <div className="shell-ball-surface__core">
         <div className="shell-ball-surface__interaction-shell">
           <div
