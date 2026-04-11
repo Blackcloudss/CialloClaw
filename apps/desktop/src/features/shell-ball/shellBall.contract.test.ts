@@ -500,6 +500,7 @@ test("shell-ball helper windows avoid auto-focus behavior", () => {
 
 test("shell-ball desktop navigation keeps route changes separate from desktop window focus", () => {
   const controllerSource = readFileSync(resolve(desktopRoot, "src/platform/windowController.ts"), "utf8");
+  const dashboardRootSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardRoot.tsx"), "utf8");
   const dashboardHomeSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardHome.tsx"), "utf8");
   const dashboardBackHomeLinkSource = readFileSync(
     resolve(desktopRoot, "src/features/dashboard/shared/DashboardBackHomeLink.tsx"),
@@ -528,6 +529,13 @@ test("shell-ball desktop navigation keeps route changes separate from desktop wi
   assert.doesNotMatch(controllerSource, /openDashboardRoute/);
   assert.match(dashboardBackHomeLinkSource, /resolveDashboardRoutePath\("home"\)/);
   assert.doesNotMatch(dashboardBackHomeLinkSource, /to="\/"/);
+  assert.match(dashboardRootSource, /resolveDashboardModuleRoutePath\("tasks"\)/);
+  assert.match(dashboardRootSource, /resolveDashboardModuleRoutePath\("notes"\)/);
+  assert.match(dashboardRootSource, /resolveDashboardModuleRoutePath\("memory"\)/);
+  assert.match(dashboardRootSource, /resolveDashboardModuleRoutePath\("safety"\)/);
+  assert.doesNotMatch(dashboardRootSource, /path="\/tasks\/\*"/);
+  assert.doesNotMatch(dashboardRootSource, /path="\/notes\/\*"/);
+  assert.doesNotMatch(dashboardRootSource, /path="\/memory\/\*"/);
   assert.match(dashboardHomeSource, /resolveDashboardModuleRoutePath\(module\)/);
   assert.match(dashboardHomeSource, /resolveDashboardModuleRoutePath\("tasks"\)/);
   assert.match(dashboardHomeSource, /resolveDashboardModuleRoutePath\("notes"\)/);
