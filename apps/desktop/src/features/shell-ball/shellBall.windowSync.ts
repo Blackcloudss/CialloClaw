@@ -19,7 +19,9 @@ export type ShellBallHelperWindowRole = "bubble" | "input";
 
 export type ShellBallPrimaryAction = "attach_file" | "submit" | "primary_click";
 
-export type ShellBallBubbleAction = "pin" | "delete";
+export type ShellBallBubbleAction = "pin" | "unpin" | "delete";
+
+export type ShellBallBubbleActionSource = "bubble" | "pinned_window";
 
 export type ShellBallHelperWindowVisibility = {
   bubble: boolean;
@@ -80,7 +82,7 @@ export type ShellBallPrimaryActionPayload = {
 };
 
 export type ShellBallBubbleActionPayload = {
-  source: "bubble";
+  source: ShellBallBubbleActionSource;
   action: ShellBallBubbleAction;
   bubbleId: string;
 };

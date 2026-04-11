@@ -2518,6 +2518,36 @@ test("shell-ball coordinator bubble actions pin and delete local items", () => {
   });
 
   assert.deepEqual(remainingItems.map((item) => item.bubble.bubble_id), ["msg-action-1"]);
+
+  const unpinnedItems = applyShellBallBubbleAction(pinnedItems, {
+    action: "unpin",
+    bubbleId: "msg-action-1",
+  });
+
+  assert.equal(unpinnedItems[0]?.bubble.pinned, false);
+});
+
+test("shell-ball bubble actions stay coordinator-owned and detached-position free", () => {
+  const bubbleActionPayload = {
+    source: "pinned_window",
+    action: "unpin",
+    bubbleId: "msg-action-1",
+  } as const;
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const syncSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.windowSync.ts"), "utf8");
+
+  assert.deepEqual(bubbleActionPayload, {
+    source: "pinned_window",
+    action: "unpin",
+    bubbleId: "msg-action-1",
+  });
+  assert.equal("x" in bubbleActionPayload, false);
+  assert.equal("y" in bubbleActionPayload, false);
+  assert.equal("position" in bubbleActionPayload, false);
+  assert.match(syncSource, /export type ShellBallBubbleAction = "pin" \| "unpin" \| "delete";/);
+  assert.match(syncSource, /export type ShellBallBubbleActionSource = "bubble" \| "pinned_window";/);
+  assert.match(coordinatorSource, /currentWindow\.listen<ShellBallBubbleActionPayload>\(shellBallWindowSyncEvents\.bubbleAction/);
+  assert.match(coordinatorSource, /setBubbleItems\(\(currentItems\) => applyShellBallBubbleAction\(currentItems, payload\)\)/);
 });
 
 test("shell-ball bubble interaction mode stays clickable while visible unpinned bubbles remain", () => {

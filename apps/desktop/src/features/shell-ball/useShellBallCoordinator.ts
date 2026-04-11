@@ -88,7 +88,7 @@ export function applyShellBallBubbleAction(
       ...item,
       bubble: {
         ...item.bubble,
-        pinned: true,
+        pinned: payload.action === "pin",
       },
     };
   });
@@ -283,10 +283,14 @@ export async function emitShellBallPrimaryAction(action: ShellBallPrimaryAction,
   });
 }
 
-export async function emitShellBallBubbleAction(action: ShellBallBubbleAction, bubbleId: string) {
+export async function emitShellBallBubbleAction(
+  action: ShellBallBubbleAction,
+  bubbleId: string,
+  source: ShellBallBubbleActionPayload["source"] = "bubble",
+) {
   await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.bubbleAction, {
     action,
     bubbleId,
-    source: "bubble",
+    source,
   });
 }
