@@ -59,7 +59,9 @@ import {
   getShellBallInputAnchor,
 } from "./useShellBallWindowMetrics";
 import {
+  canOpenShellBallDashboard,
   getShellBallPostSubmitInputReset,
+  shouldOpenShellBallDashboardFromDoubleClick,
   getShellBallVoicePreviewFromEvent,
   shouldKeepShellBallVoicePreviewOnRegionLeave,
   syncShellBallInteractionController,
@@ -1413,6 +1415,80 @@ test("shell-ball keeps voice preview alive on leave while voice listening is act
   assert.equal(shouldKeepShellBallVoicePreviewOnRegionLeave("voice_listening"), true);
   assert.equal(shouldKeepShellBallVoicePreviewOnRegionLeave("hover_input"), false);
   assert.equal(shouldKeepShellBallVoicePreviewOnRegionLeave("voice_locked"), false);
+});
+
+test("shell-ball dashboard open gate only allows resting states", () => {
+  assert.equal(canOpenShellBallDashboard("idle"), true);
+  assert.equal(canOpenShellBallDashboard("hover_input"), true);
+  assert.equal(canOpenShellBallDashboard("confirming_intent"), false);
+  assert.equal(canOpenShellBallDashboard("processing"), false);
+  assert.equal(canOpenShellBallDashboard("waiting_auth"), false);
+  assert.equal(canOpenShellBallDashboard("voice_listening"), false);
+  assert.equal(canOpenShellBallDashboard("voice_locked"), false);
+});
+
+test("shell-ball dashboard double-click arbitration blocks consumed or active interactions", () => {
+  assert.equal(
+    shouldOpenShellBallDashboardFromDoubleClick({
+      state: "idle",
+      interactionConsumed: false,
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldOpenShellBallDashboardFromDoubleClick({
+      state: "hover_input",
+      interactionConsumed: false,
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldOpenShellBallDashboardFromDoubleClick({
+      state: "idle",
+      interactionConsumed: true,
+    }),
+    false,
+  );
+
+  assert.equal(
+    shouldOpenShellBallDashboardFromDoubleClick({
+      state: "voice_listening",
+      interactionConsumed: false,
+    }),
+    false,
+  );
+
+  assert.equal(
+    shouldOpenShellBallDashboardFromDoubleClick({
+      state: "voice_locked",
+      interactionConsumed: false,
+    }),
+    false,
+  );
+});
+
+test("shell-ball single clicks stay as a dashboard no-op in resting states", () => {
+  assert.equal(canOpenShellBallDashboard("idle"), true);
+  assert.equal(canOpenShellBallDashboard("hover_input"), true);
+  assert.equal(
+    shouldOpenShellBallDashboardFromDoubleClick({
+      state: "idle",
+      interactionConsumed: true,
+    }),
+    false,
+  );
+});
+
+test("shell-ball consumed pointer sequences suppress later dashboard dblclick handling", () => {
+  const pointerSequence = {
+    state: "hover_input" as const,
+    interactionConsumed: true,
+  };
+
+  assert.equal(shouldOpenShellBallDashboardFromDoubleClick(pointerSequence), false);
+  assert.equal(shouldOpenShellBallDashboardFromDoubleClick(pointerSequence), false);
 });
 
 test("shell-ball submit reset clears draft retention after submit", () => {

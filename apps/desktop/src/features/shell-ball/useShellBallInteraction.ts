@@ -16,6 +16,17 @@ type TimeoutHandle = ReturnType<typeof globalThis.setTimeout>;
 
 type ShellBallInteractionController = ReturnType<typeof createShellBallInteractionController>;
 
+export function canOpenShellBallDashboard(state: ShellBallVisualState) {
+  return state === "idle" || state === "hover_input";
+}
+
+export function shouldOpenShellBallDashboardFromDoubleClick(input: {
+  state: ShellBallVisualState;
+  interactionConsumed: boolean;
+}) {
+  return !input.interactionConsumed && canOpenShellBallDashboard(input.state);
+}
+
 export function getShellBallVoicePreviewFromEvent(input: {
   startX: number | null;
   startY: number | null;
@@ -65,6 +76,7 @@ export function useShellBallInteraction() {
   const setVisualState = useShellBallStore((state) => state.setVisualState);
   const [inputValue, setInputValue] = useState("");
   const [voicePreview, setVoicePreview] = useState<ShellBallVoicePreview>(null);
+  const [interactionConsumed, setInteractionConsumed] = useState(false);
   const regionActiveRef = useRef(false);
   const inputFocusedRef = useRef(false);
   const pressStartXRef = useRef<number | null>(null);
@@ -101,6 +113,14 @@ export function useShellBallInteraction() {
 
     globalThis.clearTimeout(longPressHandleRef.current);
     longPressHandleRef.current = null;
+  }
+
+  function resetInteractionConsumed() {
+    setInteractionConsumed(false);
+  }
+
+  function consumeInteraction() {
+    setInteractionConsumed(true);
   }
 
   function setCurrentVoicePreview(preview: ShellBallVoicePreview) {
@@ -147,6 +167,7 @@ export function useShellBallInteraction() {
       return;
     }
 
+    consumeInteraction();
     dispatch("primary_click_locked_voice_end");
   }
 
@@ -186,6 +207,7 @@ export function useShellBallInteraction() {
 
   function handlePressStart(event: PointerEvent<HTMLButtonElement>) {
     regionActiveRef.current = true;
+    resetInteractionConsumed();
     pressStartXRef.current = event.clientX;
     pressStartYRef.current = event.clientY;
     setCurrentVoicePreview(null);
@@ -198,6 +220,7 @@ export function useShellBallInteraction() {
 
     longPressHandleRef.current = globalThis.setTimeout(() => {
       longPressHandleRef.current = null;
+      consumeInteraction();
       dispatch("press_start");
     }, SHELL_BALL_LONG_PRESS_MS);
   }
@@ -227,6 +250,7 @@ export function useShellBallInteraction() {
     clearLongPressTimer();
 
     if (controllerRef.current?.getState() === "voice_listening") {
+      consumeInteraction();
       const finalPreview = getShellBallVoicePreviewFromEvent({
         startX: pressStartXRef.current,
         startY: pressStartYRef.current,
@@ -241,6 +265,7 @@ export function useShellBallInteraction() {
       setCurrentVoicePreview(null);
       return true;
     } else if (controllerRef.current?.getState() === "voice_locked") {
+      consumeInteraction();
       dispatch("primary_click_locked_voice_end");
       pressStartXRef.current = null;
       pressStartYRef.current = null;
@@ -263,6 +288,7 @@ export function useShellBallInteraction() {
 
   function handleForceState(state: ShellBallVisualState) {
     clearLongPressTimer();
+    resetInteractionConsumed();
     pressStartXRef.current = null;
     pressStartYRef.current = null;
     setCurrentVoicePreview(null);
@@ -302,6 +328,11 @@ export function useShellBallInteraction() {
     setInputValue,
     voicePreview,
     inputBarMode: getShellBallInputBarMode(visualState),
+    interactionConsumed,
+    shouldOpenDashboardFromDoubleClick: shouldOpenShellBallDashboardFromDoubleClick({
+      state: visualState,
+      interactionConsumed,
+    }),
     handlePrimaryClick,
     handleRegionEnter,
     handleRegionLeave,
