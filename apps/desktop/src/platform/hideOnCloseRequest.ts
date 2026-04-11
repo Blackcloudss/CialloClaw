@@ -15,7 +15,10 @@ export function installHideOnCloseRequest(windowHandle: HideOnCloseWindow = getC
     hiding = true;
 
     try {
-      await requestShellBallDashboardCloseTransition();
+      if (windowHandle.label === "dashboard") {
+        await requestShellBallDashboardCloseTransition();
+      }
+
       await windowHandle.hide();
     } finally {
       hiding = false;

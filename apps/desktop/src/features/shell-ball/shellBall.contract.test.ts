@@ -258,6 +258,8 @@ function withWindowControllerRuntime<T>(runtime: {
 
 function withHideOnCloseRequestRuntime<T>(
   currentWindow: {
+    __calls__?: string[];
+    label?: string;
     hide: () => Promise<void> | void;
     onCloseRequested: (handler: (event: { preventDefault: () => void }) => Promise<void> | void) => unknown;
   },
@@ -282,6 +284,7 @@ function withHideOnCloseRequestRuntime<T>(
     if (request === "./dashboardWindowTransition") {
       return {
         requestShellBallDashboardCloseTransition() {
+          (currentWindow as { __calls__?: string[] }).__calls__?.push("requestShellBallDashboardCloseTransition");
           return Promise.resolve(true);
         },
       };
@@ -1086,6 +1089,44 @@ test("hide-on-close helper prevents the close request and hides the current wind
   });
 
   assert.deepEqual(calls, ["onCloseRequested", "preventDefault", "hide"]);
+});
+
+test("hide-on-close helper waits for the dashboard close transition only in the dashboard window", async () => {
+  for (const scenario of [
+    {
+      label: "dashboard",
+      expectedCalls: ["onCloseRequested", "preventDefault", "requestShellBallDashboardCloseTransition", "hide"],
+    },
+    {
+      label: "control-panel",
+      expectedCalls: ["onCloseRequested", "preventDefault", "hide"],
+    },
+  ] as const) {
+    const calls: string[] = [];
+    let closeHandler: ((event: { preventDefault: () => void }) => Promise<void> | void) | null = null;
+
+    await withHideOnCloseRequestRuntime({
+      __calls__: calls,
+      label: scenario.label,
+      onCloseRequested(handler) {
+        calls.push("onCloseRequested");
+        closeHandler = handler;
+        return "unlisten";
+      },
+      async hide() {
+        calls.push("hide");
+      },
+    }, async ({ installHideOnCloseRequest }) => {
+      installHideOnCloseRequest();
+      await closeHandler?.({
+        preventDefault() {
+          calls.push("preventDefault");
+        },
+      });
+    });
+
+    assert.deepEqual(calls, scenario.expectedCalls);
+  }
 });
 
 test("dashboard and control-panel entrypoints install hide-on-close handling", () => {
