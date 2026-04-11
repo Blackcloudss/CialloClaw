@@ -4,6 +4,8 @@ import {
   createShellBallLogicalPosition,
   createShellBallLogicalSize,
   hideShellBallWindow,
+  setShellBallWindowFocusable,
+  setShellBallWindowIgnoreCursorEvents,
   setShellBallWindowPosition,
   setShellBallWindowSize,
   shellBallWindowLabels,
@@ -244,7 +246,8 @@ export function useShellBallWindowMetrics({ role, visible = true }: UseShellBall
     const helperFrame = windowFrame;
 
     if (role === "bubble") {
-      void currentWindow.setFocusable(false);
+      void setShellBallWindowFocusable(role, false);
+      void setShellBallWindowIgnoreCursorEvents(role, true);
     }
 
     let cleanup: (() => void) | null = null;

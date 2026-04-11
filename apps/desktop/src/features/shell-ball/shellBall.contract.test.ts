@@ -188,16 +188,28 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
   assert.equal(shellBallWindowPermissions.includes("core:window:allow-set-position"), true);
   assert.equal(shellBallWindowPermissions.includes("core:window:allow-set-size"), true);
   assert.equal(shellBallWindowPermissions.includes("core:window:allow-start-dragging"), true);
+  assert.equal(shellBallWindowPermissions.includes("core:window:allow-set-ignore-cursor-events"), true);
 
   const capabilityConfig = readFileSync(
     resolve(desktopRoot, "src-tauri/capabilities/default.json"),
     "utf8",
   );
+  const parsedCapabilityConfig = JSON.parse(capabilityConfig) as {
+    windows: string[];
+    permissions: string[];
+  };
 
-  assert.match(capabilityConfig, /"windows": \["shell-ball", "shell-ball-bubble", "shell-ball-input"\]/);
-  assert.match(capabilityConfig, /"core:window:allow-set-position"/);
-  assert.match(capabilityConfig, /"core:window:allow-set-size"/);
-  assert.match(capabilityConfig, /"core:window:allow-start-dragging"/);
+  assert.deepEqual(parsedCapabilityConfig.windows, [
+    "shell-ball",
+    "shell-ball-bubble",
+    "shell-ball-input",
+    "dashboard",
+    "control-panel",
+  ]);
+  assert.equal(parsedCapabilityConfig.permissions.includes("core:window:allow-set-position"), true);
+  assert.equal(parsedCapabilityConfig.permissions.includes("core:window:allow-set-size"), true);
+  assert.equal(parsedCapabilityConfig.permissions.includes("core:window:allow-start-dragging"), true);
+  assert.equal(parsedCapabilityConfig.permissions.includes("core:window:allow-set-ignore-cursor-events"), true);
 });
 
 test("shell-ball entries opt into transparent window mode", () => {
@@ -215,6 +227,10 @@ test("shell-ball entries opt into transparent window mode", () => {
 
 test("shell-ball helper windows avoid auto-focus behavior", () => {
   const tauriConfig = readFileSync(resolve(desktopRoot, "src-tauri/tauri.conf.json"), "utf8");
+  const controllerSource = readFileSync(
+    resolve(desktopRoot, "src/platform/shellBallWindowController.ts"),
+    "utf8",
+  );
   const metricsSource = readFileSync(
     resolve(desktopRoot, "src/features/shell-ball/useShellBallWindowMetrics.ts"),
     "utf8",
@@ -223,11 +239,21 @@ test("shell-ball helper windows avoid auto-focus behavior", () => {
     resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"),
     "utf8",
   );
+  const planSource = readFileSync(
+    resolve(desktopRoot, "docs/2026-04-11-desktop-shell-ball-three-window-implementation-plan.md"),
+    "utf8",
+  );
 
   assert.doesNotMatch(tauriConfig, /"focusable": false/);
-  assert.match(metricsSource, /setFocusable\(false\)/);
+  assert.match(controllerSource, /setShellBallWindowFocusable\([^)]*focusable: boolean\)/);
+  assert.match(controllerSource, /setShellBallWindowIgnoreCursorEvents\([^)]*ignore: boolean\)/);
+  assert.match(metricsSource, /setShellBallWindowFocusable\(role, false\)/);
+  assert.match(metricsSource, /setShellBallWindowIgnoreCursorEvents\(role, true\)/);
   assert.doesNotMatch(metricsSource, /setFocus\(\)/);
   assert.doesNotMatch(inputBarSource, /focus\(\{ preventScroll: true \}\)/);
+  assert.doesNotMatch(planSource, /focusable: false/);
+  assert.match(planSource, /setFocusable\(false\)/);
+  assert.match(planSource, /setIgnoreCursorEvents\(true\)/);
 });
 
 test("shell-ball input bar keeps hook order stable across hidden and visible states", () => {

@@ -15,6 +15,7 @@ export const shellBallWindowPermissions = Object.freeze([
   "core:window:allow-set-size-constraints",
   "core:window:allow-set-focus",
   "core:window:allow-set-focusable",
+  "core:window:allow-set-ignore-cursor-events",
   "core:window:allow-set-always-on-top",
   "core:window:allow-start-dragging",
 ] as const);
@@ -60,6 +61,16 @@ export async function setShellBallWindowPosition(role: ShellBallWindowRole, posi
 export async function setShellBallWindowSize(role: ShellBallWindowRole, size: Size | LogicalSize) {
   const windowHandle = await getShellBallWindow(role);
   await windowHandle.setSize(size);
+}
+
+export async function setShellBallWindowFocusable(role: ShellBallWindowRole, focusable: boolean) {
+  const windowHandle = await getShellBallWindow(role);
+  await windowHandle.setFocusable(focusable);
+}
+
+export async function setShellBallWindowIgnoreCursorEvents(role: ShellBallWindowRole, ignore: boolean) {
+  const windowHandle = await getShellBallWindow(role);
+  await windowHandle.setIgnoreCursorEvents(ignore);
 }
 
 export async function startShellBallWindowDragging() {

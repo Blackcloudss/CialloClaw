@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default desktop shell-ball permissions for the three floating helper windows.",
-  "windows": ["shell-ball", "shell-ball-bubble", "shell-ball-input"],
+  "description": "Default desktop app permissions plus shell-ball floating window controls.",
+  "windows": ["shell-ball", "shell-ball-bubble", "shell-ball-input", "dashboard", "control-panel"],
   "permissions": [
     "core:default",
     "core:window:allow-show",
@@ -12,6 +12,7 @@
     "core:window:allow-set-size-constraints",
     "core:window:allow-set-focus",
     "core:window:allow-set-focusable",
+    "core:window:allow-set-ignore-cursor-events",
     "core:window:allow-set-always-on-top",
     "core:window:allow-start-dragging"
   ]

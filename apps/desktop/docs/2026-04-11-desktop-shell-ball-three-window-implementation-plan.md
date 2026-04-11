@@ -29,7 +29,7 @@
 ## Runtime Window Rules
 
 - `shell-ball`, `shell-ball-bubble`, and `shell-ball-input` are all `transparent`, `decorations: false`, `alwaysOnTop: true`, `resizable: false`, `shadow: false`.
-- helper windows start with `visible: false`; `shell-ball-bubble` should use `focusable: false` so it does not steal focus on reveal.
+- helper windows start with `visible: false`; `shell-ball-bubble` should apply runtime `setFocusable(false)` and `setIgnoreCursorEvents(true)` so it neither steals focus nor blocks clicks underneath.
 - all three windows should use `skipTaskbar: true` to behave like desktop floating surfaces rather than normal app windows.
 - anchor and positioning calculations must use the ball window outer position and scale factor to stay DPI-safe.
 - helper windows should open/close without moving the ball window and should not create scrollbars or padded transparent rectangles.
@@ -96,7 +96,7 @@ Update `apps/desktop/src-tauri/tauri.conf.json` so:
 - `shell-ball-bubble` and `shell-ball-input` start hidden
 - all three are transparent, undecorated, always-on-top, and `shadow: false`
 - all three use `resizable: false` and `skipTaskbar: true`
-- `shell-ball-bubble` uses `focusable: false`
+- `shell-ball-bubble` keeps config minimal; focus and cursor passthrough are applied at runtime
 
 - [ ] **Step 6: Re-run the targeted test**
 
@@ -127,8 +127,8 @@ Expected: FAIL because the platform controller and capability file do not exist 
 
 Create `apps/desktop/src-tauri/capabilities/default.json` with a concrete Tauri 2 capability object including:
 - `identifier`
-- `windows`: `shell-ball`, `shell-ball-bubble`, `shell-ball-input`
-- `permissions`: `core:default`, `core:window:allow-show`, `core:window:allow-hide`, `core:window:allow-set-position`, `core:window:allow-set-size`, `core:window:allow-set-size-constraints`, `core:window:allow-set-focus`, `core:window:allow-set-focusable`, `core:window:allow-set-always-on-top`, `core:window:allow-start-dragging`
+- `windows`: `shell-ball`, `shell-ball-bubble`, `shell-ball-input`, `dashboard`, `control-panel`
+- `permissions`: `core:default`, `core:window:allow-show`, `core:window:allow-hide`, `core:window:allow-set-position`, `core:window:allow-set-size`, `core:window:allow-set-size-constraints`, `core:window:allow-set-focus`, `core:window:allow-set-focusable`, `core:window:allow-set-ignore-cursor-events`, `core:window:allow-set-always-on-top`, `core:window:allow-start-dragging`
 
 - [ ] **Step 4: Add the shell-ball platform controller**
 
