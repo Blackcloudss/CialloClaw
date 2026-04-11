@@ -1,16 +1,17 @@
 export type DashboardRouteTarget = "home" | "safety";
 export type DashboardModuleRouteTarget = "tasks" | "notes" | "memory" | "safety";
+export const dashboardSafetyRoutePath = "/safety";
 
 export const dashboardRoutePaths: Record<DashboardRouteTarget, string> = {
   home: "/",
-  safety: "/safety",
+  safety: dashboardSafetyRoutePath,
 };
 
 export const dashboardModuleRoutePaths: Record<DashboardModuleRouteTarget, string> = {
   tasks: "/tasks",
   notes: "/notes",
   memory: "/memory",
-  safety: "/safety",
+  safety: dashboardSafetyRoutePath,
 };
 
 export function resolveDashboardRoutePath(target: DashboardRouteTarget) {

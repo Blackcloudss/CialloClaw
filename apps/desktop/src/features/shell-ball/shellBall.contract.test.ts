@@ -39,6 +39,7 @@ import { ShellBallInputBar } from "./components/ShellBallInputBar";
 import type { ShellBallTransitionResult } from "./shellBall.types";
 import { shellBallVisualStates } from "./shellBall.types";
 import {
+  dashboardSafetyRoutePath,
   resolveDashboardModuleRoutePath,
   dashboardRoutePaths,
   resolveDashboardRouteHref,
@@ -509,19 +510,29 @@ test("shell-ball desktop navigation keeps route changes separate from desktop wi
   const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
   const dashboardAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/DashboardApp.tsx"), "utf8");
   const trayControllerSource = readFileSync(resolve(desktopRoot, "src/platform/trayController.ts"), "utf8");
+  const dashboardRouteTargetsSource = readFileSync(
+    resolve(desktopRoot, "src/features/dashboard/shared/dashboardRouteTargets.ts"),
+    "utf8",
+  );
   assert.deepEqual(dashboardRoutePaths, {
     home: "/",
     safety: "/safety",
   });
+  assert.equal(dashboardSafetyRoutePath, "/safety");
   assert.equal(resolveDashboardRoutePath("home"), "/");
-  assert.equal(resolveDashboardRoutePath("safety"), "/safety");
+  assert.equal(resolveDashboardRoutePath("safety"), dashboardSafetyRoutePath);
   assert.equal(resolveDashboardRouteHref("home"), "./dashboard.html");
   assert.equal(resolveDashboardRouteHref("safety"), "./dashboard.html#/safety");
   assert.equal(resolveDashboardModuleRoutePath("tasks"), "/tasks");
   assert.equal(resolveDashboardModuleRoutePath("notes"), "/notes");
   assert.equal(resolveDashboardModuleRoutePath("memory"), "/memory");
-  assert.equal(resolveDashboardModuleRoutePath("safety"), "/safety");
+  assert.equal(resolveDashboardModuleRoutePath("safety"), dashboardSafetyRoutePath);
   assert.equal(existsSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardRouteNavigation.ts")), false);
+  assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/app/dashboard/DashboardRoot.js")), true);
+  assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/features/dashboard/safety/SafetyPage.js")), true);
+  assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/features/dashboard/safety/SecurityPageShell.js")), true);
+  assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/features/dashboard/safety/SecurityApp.js")), true);
+  assert.match(dashboardRouteTargetsSource, /export const dashboardSafetyRoutePath = "\/safety"/);
 
   assert.match(controllerSource, /export type DesktopWindowLabel = "dashboard" \| "control-panel"/);
   assert.doesNotMatch(controllerSource, /new Window\(/);
