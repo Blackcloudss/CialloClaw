@@ -15,12 +15,14 @@
       "@/features/dashboard/tasks/TasksPage": ["./src/features/shell-ball/test-stubs/dashboardTasksPage.tsx"],
       "@/features/dashboard/notes/NotesPage": ["./src/features/shell-ball/test-stubs/dashboardNotesPage.tsx"],
       "@/features/dashboard/memory/MemoryPage": ["./src/features/shell-ball/test-stubs/dashboardMemoryPage.tsx"],
-      "@cialloclaw/protocol": ["./src/features/shell-ball/test-stubs/protocol.ts"]
+      "@cialloclaw/protocol": ["./src/features/shell-ball/test-stubs/protocol.ts"],
+      "@cialloclaw/ui": ["./src/features/shell-ball/test-stubs/ui.tsx"]
     }
   },
   "include": [
     "src/app/dashboard/DashboardRoot.tsx",
     "src/app/dashboard/DashboardHome.tsx",
+    "src/features/dashboard/DashboardApp.tsx",
     "src/features/dashboard/home/**/*",
     "src/features/dashboard/safety/SafetyPage.tsx",
     "src/features/dashboard/safety/SecurityPageShell.tsx",
@@ -35,6 +37,7 @@
     "src/features/shell-ball/shellBall.demo.ts",
     "src/features/shell-ball/shellBall.motion.ts",
     "src/stores/shellBallStore.ts",
-    "src/platform/windowController.ts"
+    "src/platform/windowController.ts",
+    "src/platform/trayController.ts"
   ]
 }

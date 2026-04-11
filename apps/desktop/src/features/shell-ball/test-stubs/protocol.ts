@@ -71,3 +71,5 @@ export type AgentSecurityRespondResult = {
   approval_request?: ApprovalRequest;
   [key: string]: any;
 };
+
+export type Task = any;

@@ -529,9 +529,11 @@ test("shell-ball desktop navigation keeps route changes separate from desktop wi
   assert.equal(resolveDashboardModuleRoutePath("safety"), dashboardSafetyRoutePath);
   assert.equal(existsSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardRouteNavigation.ts")), false);
   assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/app/dashboard/DashboardRoot.js")), true);
+  assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/features/dashboard/DashboardApp.js")), true);
   assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/features/dashboard/safety/SafetyPage.js")), true);
   assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/features/dashboard/safety/SecurityPageShell.js")), true);
   assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/features/dashboard/safety/SecurityApp.js")), true);
+  assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/platform/trayController.js")), true);
   assert.match(dashboardRouteTargetsSource, /export const dashboardSafetyRoutePath = "\/safety"/);
 
   assert.match(controllerSource, /export type DesktopWindowLabel = "dashboard" \| "control-panel"/);
@@ -599,8 +601,11 @@ test("dashboard route surface renders the live home and safety routes", () => {
   const safetyMarkup = renderDashboardRouteSurface("#/safety");
 
   assert.match(homeMarkup, /Dashboard Orbit/);
+  assert.doesNotMatch(homeMarkup, /security-shell-stub/);
+  assert.doesNotMatch(homeMarkup, /返回首页/);
   assert.match(safetyMarkup, /返回首页/);
   assert.match(safetyMarkup, /security-shell-stub/);
+  assert.doesNotMatch(safetyMarkup, /Dashboard Orbit/);
 });
 
 test("shell-ball input bar keeps hook order stable across hidden and visible states", () => {
