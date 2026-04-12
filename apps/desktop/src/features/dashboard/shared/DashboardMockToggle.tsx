@@ -1,4 +1,5 @@
 import "./dashboardMockToggle.css";
+import { isDashboardMockModeEnabled } from "./dashboardDataMode";
 
 type DashboardMockToggleProps = {
   enabled: boolean;
@@ -6,6 +7,10 @@ type DashboardMockToggleProps = {
 };
 
 export function DashboardMockToggle({ enabled, onToggle }: DashboardMockToggleProps) {
+  if (!isDashboardMockModeEnabled()) {
+    return null;
+  }
+
   return (
     <button
       aria-label={enabled ? "切换为实时数据" : "切换为 Mock 数据"}

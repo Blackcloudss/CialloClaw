@@ -135,8 +135,6 @@ export function ShellBallInputWindow({
         void emitShellBallInputHover(true);
       }}
       onPointerLeave={() => {
-        setIsFocused(false);
-        void emitShellBallInputFocus(false);
         void emitShellBallInputHover(false);
       }}
     >

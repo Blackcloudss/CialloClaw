@@ -539,17 +539,28 @@ export function MirrorApp() {
   const modulePositionsRef = useRef<ModulePositions>(DEFAULT_MODULE_POSITIONS);
   const hasPlacedModulesRef = useRef(false);
   const isMountedRef = useRef(true);
+  const dataModeRef = useRef<MirrorOverviewSource>(dataMode);
   const fetchInFlightRef = useRef(false);
   const pendingRefreshRef = useRef(false);
+  const refreshSequenceRef = useRef(0);
   const lastSavedFloatingPositionsRef = useRef<string | null>(null);
+
+  dataModeRef.current = dataMode;
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const refreshMirrorData = useCallback(() => {
     if (dataMode === "mock") {
+      const nextSequence = ++refreshSequenceRef.current;
       pendingRefreshRef.current = false;
       fetchInFlightRef.current = false;
       setLoadError(null);
       void loadMirrorOverviewData("mock").then((nextData) => {
-        if (isMountedRef.current) {
+        if (isMountedRef.current && refreshSequenceRef.current === nextSequence) {
           setMirrorData(nextData);
         }
       });
@@ -562,6 +573,7 @@ export function MirrorApp() {
     }
 
     fetchInFlightRef.current = true;
+    let nextSequence = ++refreshSequenceRef.current;
 
     void (async () => {
       try {
@@ -569,15 +581,19 @@ export function MirrorApp() {
           pendingRefreshRef.current = false;
           const nextData = await loadMirrorOverviewData("rpc");
 
-          if (!isMountedRef.current) {
+          if (!isMountedRef.current || refreshSequenceRef.current !== nextSequence) {
             return;
           }
 
           setLoadError(null);
           setMirrorData(nextData);
+
+          if (pendingRefreshRef.current) {
+            nextSequence = ++refreshSequenceRef.current;
+          }
         } while (pendingRefreshRef.current);
       } catch (error) {
-        if (!isMountedRef.current) {
+        if (!isMountedRef.current || refreshSequenceRef.current !== nextSequence) {
           return;
         }
 
@@ -585,7 +601,7 @@ export function MirrorApp() {
       } finally {
         fetchInFlightRef.current = false;
 
-        if (pendingRefreshRef.current && isMountedRef.current && dataMode === "rpc") {
+        if (pendingRefreshRef.current && isMountedRef.current && dataModeRef.current === "rpc") {
           refreshMirrorData();
         }
       }
@@ -597,15 +613,10 @@ export function MirrorApp() {
   }, [dataMode]);
 
   useEffect(() => {
-    isMountedRef.current = true;
-
     if (dataMode === "mock") {
       setLastMirrorUpdate(null);
       refreshMirrorData();
-
-      return () => {
-        isMountedRef.current = false;
-      };
+      return;
     }
 
     setMirrorData(null);
@@ -618,7 +629,6 @@ export function MirrorApp() {
     refreshMirrorData();
 
     return () => {
-      isMountedRef.current = false;
       unsubscribe();
     };
   }, [dataMode, refreshMirrorData]);

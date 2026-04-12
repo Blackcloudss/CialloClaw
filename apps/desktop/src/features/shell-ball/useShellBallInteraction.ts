@@ -100,6 +100,7 @@ export function useShellBallInteraction() {
   const visualState = useShellBallStore((state) => state.visualState);
   const setVisualState = useShellBallStore((state) => state.setVisualState);
   const [inputValue, setInputValue] = useState("");
+  const [inputFocused, setInputFocused] = useState(false);
   const [voicePreview, setVoicePreview] = useState<ShellBallVoicePreview>(null);
   const [voiceHoldProgress, setVoiceHoldProgress] = useState(0);
   const [interactionConsumed, setInteractionConsumed] = useState(false);
@@ -219,7 +220,6 @@ export function useShellBallInteraction() {
 
   function handleRegionLeave() {
     regionActiveRef.current = false;
-    inputFocusedRef.current = false;
     clearLongPressTimer();
 
     if (!shouldKeepShellBallVoicePreviewOnRegionLeave(controllerRef.current?.getState() ?? visualState)) {
@@ -241,6 +241,7 @@ export function useShellBallInteraction() {
     dispatch("submit_text");
     setInputValue(reset.nextInputValue);
     inputFocusedRef.current = reset.nextFocused;
+    setInputFocused(reset.nextFocused);
   }
 
   function handleAttachFile() {
@@ -262,6 +263,7 @@ export function useShellBallInteraction() {
     }
 
     inputFocusedRef.current = false;
+    setInputFocused(false);
 
     longPressStartAtRef.current = performance.now();
     const tickProgress = () => {
@@ -324,6 +326,7 @@ export function useShellBallInteraction() {
 
       dispatch(resolveShellBallVoiceReleaseEvent(finalPreview));
       inputFocusedRef.current = false;
+      setInputFocused(false);
       pressStartXRef.current = null;
       pressStartYRef.current = null;
       setCurrentVoicePreview(null);
@@ -332,6 +335,7 @@ export function useShellBallInteraction() {
       consumeInteraction();
       dispatch("primary_click_locked_voice_end");
       inputFocusedRef.current = false;
+      setInputFocused(false);
       pressStartXRef.current = null;
       pressStartYRef.current = null;
       setCurrentVoicePreview(null);
@@ -351,6 +355,7 @@ export function useShellBallInteraction() {
     pressStartXRef.current = null;
     pressStartYRef.current = null;
     inputFocusedRef.current = false;
+    setInputFocused(false);
     setCurrentVoicePreview(null);
 
     if (cancelEvent !== null) {
@@ -361,6 +366,7 @@ export function useShellBallInteraction() {
 
   function handleInputFocusChange(focused: boolean) {
     inputFocusedRef.current = focused;
+    setInputFocused(focused);
     if (focused) {
       regionActiveRef.current = true;
       controllerRef.current?.forceState("hover_input", { regionActive: true });
@@ -375,6 +381,7 @@ export function useShellBallInteraction() {
 
   function handleInputFocusRequest() {
     inputFocusedRef.current = true;
+    setInputFocused(true);
     regionActiveRef.current = true;
     controllerRef.current?.forceState("hover_input", { regionActive: true, hoverRetained: false });
     syncVisualState();
@@ -385,6 +392,8 @@ export function useShellBallInteraction() {
     setInteractionConsumed(mapShellBallInteractionConsumedEventToFlag("force_state_reset"));
     pressStartXRef.current = null;
     pressStartYRef.current = null;
+    inputFocusedRef.current = false;
+    setInputFocused(false);
     setCurrentVoicePreview(null);
     controllerRef.current?.forceState(state, { regionActive: regionActiveRef.current });
     syncVisualState();
@@ -416,13 +425,13 @@ export function useShellBallInteraction() {
     };
   }, []);
 
-    return {
-      visualState,
-      inputValue,
-      setInputValue,
+  return {
+    visualState,
+    inputValue,
+    setInputValue,
     voicePreview,
     voiceHoldProgress,
-    inputFocused: inputFocusedRef.current,
+    inputFocused,
     inputBarMode: getShellBallInputBarMode(visualState),
     interactionConsumed,
     shouldOpenDashboardFromDoubleClick: getShellBallDashboardOpenGesturePolicy({

@@ -58,17 +58,6 @@ const SHELL_BALL_LOCAL_BUBBLE_ITEMS: ShellBallBubbleItem[] = [];
 const SHELL_BALL_BUBBLE_HIDE_DELAY_MS = 5_000;
 const SHELL_BALL_BUBBLE_FADE_DURATION_MS = 420;
 
-function getAgentResponse(userText: string): string {
-  const lowerText = userText.toLowerCase();
-  if (lowerText.includes("你是谁") || lowerText.includes("who are you")) {
-    return "我是CialloClaw";
-  }
-  if (lowerText.includes("你好") || lowerText.includes("hello") || lowerText.includes("hi")) {
-    return "你好";
-  }
-  return "收到";
-}
-
 export function compareShellBallBubbleItemsByTimestamp(left: ShellBallBubbleItem, right: ShellBallBubbleItem) {
   const createdAtOrder = left.bubble.created_at.localeCompare(right.bubble.created_at);
 
@@ -130,13 +119,11 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const visibleBubbleCountRef = useRef(getShellBallVisibleBubbleItems(bubbleItems).length);
   const previousVisibleBubbleCountRef = useRef(visibleBubbleCountRef.current);
   const detachedPinnedBubbleIdsRef = useRef(new Set<string>());
-  const inputValueRef = useRef(input.inputValue);
   const helperWindowsVisibleRef = useRef(input.helperWindowsVisible ?? true);
   const regionActiveRef = useRef(false);
   const inputFocusedRef = useRef(false);
   const bubbleHideDelayTimeoutRef = useRef<number | null>(null);
   const bubbleHideCompleteTimeoutRef = useRef<number | null>(null);
-  inputValueRef.current = input.inputValue;
   helperWindowsVisibleRef.current = helpersVisible;
   const handlersRef = useRef({
     setInputValue: input.setInputValue,
@@ -405,51 +392,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           handlersRef.current.onAttachFile();
           break;
         case "submit": {
-          const userText = inputValueRef.current?.trim() || "";
-          if (userText) {
-            const userBubble: ShellBallBubbleItem = {
-              bubble: {
-                bubble_id: `user-${Date.now()}`,
-                task_id: "",
-                type: "result",
-                text: userText,
-                pinned: false,
-                hidden: false,
-                created_at: new Date().toISOString(),
-              },
-              role: "user",
-              desktop: {
-                lifecycleState: "visible",
-                freshnessHint: "fresh",
-                motionHint: "settle",
-              },
-            };
-            setBubbleItems((prev) => [...prev, userBubble]);
-            revealBubbleRegion();
-            
-            setTimeout(() => {
-              const agentText = getAgentResponse(userText);
-              const agentBubble: ShellBallBubbleItem = {
-                bubble: {
-                  bubble_id: `agent-${Date.now()}`,
-                  task_id: "",
-                  type: "status",
-                  text: agentText,
-                  pinned: false,
-                  hidden: false,
-                  created_at: new Date().toISOString(),
-                },
-                role: "agent",
-                desktop: {
-                  lifecycleState: "visible",
-                },
-              };
-              setBubbleItems((prev) => [...prev, agentBubble]);
-              if (!regionActiveRef.current && !inputFocusedRef.current) {
-                scheduleBubbleRegionHide();
-              }
-            }, 500);
-          }
           handlersRef.current.onSubmitText();
           break;
         }
