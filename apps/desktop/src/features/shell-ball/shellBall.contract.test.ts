@@ -71,6 +71,7 @@ import {
 } from "./useShellBallWindowMetrics";
 import { applyShellBallBubbleAction } from "./useShellBallCoordinator";
 import {
+  createShellBallInputSubmitParams,
   getShellBallPostSubmitInputReset,
   getShellBallDashboardOpenGesturePolicy,
   getShellBallPressCancelEvent,
@@ -1792,6 +1793,35 @@ test("shell-ball voice recognition final state routes final transcript out of th
       nextVisualState: "hover_input",
     },
   );
+});
+
+test("shell-ball submit params route text and voice through the formal input contract", () => {
+  const textParams = createShellBallInputSubmitParams({
+    text: "  summarize this  ",
+    trigger: "hover_text_input",
+    inputMode: "text",
+  });
+
+  assert.ok(textParams);
+  assert.equal(textParams.source, "floating_ball");
+  assert.equal(textParams.trigger, "hover_text_input");
+  assert.deepEqual(textParams.input, {
+    type: "text",
+    text: "summarize this",
+    input_mode: "text",
+  });
+  assert.deepEqual(textParams.context, { files: [] });
+
+  const voiceParams = createShellBallInputSubmitParams({
+    text: "  打开仪表盘  ",
+    trigger: "voice_commit",
+    inputMode: "voice",
+  });
+
+  assert.ok(voiceParams);
+  assert.equal(voiceParams.trigger, "voice_commit");
+  assert.equal(voiceParams.input.input_mode, "voice");
+  assert.equal(createShellBallInputSubmitParams({ text: "   ", trigger: "hover_text_input", inputMode: "text" }), null);
 });
 
 test("shell-ball interaction contract auto-advances waiting auth and processing states", () => {

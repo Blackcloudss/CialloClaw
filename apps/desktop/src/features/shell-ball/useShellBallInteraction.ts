@@ -1,3 +1,4 @@
+import type { AgentInputSubmitParams, RequestMeta } from "@cialloclaw/protocol";
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import {
@@ -32,22 +33,7 @@ type ShellBallInteractionConsumedEvent =
 
 type ShellBallVoiceRecognitionStopReason = "none" | "finish" | "cancel";
 
-type ShellBallJsonRpcRequest = {
-  jsonrpc: "2.0";
-  id: string;
-  method: string;
-  params: object;
-};
-
-type ShellBallNamedPipeBridge = {
-  request: (payload: ShellBallJsonRpcRequest) => Promise<unknown>;
-};
-
-type ShellBallNamedPipeWindow = Window & {
-  __CIALLOCLAW_NAMED_PIPE__?: ShellBallNamedPipeBridge;
-};
-
-function createShellBallRequestMeta() {
+function createShellBallRequestMeta(): RequestMeta {
   const now = new Date().toISOString();
   const traceId = typeof globalThis.crypto?.randomUUID === "function"
     ? globalThis.crypto.randomUUID()
@@ -59,43 +45,50 @@ function createShellBallRequestMeta() {
   };
 }
 
+export function createShellBallInputSubmitParams(input: {
+  text: string;
+  trigger: "voice_commit" | "hover_text_input";
+  inputMode: "voice" | "text";
+}): AgentInputSubmitParams | null {
+  const normalizedText = input.text.trim();
+
+  if (normalizedText === "") {
+    return null;
+  }
+
+  const requestMeta = createShellBallRequestMeta();
+
+  return {
+    request_meta: requestMeta,
+    source: "floating_ball",
+    trigger: input.trigger,
+    input: {
+      type: "text",
+      text: normalizedText,
+      input_mode: input.inputMode,
+    },
+    context: {
+      files: [],
+    },
+  };
+}
+
 async function submitShellBallInput(input: {
   text: string;
   trigger: "voice_commit" | "hover_text_input";
   inputMode: "voice" | "text";
 }) {
-  const normalizedText = input.text.trim();
+  const params = createShellBallInputSubmitParams(input);
 
-  if (normalizedText === "") {
-    return;
+  if (params === null) {
+    return null;
   }
 
-  const bridge = (window as ShellBallNamedPipeWindow).__CIALLOCLAW_NAMED_PIPE__;
-
-  if (bridge === undefined) {
-    throw new Error("Named Pipe transport is not wired for shell-ball input submit.");
-  }
-
-  const requestMeta = createShellBallRequestMeta();
-
-  await bridge.request({
-    jsonrpc: "2.0",
-    id: requestMeta.trace_id,
-    method: "agent.input.submit",
-    params: {
-      request_meta: requestMeta,
-      source: "floating_ball",
-      trigger: input.trigger,
-      input: {
-        type: "text",
-        text: normalizedText,
-        input_mode: input.inputMode,
-      },
-      context: {
-        files: [],
-      },
-    },
-  });
+  const importRpcMethods = new Function("return import('../../rpc/methods')") as () => Promise<{
+    submitInput: (request: AgentInputSubmitParams) => Promise<unknown>;
+  }>;
+  const rpcMethods = await importRpcMethods();
+  return rpcMethods.submitInput(params);
 }
 
 export function mapShellBallInteractionConsumedEventToFlag(event: ShellBallInteractionConsumedEvent) {
@@ -177,19 +170,21 @@ export function resolveShellBallVoiceRecognitionFinalState(input: {
   startState: ShellBallVisualState;
 }) {
   const normalizedTranscript = input.transcript.trim();
+  const nextVisualState =
+    input.startState === "hover_input" || input.baseDraft.trim() !== "" ? ("hover_input" as const) : ("idle" as const);
 
   if (input.reason === "finish" && normalizedTranscript !== "") {
     return {
       finalizedSpeechPayload: normalizedTranscript,
       nextInputValue: input.baseDraft,
-      nextVisualState: input.startState === "hover_input" || input.baseDraft.trim() !== "" ? ("hover_input" as const) : ("idle" as const),
+      nextVisualState,
     };
   }
 
   return {
     finalizedSpeechPayload: null,
     nextInputValue: input.baseDraft,
-    nextVisualState: input.startState === "hover_input" || input.baseDraft.trim() !== "" ? ("hover_input" as const) : ("idle" as const),
+    nextVisualState,
   };
 }
 
@@ -283,7 +278,7 @@ export function useShellBallInteraction() {
     setInputValue(composeShellBallSpeechDraft(voiceBaseDraftRef.current, transcript));
   }
 
-  function finalizeVoiceRecognition(reason: Exclude<ShellBallVoiceRecognitionStopReason, "none">) {
+  async function finalizeVoiceRecognition(reason: Exclude<ShellBallVoiceRecognitionStopReason, "none">) {
     const resolution = resolveShellBallVoiceRecognitionFinalState({
       reason,
       transcript: voiceTranscriptRef.current,
@@ -294,23 +289,27 @@ export function useShellBallInteraction() {
     recognitionStopReasonRef.current = "none";
     recognitionSessionIdRef.current += 1;
 
-    setFinalizedSpeechPayload(resolution.finalizedSpeechPayload);
     setInputValue(resolution.nextInputValue);
-    if (resolution.finalizedSpeechPayload !== null) {
-      void submitShellBallInput({
-        text: resolution.finalizedSpeechPayload,
-        trigger: "voice_commit",
-        inputMode: "voice",
-      }).catch((error) => {
-        console.warn("shell-ball voice submit failed", error);
-      });
-    }
     controllerRef.current?.forceState(resolution.nextVisualState, {
       regionActive: resolution.nextVisualState === "hover_input",
     });
     syncVisualState();
-
     voiceTranscriptRef.current = "";
+
+    if (resolution.finalizedSpeechPayload === null) {
+      return;
+    }
+
+    try {
+      await submitShellBallInput({
+        text: resolution.finalizedSpeechPayload,
+        trigger: "voice_commit",
+        inputMode: "voice",
+      });
+      setFinalizedSpeechPayload(resolution.finalizedSpeechPayload);
+    } catch (error) {
+      console.warn("shell-ball voice submit failed", error);
+    }
   }
 
   function acknowledgeFinalizedSpeechPayload() {
@@ -406,11 +405,11 @@ export function useShellBallInteraction() {
       const stopReason = recognitionStopReasonRef.current;
 
       if (stopReason === "finish" || stopReason === "cancel") {
-        finalizeVoiceRecognition(stopReason);
+        void finalizeVoiceRecognition(stopReason);
         return;
       }
 
-      finalizeVoiceRecognition("cancel");
+      void finalizeVoiceRecognition("cancel");
     };
 
     try {
@@ -475,17 +474,20 @@ export function useShellBallInteraction() {
       return;
     }
 
-    void submitShellBallInput({
-      text: currentDraft,
-      trigger: "hover_text_input",
-      inputMode: "text",
-    }).catch((error) => {
-      console.warn("shell-ball text submit failed", error);
-    });
-
-    dispatch("submit_text");
-    setInputValue(reset.nextInputValue);
-    inputFocusedRef.current = reset.nextFocused;
+    void (async () => {
+      try {
+        await submitShellBallInput({
+          text: currentDraft,
+          trigger: "hover_text_input",
+          inputMode: "text",
+        });
+        dispatch("submit_text");
+        setInputValue(reset.nextInputValue);
+        inputFocusedRef.current = reset.nextFocused;
+      } catch (error) {
+        console.warn("shell-ball text submit failed", error);
+      }
+    })();
   }
 
   function handleAttachFile() {
