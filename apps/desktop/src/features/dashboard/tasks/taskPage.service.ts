@@ -81,7 +81,7 @@ function createFallbackTaskDetail(task: Task): AgentTaskDetailGetResult {
     mirror_references: [],
     security_summary: {
       latest_restore_point: null,
-      pending_authorizations: task.status === "waiting_auth" ? 1 : 0,
+      pending_authorizations: 0,
       risk_level: task.risk_level,
       security_status: task.status === "waiting_auth" ? "pending_confirmation" : "normal",
     },

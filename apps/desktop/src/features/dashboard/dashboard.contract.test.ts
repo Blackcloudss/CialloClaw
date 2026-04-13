@@ -300,10 +300,11 @@ test("task detail normalization rejects string restore points in rpc mode and ke
 
     const fallback = service.buildFallbackTaskDetailData({
       experience: createFallbackExperience(),
-      task: createTask(),
+      task: createTask({ status: "waiting_auth" }),
     });
 
     assert.equal(fallback.detail.approval_request, null);
+    assert.equal(fallback.detail.security_summary.pending_authorizations, 0);
   });
 });
 
