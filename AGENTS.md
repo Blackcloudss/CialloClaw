@@ -236,7 +236,7 @@
 - `services/local-service`：Go 本地 Harness Service
 - `workers/`：独立 worker / sidecar
 - `packages/protocol`：协议、类型、schema 真源
-- `packages/shared`：共享常量与纯函数
+- `packages/ui` / `packages/config`：共享 UI 与工程配置；协议真源仍统一收口到 `packages/protocol`
 - `docs/`：架构、协议、数据、模块、规范文档
 
 ### 6.2 前端边界

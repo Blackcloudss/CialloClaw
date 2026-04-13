@@ -1,4 +1,4 @@
-# CialloClaw 协议设计文档（v4）
+# CialloClaw 协议设计文档（v5）
 
 ## 1. 文档范围
 
@@ -234,7 +234,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - `upcoming`：近期要做。
 - `later`：后续安排。
-- `recurring_rule`：重复事项规则。
+- `recurring`：重复事项。
 - `closed`：已结束。
 
 ### 5.4 风险等级 `risk_level`
@@ -1153,6 +1153,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.mirror_references` | 命中的镜子记忆 |
 | `data.security_summary`  | 安全摘要       |
 
+其中 `data.timeline` 条目对应对外 `task_step` / `task_steps` 视图对象，不直接暴露内核 `step` / `steps`。
+
 ### agent.task.detail.get 出参示例
 
 ```json
@@ -1172,7 +1174,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       },
       "timeline": [
         {
-          "step_id": "step_1",
+          "task_step_id": "task_step_1",
           "task_id": "task_201",
           "name": "recognize_input_object",
           "status": "completed",
@@ -1181,10 +1183,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
           "output_summary": "确认是文档总结任务"
         },
         {
-          "step_id": "step_2",
+          "task_step_id": "task_step_2",
           "task_id": "task_201",
           "name": "generate_summary",
-          "status": "processing",
+          "status": "running",
           "order_index": 2,
           "input_summary": "读取文档内容",
           "output_summary": "正在生成摘要"
@@ -1553,7 +1555,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | 字段                            | 中文说明   |
 | ------------------------------- | ---------- |
 | `data.items`                    | 事项列表   |
-| `data.items[].item_id`          | 事项 ID    |
+| `data.items[].todo_item_id`     | 事项 ID    |
 | `data.items[].title`            | 事项标题   |
 | `data.items[].bucket`           | 所属分组   |
 | `data.items[].status`           | 当前状态   |
@@ -1570,7 +1572,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "items": [
         {
-          "item_id": "todo_001",
+          "todo_item_id": "todo_001",
           "title": "整理 Q3 复盘要点",
           "bucket": "upcoming",
           "status": "due_today",
@@ -1608,7 +1610,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 | 字段        | 中文说明         |
 | ----------- | ---------------- |
-| `item_id`   | 事项 ID          |
+| `todo_item_id` | 事项 ID       |
 | `confirmed` | 是否确认转为任务 |
 
 ### agent.notepad.convert_to_task 入参示例
@@ -1623,7 +1625,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "trace_id": "trace_notepad_convert_001",
       "client_time": "2026-04-07T10:56:00+08:00"
     },
-    "item_id": "todo_001",
+    "todo_item_id": "todo_001",
     "confirmed": true
   }
 }
@@ -2343,7 +2345,6 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ---
 
-
 ## 9. Notification / Subscription 说明
 
 ### 9.1 事件语义
@@ -2351,9 +2352,13 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `task.updated`：任务主状态或关键摘要变化
 - `delivery.ready`：正式交付已可被前端承接
 - `approval.pending`：出现待授权动作
-- `plugin.updated`：插件状态变化
+- `plugin.updated`：插件状态变化（包括首次注册后可见的状态快照）
 - `plugin.metric.updated`：插件指标变化
 - `plugin.task.updated`：插件关联任务变化
+
+以下命名不属于正式前端订阅事件：
+- `plugin.registered`：插件注册属于后端内部事件，前端首次可见状态并入 `plugin.updated`
+- `overview.ready`：仪表盘初始化结果通过 `agent.dashboard.overview.get` 的正常响应返回
 
 ### 9.2 前端使用约束
 

@@ -1,4 +1,4 @@
-# CialloClaw 架构总览文档（v14）
+# CialloClaw 架构总览文档（v15）
 
 ## 一、项目定位与设计动因
 
@@ -868,7 +868,7 @@ flowchart LR
 | `agent.task_inspector.config.update` | 修改巡检设置时 | 巡检来源、频率、触发开关 | 生效后的配置 |
 | `agent.task_inspector.run` | 用户手动点击立即巡检时 | `reason`、`target_sources` | `inspection_id`、`summary`、`suggestions` |
 | `agent.notepad.list` | 查看事项桶时 | `group`、分页参数 | `items`、`page` |
-| `agent.notepad.convert_to_task` | 把事项交给 Agent 处理时 | `item_id`、`confirmed` | 新建 `task` |
+| `agent.notepad.convert_to_task` | 把事项交给 Agent 处理时 | `todo_item_id`、`confirmed` | 新建 `task` |
 
 这里有两条接口链路：一条是“巡检配置 / 巡检执行”，另一条是“事项列表 / 事项转任务”。二者都服务于同一个长期待办到正式任务的升级过程。
 
@@ -911,7 +911,7 @@ flowchart LR
 | `task_sources` | `agent.task_inspector.config.update` | 持久化的巡检来源目录列表 |
 | `inspection_interval` | `agent.task_inspector.config.update` | 巡检频率，通常由 `unit + value` 组成 |
 | `group` | `agent.notepad.list` | 事项桶分组，取值必须来自统一 `todo_bucket` |
-| `item_id` | `agent.notepad.convert_to_task` | 目标事项 ID |
+| `todo_item_id` | `agent.notepad.convert_to_task` | 目标事项 ID |
 | `confirmed` | `agent.notepad.convert_to_task` | 是否确认把事项升级为正式任务 |
 
 返回字段：
