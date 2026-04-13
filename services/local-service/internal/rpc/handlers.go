@@ -249,6 +249,14 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			TraceID: "trace_task_already_finished",
 		}
 	}
+	if errors.Is(err, orchestrator.ErrStorageQueryFailed) {
+		return nil, &rpcError{
+			Code:    1005001,
+			Message: "SQLITE_WRITE_FAILED",
+			Detail:  err.Error(),
+			TraceID: "trace_storage_query_failed",
+		}
+	}
 
 	return nil, &rpcError{
 		Code:    errInvalidParams,

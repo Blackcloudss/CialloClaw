@@ -1512,7 +1512,7 @@ func TestServiceSecurityAuditListFallsBackToStoredAuditRecords(t *testing.T) {
 		t.Fatalf("write audit record failed: %v", err)
 	}
 
-	result, err := service.SecurityAuditList(map[string]any{"limit": 20, "offset": 0})
+	result, err := service.SecurityAuditList(map[string]any{"task_id": "task_external", "limit": 20, "offset": 0})
 	if err != nil {
 		t.Fatalf("security audit list failed: %v", err)
 	}
@@ -1520,6 +1520,14 @@ func TestServiceSecurityAuditListFallsBackToStoredAuditRecords(t *testing.T) {
 	items := result["items"].([]map[string]any)
 	if len(items) != 1 || items[0]["audit_id"] != "audit_001" {
 		t.Fatalf("expected storage-backed audit record, got %+v", items)
+	}
+}
+
+func TestServiceSecurityAuditListRequiresTaskID(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed summary")
+	_, err := service.SecurityAuditList(map[string]any{"limit": 20, "offset": 0})
+	if err == nil || err.Error() != "task_id is required" {
+		t.Fatalf("expected task_id required error, got %v", err)
 	}
 }
 

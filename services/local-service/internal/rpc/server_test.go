@@ -238,8 +238,9 @@ func TestDispatchReturnsSecurityAuditList(t *testing.T) {
 		ID:      json.RawMessage(`"req-security-audit-list"`),
 		Method:  "agent.security.audit.list",
 		Params: mustMarshal(t, map[string]any{
-			"limit":  20,
-			"offset": 0,
+			"task_id": "task_001",
+			"limit":   20,
+			"offset":  0,
 		}),
 	})
 
@@ -253,6 +254,16 @@ func TestDispatchReturnsSecurityAuditList(t *testing.T) {
 	}
 	if items[0]["audit_id"] != "audit_001" {
 		t.Fatalf("expected stored audit_001, got %+v", items[0])
+	}
+}
+
+func TestDispatchMapsSecurityAuditListStorageErrors(t *testing.T) {
+	_, rpcErr := wrapOrchestratorResult(nil, orchestrator.ErrStorageQueryFailed)
+	if rpcErr == nil {
+		t.Fatal("expected rpc error")
+	}
+	if rpcErr.Code != 1005001 || rpcErr.Message != "SQLITE_WRITE_FAILED" {
+		t.Fatalf("expected SQLITE_WRITE_FAILED mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
 	}
 }
 
