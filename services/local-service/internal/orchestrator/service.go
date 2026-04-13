@@ -707,6 +707,34 @@ func (s *Service) SecurityAuditList(params map[string]any) (map[string]any, erro
 	}, nil
 }
 
+// SecurityRestorePointsList 处理 agent.security.restore_points.list。
+func (s *Service) SecurityRestorePointsList(params map[string]any) (map[string]any, error) {
+	limit := clampListLimit(intValue(params, "limit", 20))
+	offset := clampListOffset(intValue(params, "offset", 0))
+	taskID := stringValue(params, "task_id", "")
+	if s.storage == nil {
+		return map[string]any{"items": []map[string]any{}, "page": pageMap(limit, offset, 0)}, nil
+	}
+	points, total, err := s.storage.RecoveryPointStore().ListRecoveryPoints(context.Background(), taskID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	items := make([]map[string]any, 0, len(points))
+	for _, point := range points {
+		items = append(items, map[string]any{
+			"recovery_point_id": point.RecoveryPointID,
+			"task_id":           point.TaskID,
+			"summary":           point.Summary,
+			"created_at":        point.CreatedAt,
+			"objects":           append([]string(nil), point.Objects...),
+		})
+	}
+	return map[string]any{
+		"items": items,
+		"page":  pageMap(limit, offset, total),
+	}, nil
+}
+
 func clampListLimit(limit int) int {
 	if limit <= 0 {
 		return 20

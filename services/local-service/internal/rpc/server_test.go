@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
@@ -254,6 +255,46 @@ func TestDispatchReturnsSecurityAuditList(t *testing.T) {
 	}
 	if items[0]["audit_id"] != "audit_001" {
 		t.Fatalf("expected stored audit_001, got %+v", items[0])
+	}
+}
+
+func TestDispatchReturnsSecurityRestorePointsList(t *testing.T) {
+	server := newTestServer()
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "restore.db")))
+	defer func() { _ = storageService.Close() }()
+	server.orchestrator.WithStorage(storageService)
+	err := storageService.RecoveryPointWriter().WriteRecoveryPoint(context.Background(), checkpoint.RecoveryPoint{
+		RecoveryPointID: "rp_001",
+		TaskID:          "task_001",
+		Summary:         "stored recovery point",
+		CreatedAt:       "2026-04-08T10:00:00Z",
+		Objects:         []string{"workspace/result.md"},
+	})
+	if err != nil {
+		t.Fatalf("write recovery point: %v", err)
+	}
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-security-restore-points-list"`),
+		Method:  "agent.security.restore_points.list",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": "task_001",
+			"limit":   20,
+			"offset":  0,
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one recovery point item, got %d", len(items))
+	}
+	if items[0]["recovery_point_id"] != "rp_001" {
+		t.Fatalf("expected stored rp_001, got %+v", items[0])
 	}
 }
 

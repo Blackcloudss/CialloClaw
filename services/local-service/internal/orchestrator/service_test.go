@@ -1536,6 +1536,62 @@ func TestServiceSecurityAuditListRequiresTaskID(t *testing.T) {
 	}
 }
 
+func TestServiceSecurityRestorePointsListFallsBackToStoredRecoveryPoints(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed summary")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	err := service.storage.RecoveryPointWriter().WriteRecoveryPoint(context.Background(), checkpoint.RecoveryPoint{
+		RecoveryPointID: "rp_001",
+		TaskID:          "task_external",
+		Summary:         "stored recovery point",
+		CreatedAt:       "2026-04-08T10:00:00Z",
+		Objects:         []string{"workspace/result.md"},
+	})
+	if err != nil {
+		t.Fatalf("write recovery point failed: %v", err)
+	}
+
+	result, err := service.SecurityRestorePointsList(map[string]any{"task_id": "task_external", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("security restore points list failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["recovery_point_id"] != "rp_001" {
+		t.Fatalf("expected storage-backed recovery point, got %+v", items)
+	}
+	if items[0]["task_id"] != "task_external" {
+		t.Fatalf("expected task_external recovery point, got %+v", items[0])
+	}
+	objects := items[0]["objects"].([]string)
+	if len(objects) != 1 || objects[0] != "workspace/result.md" {
+		t.Fatalf("expected recovery point objects to round-trip, got %+v", objects)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 1 {
+		t.Fatalf("expected total=1, got %+v", page)
+	}
+}
+
+func TestServiceSecurityRestorePointsListWithoutStorageReturnsEmptyPage(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.SecurityRestorePointsList(map[string]any{"limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("security restore points list failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 0 {
+		t.Fatalf("expected empty restore point list, got %+v", items)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 0 {
+		t.Fatalf("expected empty page metadata, got %+v", page)
+	}
+}
+
 func TestServiceTaskControlRejectsInvalidStatusTransition(t *testing.T) {
 	service := newTestService()
 
