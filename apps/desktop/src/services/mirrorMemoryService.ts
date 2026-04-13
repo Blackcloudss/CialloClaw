@@ -1,5 +1,6 @@
 import type { AgentInputSubmitParams, AgentInputSubmitResult, BubbleMessage, InputMode, RequestSource } from "@cialloclaw/protocol";
-import { loadStoredValue, saveStoredValue } from "../platform/storage";
+import { loadStoredValue, removeStoredValue, saveStoredValue } from "../platform/storage";
+import { loadSettings } from "./settingsService";
 
 export type MirrorConversationRecordStatus = "submitted" | "responded" | "failed";
 
@@ -151,6 +152,14 @@ function capMirrorConversationRecords(records: MirrorConversationRecord[]) {
   return sortMirrorConversationRecords(records).slice(0, MIRROR_CONVERSATION_RECORD_LIMIT);
 }
 
+function isMirrorConversationMemoryEnabled() {
+  return loadSettings().settings.memory.enabled;
+}
+
+function clearMirrorConversationRecords() {
+  removeStoredValue(MIRROR_CONVERSATION_STORAGE_KEY);
+}
+
 export function upsertMirrorConversationRecord(records: MirrorConversationRecord[], nextRecord: MirrorConversationRecord) {
   const nextRecords = records.some((record) => record.trace_id === nextRecord.trace_id)
     ? records.map((record) => (record.trace_id === nextRecord.trace_id ? cloneConversationRecord(nextRecord) : cloneConversationRecord(record)))
@@ -160,6 +169,11 @@ export function upsertMirrorConversationRecord(records: MirrorConversationRecord
 }
 
 export function loadMirrorConversationRecords(source: "rpc" | "mock" = "rpc") {
+  if (source === "rpc" && !isMirrorConversationMemoryEnabled()) {
+    clearMirrorConversationRecords();
+    return [];
+  }
+
   try {
     const snapshot = loadStoredValue<unknown>(MIRROR_CONVERSATION_STORAGE_KEY);
 
@@ -177,6 +191,11 @@ export function loadMirrorConversationRecords(source: "rpc" | "mock" = "rpc") {
 }
 
 export function saveMirrorConversationRecords(records: MirrorConversationRecord[]) {
+  if (!isMirrorConversationMemoryEnabled()) {
+    clearMirrorConversationRecords();
+    return;
+  }
+
   saveStoredValue<MirrorConversationSnapshot>(MIRROR_CONVERSATION_STORAGE_KEY, {
     version: 1,
     records: capMirrorConversationRecords(records),
@@ -184,6 +203,11 @@ export function saveMirrorConversationRecords(records: MirrorConversationRecord[
 }
 
 export function recordMirrorConversationStart(params: AgentInputSubmitParams) {
+  if (!isMirrorConversationMemoryEnabled()) {
+    clearMirrorConversationRecords();
+    return [];
+  }
+
   const now = new Date().toISOString();
   const nextRecord: MirrorConversationRecord = {
     record_id: `mirror-conversation-${params.request_meta.trace_id}`,
@@ -209,6 +233,11 @@ export function recordMirrorConversationStart(params: AgentInputSubmitParams) {
 }
 
 export function recordMirrorConversationSuccess(params: AgentInputSubmitParams, result: AgentInputSubmitResult) {
+  if (!isMirrorConversationMemoryEnabled()) {
+    clearMirrorConversationRecords();
+    return [];
+  }
+
   const currentRecords = loadMirrorConversationRecords();
   const existingRecord = currentRecords.find((record) => record.trace_id === params.request_meta.trace_id) ?? null;
   const updatedAt = result.bubble_message?.created_at ?? new Date().toISOString();
@@ -235,6 +264,11 @@ export function recordMirrorConversationSuccess(params: AgentInputSubmitParams, 
 }
 
 export function recordMirrorConversationFailure(params: AgentInputSubmitParams, error: unknown) {
+  if (!isMirrorConversationMemoryEnabled()) {
+    clearMirrorConversationRecords();
+    return [];
+  }
+
   const currentRecords = loadMirrorConversationRecords();
   const existingRecord = currentRecords.find((record) => record.trace_id === params.request_meta.trace_id) ?? null;
   const updatedAt = new Date().toISOString();

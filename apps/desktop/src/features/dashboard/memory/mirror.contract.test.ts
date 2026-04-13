@@ -15,6 +15,7 @@ import {
   upsertMirrorConversationRecord,
   type MirrorConversationRecord,
 } from "../../../services/mirrorMemoryService";
+import { loadSettings, saveSettings } from "../../../services/settingsService";
 
 class MemoryStorage {
   #store = new Map<string, string>();
@@ -197,6 +198,31 @@ test("mirror conversation lifecycle preserves failures in local history", () => 
 
   assert.equal(records[0]?.status, "failed");
   assert.equal(records[0]?.error_message, "network unavailable");
+});
+
+test("mirror conversation lifecycle stops persisting and clears local records when memory is disabled", () => {
+  const storage = installWindowStorage();
+  const params = createSubmitParams("trace-memory-disabled");
+
+  recordMirrorConversationStart(params);
+  assert.equal(loadMirrorConversationRecords().length, 1);
+
+  const disabledSettings = loadSettings();
+  saveSettings({
+    ...disabledSettings,
+    settings: {
+      ...disabledSettings.settings,
+      memory: {
+        ...disabledSettings.settings.memory,
+        enabled: false,
+      },
+    },
+  });
+
+  recordMirrorConversationStart(createSubmitParams("trace-memory-disabled-next"));
+
+  assert.equal(loadMirrorConversationRecords().length, 0);
+  assert.equal(storage.getItem("cialloclaw.mirror.conversations"), null);
 });
 
 test("buildMirrorDailyDigest surfaces stage and approval context", () => {

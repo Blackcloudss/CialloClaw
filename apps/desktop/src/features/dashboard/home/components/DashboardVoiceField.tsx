@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { Task } from "@cialloclaw/protocol";
 import { motion, AnimatePresence } from "motion/react";
 import { LoaderCircle, Mic, RotateCcw, Sparkles, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { submitTextInput } from "@/services/agentInputService";
 import type { DashboardVoiceSequence } from "@/features/dashboard/home/dashboardHome.types";
+import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { getShellBallMotionConfig } from "@/features/shell-ball/shellBall.motion";
 import { ShellBallMascot } from "@/features/shell-ball/components/ShellBallMascot";
 import {
@@ -29,6 +32,45 @@ type DashboardVoiceRecognitionStopReason = "none" | "finish" | "cancel";
 
 const stageOrder: DashboardVoiceStage[] = ["ready", "listening", "submitting", "completed", "error"];
 
+function getDashboardVoiceStatusLabel(stage: DashboardVoiceStage, taskStatus: Task["status"] | null) {
+  if (stage === "ready") {
+    return "正在准备语音场";
+  }
+
+  if (stage === "listening") {
+    return "正在听…";
+  }
+
+  if (stage === "submitting") {
+    return "正在提交到任务主链路";
+  }
+
+  if (stage === "error") {
+    return "语音暂未完成";
+  }
+
+  switch (taskStatus) {
+    case "confirming_intent":
+      return "已进入意图确认";
+    case "waiting_auth":
+      return "已进入授权确认";
+    case "waiting_input":
+      return "正在等待补充信息";
+    case "blocked":
+      return "任务暂时被阻塞";
+    case "failed":
+      return "任务返回失败状态";
+    case "completed":
+      return "任务已完成";
+    default:
+      return "语音内容已提交";
+  }
+}
+
+function getDashboardVoiceTaskRoute(status: Task["status"]) {
+  return status === "waiting_auth" ? resolveDashboardModuleRoutePath("safety") : resolveDashboardModuleRoutePath("tasks");
+}
+
 function getSpeechRecognitionErrorMessage(error: string) {
   switch (error) {
     case "audio-capture":
@@ -46,9 +88,13 @@ function getSpeechRecognitionErrorMessage(error: string) {
 }
 
 export function DashboardVoiceField({ isOpen, onClose, sequences }: DashboardVoiceFieldProps) {
+  const navigate = useNavigate();
   const [stage, setStage] = useState<DashboardVoiceStage>("ready");
   const [transcript, setTranscript] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [submittedTaskStatus, setSubmittedTaskStatus] = useState<Task["status"] | null>(null);
+  const [submittedTaskId, setSubmittedTaskId] = useState<string | null>(null);
+  const [submittedMessage, setSubmittedMessage] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -103,6 +149,9 @@ export function DashboardVoiceField({ isOpen, onClose, sequences }: DashboardVoi
     recognitionErrorMessageRef.current = null;
     setStage("ready");
     setErrorMessage(null);
+    setSubmittedTaskStatus(null);
+    setSubmittedTaskId(null);
+    setSubmittedMessage(null);
     setLiveTranscript("");
   }, [clearCompletionTimer, setLiveTranscript]);
 
@@ -120,23 +169,38 @@ export function DashboardVoiceField({ isOpen, onClose, sequences }: DashboardVoi
     setErrorMessage(null);
 
     try {
-      await submitTextInput({
+      const result = await submitTextInput({
         text: finalizedTranscript,
         source: "dashboard",
         trigger: "voice_commit",
         inputMode: "voice",
       });
+
+      if (result === null) {
+        setStage("error");
+        setErrorMessage("没有收到可提交的语音内容，请再试一次。");
+        return;
+      }
+
+      setSubmittedTaskStatus(result.task.status);
+      setSubmittedTaskId(result.task.task_id);
+      setSubmittedMessage(result.bubble_message?.text?.trim() || null);
       setStage("completed");
       clearCompletionTimer();
       completionTimerRef.current = window.setTimeout(() => {
+        navigate(getDashboardVoiceTaskRoute(result.task.status), {
+          state: result.task.status === "waiting_auth"
+            ? undefined
+            : { focusTaskId: result.task.task_id, openDetail: true },
+        });
         onClose();
-      }, 420);
+      }, 720);
     } catch (error) {
       console.warn("dashboard voice submit failed", error);
       setStage("error");
       setErrorMessage("语音内容提交失败，请稍后重试。");
     }
-  }, [clearCompletionTimer, onClose, setLiveTranscript]);
+  }, [clearCompletionTimer, navigate, onClose, setLiveTranscript]);
 
   const finalizeVoiceRecognition = useCallback(async (reason: Exclude<DashboardVoiceRecognitionStopReason, "none">) => {
     recognitionRef.current = null;
@@ -428,21 +492,17 @@ export function DashboardVoiceField({ isOpen, onClose, sequences }: DashboardVoi
           <div className="dashboard-voice-field__copy">
             <p className="dashboard-voice-field__status" data-stage={stage}>
               {stage === "submitting" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Mic className="h-4 w-4" />}
-              {stage === "ready"
-                ? "正在准备语音场"
-                : stage === "listening"
-                  ? "正在听…"
-                  : stage === "submitting"
-                    ? "正在提交到任务主链路"
-                    : stage === "completed"
-                      ? "语音内容已提交"
-                      : "语音暂未完成"}
+              {getDashboardVoiceStatusLabel(stage, submittedTaskStatus)}
             </p>
             <p className="dashboard-voice-field__subline" id={descriptionId}>
               {stage === "submitting"
                 ? "我正在把最终转写通过 agent.input.submit 送入任务入口。"
                 : stage === "completed"
-                  ? "语音内容已经进入正式任务链路，面板即将关闭。"
+                  ? submittedTaskStatus === "waiting_auth"
+                    ? (submittedMessage ?? "语音内容已经进入正式任务链路，接下来会打开安全页继续处理授权。")
+                    : submittedTaskId
+                      ? (submittedMessage ?? `语音内容已经进入任务 ${submittedTaskId}，接下来会打开任务详情继续承接。`)
+                      : "语音内容已经进入正式任务链路，接下来会打开任务页继续承接。"
                   : stage === "error"
                     ? errorMessage ?? "这次语音没有形成可提交内容。"
                     : "直接说出你的想法，停顿结束后会自动提交；也可以手动结束收音。"}

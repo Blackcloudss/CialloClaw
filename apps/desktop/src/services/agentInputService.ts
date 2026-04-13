@@ -59,11 +59,7 @@ export async function submitTextInput(input: SubmitTextInputParams) {
   }
 
   recordMirrorConversationStart(params);
-
-  const importRpcMethods = new Function("return import('../rpc/methods')") as () => Promise<{
-    submitInput: (request: AgentInputSubmitParams) => Promise<AgentInputSubmitResult>;
-  }>;
-  const rpcMethods = await importRpcMethods();
+  const rpcMethods = await import("../rpc/methods");
 
   try {
     const result = await rpcMethods.submitInput(params);
