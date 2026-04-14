@@ -29,6 +29,10 @@ export function isApprovalRequest(value: unknown): value is ApprovalRequest {
   );
 }
 
+export function isActiveApprovalRequest(value: ApprovalRequest): boolean {
+  return value.status === "pending";
+}
+
 export function isRecoveryPoint(value: unknown): value is RecoveryPoint {
   if (!value || typeof value !== "object") {
     return false;

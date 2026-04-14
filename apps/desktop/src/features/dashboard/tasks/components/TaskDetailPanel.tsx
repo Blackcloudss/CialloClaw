@@ -34,8 +34,7 @@ export function TaskDetailPanel({ detailData, detailErrorMessage, detailState, f
   const detailNoticeBody = isDetailLoading
     ? "当前先展示基础任务信息，时间线、产出和安全摘要正在从本地服务拉取。"
     : `${detailErrorMessage ?? "任务详情请求失败"}。当前先展示基础任务信息，你可以稍后重试。`;
-  const shouldDeferPendingAuthorizationSummary = detailData.source === "fallback" || detailState !== "ready";
-  const pendingAuthorizationSummary = shouldDeferPendingAuthorizationSummary ? "等待详情同步" : String(detail.security_summary.pending_authorizations);
+  const shouldDeferSecuritySummary = detailData.source === "fallback" || detailState !== "ready";
 
   return (
     <motion.section animate={{ opacity: 1, x: 0 }} className="task-detail-shell" initial={{ opacity: 0, x: 18 }} transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}>
@@ -169,34 +168,43 @@ export function TaskDetailPanel({ detailData, detailErrorMessage, detailState, f
                 </div>
               </section>
 
-              <section className="task-detail-card">
-                <div className="task-detail-card__header">
-                  <p className="task-detail-card__eyebrow">信任摘要</p>
-                  <h3 className="task-detail-card__title">风险与授权情况</h3>
-                </div>
-                <div className="task-detail-current-grid">
-                  <article className="task-detail-current-card">
-                    <ShieldAlert className="h-4 w-4" />
-                    <div>
-                      <p className="task-detail-current-card__label">风险状态</p>
-                      <p className="task-detail-current-card__text">{detail.security_summary.risk_level}</p>
-                    </div>
-                  </article>
-                  <article className="task-detail-current-card">
-                    <Clock3 className="h-4 w-4" />
-                    <div>
-                      <p className="task-detail-current-card__label">待授权数量</p>
-                      <p className="task-detail-current-card__text">{pendingAuthorizationSummary}</p>
-                    </div>
-                  </article>
-                  <article className="task-detail-current-card">
-                    <ShieldAlert className="h-4 w-4" />
-                    <div>
-                      <p className="task-detail-current-card__label">边界状态</p>
-                      <p className="task-detail-current-card__text">{detail.security_summary.security_status}</p>
-                    </div>
-                  </article>
-                  <article className="task-detail-current-card">
+              {shouldDeferSecuritySummary ? (
+                <section className="task-detail-card task-detail-card--notice">
+                  <div className="task-detail-card__header">
+                    <p className="task-detail-card__eyebrow">信任摘要</p>
+                    <h3 className="task-detail-card__title">等待安全详情</h3>
+                  </div>
+                  <p className="task-detail-ended-copy">等待详情同步后展示风险、授权与恢复点。</p>
+                </section>
+              ) : (
+                <section className="task-detail-card">
+                  <div className="task-detail-card__header">
+                    <p className="task-detail-card__eyebrow">信任摘要</p>
+                    <h3 className="task-detail-card__title">风险与授权情况</h3>
+                  </div>
+                  <div className="task-detail-current-grid">
+                    <article className="task-detail-current-card">
+                      <ShieldAlert className="h-4 w-4" />
+                      <div>
+                        <p className="task-detail-current-card__label">风险状态</p>
+                        <p className="task-detail-current-card__text">{detail.security_summary.risk_level}</p>
+                      </div>
+                    </article>
+                    <article className="task-detail-current-card">
+                      <Clock3 className="h-4 w-4" />
+                      <div>
+                        <p className="task-detail-current-card__label">待授权数量</p>
+                        <p className="task-detail-current-card__text">{detail.security_summary.pending_authorizations}</p>
+                      </div>
+                    </article>
+                    <article className="task-detail-current-card">
+                      <ShieldAlert className="h-4 w-4" />
+                      <div>
+                        <p className="task-detail-current-card__label">边界状态</p>
+                        <p className="task-detail-current-card__text">{detail.security_summary.security_status}</p>
+                      </div>
+                    </article>
+                    <article className="task-detail-current-card">
                       <FolderOutput className="h-4 w-4" />
                       <div>
                         <p className="task-detail-current-card__label">恢复点</p>
@@ -209,6 +217,7 @@ export function TaskDetailPanel({ detailData, detailErrorMessage, detailState, f
                     </article>
                   </div>
                 </section>
+              )}
             </>
           ) : (
             <>

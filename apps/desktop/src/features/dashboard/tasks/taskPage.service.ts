@@ -1,7 +1,7 @@
 import type { AgentTaskDetailGetResult, AgentTaskControlParams, RequestMeta, Task, TaskControlAction, TaskListGroup } from "@cialloclaw/protocol";
 import { RISK_LEVELS, SECURITY_STATUSES, TASK_STEP_STATUSES } from "@cialloclaw/protocol";
 import { controlTask, getTaskDetail, listTasks } from "@/rpc/methods";
-import { isApprovalRequest, isArtifact, isBinaryPendingAuthorizations, isMirrorReference, isRecoveryPoint, isTaskStep, normalizeArray, normalizeNullable } from "../shared/dashboardContractValidators";
+import { isActiveApprovalRequest, isApprovalRequest, isArtifact, isBinaryPendingAuthorizations, isMirrorReference, isRecoveryPoint, isTaskStep, normalizeArray, normalizeNullable } from "../shared/dashboardContractValidators";
 import { getMockTaskBuckets, getMockTaskDetail, getTaskExperience, runMockTaskControl } from "./taskPage.mock";
 import type { TaskBucketPageData, TaskBucketsData, TaskControlOutcome, TaskDetailData, TaskExperience, TaskListItem } from "./taskPage.types";
 
@@ -130,6 +130,14 @@ export function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): Age
 
   if (approvalRequest !== null && detail.security_summary.pending_authorizations !== 1) {
     throw new Error("task detail payload pending authorization summary does not match approval_request");
+  }
+
+  if (approvalRequest !== null && detail.task.status !== "waiting_auth") {
+    throw new Error("task detail payload approval_request requires task.status waiting_auth");
+  }
+
+  if (approvalRequest !== null && !isActiveApprovalRequest(approvalRequest)) {
+    throw new Error("task detail payload approval_request is not active pending");
   }
 
   if (approvalRequest !== null && approvalRequest.task_id !== taskId) {

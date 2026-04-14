@@ -575,14 +575,34 @@ test("task detail normalization enforces approval and restore-point task invaria
         ),
       /restore point|task_id/i,
     );
+
+    assert.throws(
+      () =>
+        service.normalizeTaskDetailResult(
+          createDetail({
+            task: createTask({ status: "processing" }),
+          }),
+        ),
+      /waiting_auth|approval/i,
+    );
+
+    assert.throws(
+      () =>
+        service.normalizeTaskDetailResult(
+          createDetail({
+            approval_request: createApprovalRequest({ status: "approved" }),
+          }),
+        ),
+      /active|pending|approval/i,
+    );
   });
 });
 
-test("TaskDetailPanel defers fallback auth summary copy until formal detail arrives", () => {
+test("TaskDetailPanel defers the entire fallback security summary until formal detail arrives", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
   assert.match(panelSource, /detailData\.source === "fallback" \|\| detailState !== "ready"/);
-  assert.match(panelSource, /等待详情同步/);
+  assert.match(panelSource, /等待详情同步后展示风险、授权与恢复点/);
 });
 
 test("dashboard validators read enum truth sources from protocol exports", () => {
