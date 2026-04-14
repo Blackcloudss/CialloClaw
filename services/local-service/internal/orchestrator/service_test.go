@@ -43,6 +43,17 @@ func (b failingExecutionBackend) RunCommand(_ context.Context, _ string, _ []str
 	return tools.CommandExecutionResult{}, b.err
 }
 
+type successfulExecutionBackend struct {
+	result tools.CommandExecutionResult
+}
+
+func (b successfulExecutionBackend) RunCommand(_ context.Context, _ string, _ []string, _ string) (tools.CommandExecutionResult, error) {
+	if b.result.ExitCode == 0 && b.result.Stdout == "" && b.result.Stderr == "" {
+		return tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}, nil
+	}
+	return b.result, nil
+}
+
 type failingCheckpointWriter struct {
 	err error
 }
@@ -1492,7 +1503,7 @@ func TestServiceSecurityRespondAllowOnceReturnsStructuredExecutionFailure(t *tes
 }
 
 func TestServiceSecurityRespondAllowOnceExecCommandCompletesAfterApproval(t *testing.T) {
-	service, workspaceRoot := newTestServiceWithExecution(t, "unused")
+	service, workspaceRoot := newTestServiceWithExecutionOptions(t, "unused", successfulExecutionBackend{result: tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}}, nil)
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		t.Fatalf("mkdir workspace root: %v", err)
 	}
