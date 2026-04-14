@@ -42,6 +42,7 @@ function loadTaskPageQueryModule() {
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskPage.query.js")) as {
       buildDashboardTaskBucketQueryKey: (dataMode: "rpc" | "mock", group: "unfinished" | "finished", limit: number) => unknown;
       buildDashboardTaskDetailQueryKey: (dataMode: "rpc" | "mock", taskId: string) => unknown;
+      getDashboardTaskSecurityRefreshPlan: (dataMode: "rpc" | "mock") => unknown;
       dashboardTaskBucketQueryPrefix: unknown;
       dashboardTaskDetailQueryPrefix: unknown;
     },
@@ -411,6 +412,7 @@ test("task page query helpers expose stable prefixes and keys", () => {
   const {
     buildDashboardTaskBucketQueryKey,
     buildDashboardTaskDetailQueryKey,
+    getDashboardTaskSecurityRefreshPlan,
     dashboardTaskBucketQueryPrefix,
     dashboardTaskDetailQueryPrefix,
   } = loadTaskPageQueryModule();
@@ -418,6 +420,27 @@ test("task page query helpers expose stable prefixes and keys", () => {
   assert.deepEqual(dashboardTaskDetailQueryPrefix, ["dashboard", "tasks", "detail"]);
   assert.deepEqual(buildDashboardTaskBucketQueryKey("rpc", "unfinished", 12), ["dashboard", "tasks", "bucket", "rpc", "unfinished", 12]);
   assert.deepEqual(buildDashboardTaskDetailQueryKey("mock", "task_dashboard_001"), ["dashboard", "tasks", "detail", "mock", "task_dashboard_001"]);
+  assert.deepEqual(getDashboardTaskSecurityRefreshPlan("rpc"), {
+    bucketQueryPrefix: ["dashboard", "tasks", "bucket", "rpc"],
+    detailQueryPrefix: ["dashboard", "tasks", "detail", "rpc"],
+    refetchOnMount: "always",
+  });
+});
+
+test("task and safety pages adopt the shared dashboard task helpers", () => {
+  const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+
+  assert.match(taskPageSource, /buildDashboardTaskBucketQueryKey/);
+  assert.match(taskPageSource, /buildDashboardTaskDetailQueryKey/);
+  assert.match(taskPageSource, /getDashboardTaskSecurityRefreshPlan/);
+  assert.match(taskPageSource, /buildDashboardSafetyNavigationState\(detailData\.detail\)/);
+
+  assert.match(securityAppSource, /readDashboardSafetyNavigationState/);
+  assert.match(securityAppSource, /resolveDashboardSafetyFocusTarget/);
+  assert.match(securityAppSource, /getDashboardTaskSecurityRefreshPlan/);
+  assert.match(securityAppSource, /useLocation\(/);
+  assert.match(securityAppSource, /useQueryClient\(/);
 });
 
 test("task detail normalization rejects string restore points in rpc mode and keeps null approval fallback", () => {

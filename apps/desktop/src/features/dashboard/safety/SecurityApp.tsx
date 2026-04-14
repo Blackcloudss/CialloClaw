@@ -9,7 +9,8 @@ import {
   type PointerEvent,
 } from "react";
 import { Badge, Box, Button, Flex, Heading, Text } from "@radix-ui/themes";
-import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowUpRight,
   History,
@@ -24,6 +25,7 @@ import type {
   ApprovalDecision,
   ApprovalPendingNotification,
   ApprovalRequest,
+  RecoveryPoint,
   RiskLevel,
   SecurityStatus,
   Task,
@@ -33,6 +35,11 @@ import { subscribeApprovalPending } from "@/rpc/subscriptions";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
 import {
+  readDashboardSafetyNavigationState,
+  resolveDashboardSafetyFocusTarget,
+  type DashboardSafetyNavigationState,
+} from "@/features/dashboard/shared/dashboardSafetyNavigation";
+import {
   getInitialSecurityModuleData,
   loadSecurityModuleData,
   loadSecurityModuleRpcData,
@@ -41,6 +48,7 @@ import {
   type SecurityRespondOutcome,
 } from "./securityService";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
+import { getDashboardTaskSecurityRefreshPlan } from "../tasks/taskPage.query";
 import "./securityPage.css";
 
 type SecurityCardKey = "status" | "restore" | "budget" | "governance" | `approval:${string}`;
@@ -408,6 +416,49 @@ function normalizeCardPositions(keys: SecurityCardKey[], targets: Record<string,
   return nextPositions;
 }
 
+function resolveActiveSafetyDetail(args: {
+  activeDetailKey: SecurityCardKey | null;
+  approvalLookup: Map<string, ApprovalRequest>;
+  approvalSnapshot: ApprovalRequest | null;
+  restorePointSnapshot: RecoveryPoint | null;
+  moduleData: SecurityModuleData;
+}) {
+  const { activeDetailKey, approvalLookup, approvalSnapshot, restorePointSnapshot, moduleData } = args;
+
+  if (activeDetailKey === "restore") {
+    const liveRestorePoint = moduleData.summary.latest_restore_point;
+    const resolvedRestorePoint =
+      restorePointSnapshot
+        ? liveRestorePoint && liveRestorePoint.recovery_point_id === restorePointSnapshot.recovery_point_id
+          ? liveRestorePoint
+          : restorePointSnapshot
+        : liveRestorePoint;
+
+    return {
+      approval: null,
+      restorePoint: resolvedRestorePoint,
+    };
+  }
+
+  if (!activeDetailKey?.startsWith("approval:")) {
+    return {
+      approval: null,
+      restorePoint: null,
+    };
+  }
+
+  const liveApproval = approvalLookup.get(activeDetailKey) ?? null;
+  const resolvedApproval =
+    liveApproval && approvalSnapshot && liveApproval.approval_id === approvalSnapshot.approval_id
+      ? liveApproval
+      : liveApproval ?? approvalSnapshot;
+
+  return {
+    approval: resolvedApproval,
+    restorePoint: null,
+  };
+}
+
 function getCardPreview(
   key: SecurityCardKey,
   moduleData: SecurityModuleData,
@@ -415,6 +466,8 @@ function getCardPreview(
   sourceCopy: ReturnType<typeof getSourceCopy>,
   feedback: string | null,
   lastResolvedApproval: SecurityRespondOutcome | null,
+  activeApprovalOverride?: ApprovalRequest | null,
+  activeRestorePointOverride?: RecoveryPoint | null,
 ): SecurityCardPreview {
   if (key === "status") {
     return {
@@ -433,7 +486,7 @@ function getCardPreview(
   }
 
   if (key === "restore") {
-    const restorePoint = moduleData.summary.latest_restore_point;
+    const restorePoint = activeRestorePointOverride ?? moduleData.summary.latest_restore_point;
 
     return {
       eyebrow: "restore point",
@@ -479,7 +532,7 @@ function getCardPreview(
     };
   }
 
-  const approval = approvalLookup.get(key);
+  const approval = activeApprovalOverride ?? approvalLookup.get(key);
 
   if (!approval) {
     return {
@@ -507,12 +560,16 @@ function getCardPreview(
 }
 
 export function SecurityApp() {
+  const location = useLocation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [dataMode, setDataMode] = useState<"rpc" | "mock">(() => loadDashboardDataMode("safety"));
   const [moduleData, setModuleData] = useState<SecurityModuleData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeApprovalId, setActiveApprovalId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [approvalSnapshot, setApprovalSnapshot] = useState<ApprovalRequest | null>(null);
+  const [restorePointSnapshot, setRestorePointSnapshot] = useState<RecoveryPoint | null>(null);
   const [lastResolvedApproval, setLastResolvedApproval] = useState<SecurityRespondOutcome | null>(null);
   const [rememberRuleByApprovalId, setRememberRuleByApprovalId] = useState<Record<string, boolean>>({});
   const [titleMotionTick, setTitleMotionTick] = useState(0);
@@ -535,6 +592,9 @@ export function SecurityApp() {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
   const refreshSequenceRef = useRef(0);
+  const navigationStateRef = useRef<DashboardSafetyNavigationState | null>(readDashboardSafetyNavigationState(location.state));
+  const navigationStateConsumedRef = useRef(false);
+  const taskRefreshPlan = useMemo(() => getDashboardTaskSecurityRefreshPlan(dataMode), [dataMode]);
 
   const queueRpcRefresh = useCallback(() => {
     if (dataMode !== "rpc") {
@@ -560,6 +620,14 @@ export function SecurityApp() {
   useEffect(() => {
     saveDashboardDataMode("safety", dataMode);
   }, [dataMode]);
+
+  useEffect(() => {
+    if (!location.state) {
+      return;
+    }
+
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.pathname, location.state, navigate]);
 
   useEffect(() => {
     const nextSequence = ++refreshSequenceRef.current;
@@ -624,6 +692,33 @@ export function SecurityApp() {
   const bringCardToFront = useCallback((key: SecurityCardKey) => {
     setCardStack((currentStack) => [...currentStack.filter((item) => item !== key), key]);
   }, []);
+
+  useEffect(() => {
+    if (!moduleData || navigationStateConsumedRef.current) {
+      return;
+    }
+
+    const focusTarget = resolveDashboardSafetyFocusTarget({
+      livePending: moduleData.pending,
+      liveRestorePoint: moduleData.summary.latest_restore_point,
+      state: navigationStateRef.current,
+    });
+
+    setApprovalSnapshot(focusTarget.approvalSnapshot);
+    setRestorePointSnapshot(focusTarget.restorePointSnapshot);
+
+    if (focusTarget.activeDetailKey) {
+      setActiveDetailKey(focusTarget.activeDetailKey);
+      bringCardToFront(focusTarget.activeDetailKey);
+    }
+
+    if (focusTarget.feedback) {
+      setFeedback((current) => current ?? focusTarget.feedback);
+    }
+
+    navigationStateConsumedRef.current = true;
+    navigationStateRef.current = null;
+  }, [bringCardToFront, moduleData]);
 
   const handleTitleClick = useCallback(() => {
     setTitleMotionTick((currentTick) => currentTick + 1);
@@ -766,6 +861,8 @@ export function SecurityApp() {
       setFeedback(
         `${result.response.bubble_message?.text ?? "已更新安全审批状态。"} · ${result.response.authorization_record.decision} · remember_rule ${result.response.authorization_record.remember_rule ? "on" : "off"} · task ${result.response.task.task_id} / ${result.response.task.status} · ${formatImpactScopeSummary(result.response.impact_scope)}`,
       );
+      void queryClient.invalidateQueries({ queryKey: taskRefreshPlan.bucketQueryPrefix });
+      void queryClient.invalidateQueries({ queryKey: taskRefreshPlan.detailQueryPrefix });
 
       if (moduleData.source === "rpc") {
         queueRpcRefresh();
@@ -910,9 +1007,7 @@ export function SecurityApp() {
     </div>
   );
 
-  const renderRestoreDetail = () => {
-    const restorePoint = moduleData.summary.latest_restore_point;
-
+  const renderRestoreDetail = (restorePoint: RecoveryPoint | null) => {
     if (!restorePoint) {
       return <p className="security-page__empty-state">当前没有可展示的恢复点。</p>;
     }
@@ -1195,13 +1290,13 @@ export function SecurityApp() {
     );
   };
 
-  const renderDetailBody = (key: SecurityCardKey) => {
+  const renderDetailBody = (key: SecurityCardKey, resolvedApproval: ApprovalRequest | null, resolvedRestorePoint: RecoveryPoint | null) => {
     if (key === "status") {
       return renderStatusDetail();
     }
 
     if (key === "restore") {
-      return renderRestoreDetail();
+      return renderRestoreDetail(resolvedRestorePoint);
     }
 
     if (key === "budget") {
@@ -1212,7 +1307,7 @@ export function SecurityApp() {
       return renderGovernanceDetail();
     }
 
-    return renderApprovalDetail(approvalLookup.get(key));
+    return renderApprovalDetail(resolvedApproval ?? approvalLookup.get(key) ?? undefined);
   };
 
   const renderDetailOverlay = () => {
@@ -1220,7 +1315,23 @@ export function SecurityApp() {
       return null;
     }
 
-    const preview = getCardPreview(activeDetailKey, moduleData, approvalLookup, resolvedSourceCopy, feedback, lastResolvedApproval);
+    const resolvedDetail = resolveActiveSafetyDetail({
+      activeDetailKey,
+      approvalLookup,
+      approvalSnapshot,
+      moduleData,
+      restorePointSnapshot,
+    });
+    const preview = getCardPreview(
+      activeDetailKey,
+      moduleData,
+      approvalLookup,
+      resolvedSourceCopy,
+      feedback,
+      lastResolvedApproval,
+      resolvedDetail.approval,
+      resolvedDetail.restorePoint,
+    );
 
     return (
       <div className="security-page__detail-layer" onClick={closeDetail}>
@@ -1252,7 +1363,7 @@ export function SecurityApp() {
               </div>
             </div>
 
-            <div className="security-page__detail-body">{renderDetailBody(activeDetailKey)}</div>
+            <div className="security-page__detail-body">{renderDetailBody(activeDetailKey, resolvedDetail.approval, resolvedDetail.restorePoint)}</div>
           </section>
         </div>
       </div>

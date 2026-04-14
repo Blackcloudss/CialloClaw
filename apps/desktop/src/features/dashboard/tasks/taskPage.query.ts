@@ -8,3 +8,11 @@ export function buildDashboardTaskBucketQueryKey(dataMode: "rpc" | "mock", group
 export function buildDashboardTaskDetailQueryKey(dataMode: "rpc" | "mock", taskId: string) {
   return [...dashboardTaskDetailQueryPrefix, dataMode, taskId] as const;
 }
+
+export function getDashboardTaskSecurityRefreshPlan(dataMode: "rpc" | "mock") {
+  return {
+    bucketQueryPrefix: [...dashboardTaskBucketQueryPrefix, dataMode] as const,
+    detailQueryPrefix: [...dashboardTaskDetailQueryPrefix, dataMode] as const,
+    refetchOnMount: "always" as const,
+  };
+}
