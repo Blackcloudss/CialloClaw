@@ -583,6 +583,64 @@ func TestAssessGovernanceExecCommandUsesWorkspaceTargetWithoutRecoveryPoint(t *t
 	}
 }
 
+func TestAssessGovernancePageReadUsesURLTarget(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_page_read_auth",
+		RunID:  "run_page_read_auth",
+		Intent: map[string]any{"name": "page_read", "arguments": map[string]any{
+			"url":                   "https://example.com/demo",
+			"require_authorization": true,
+		}},
+		DeliveryType: "bubble",
+		ResultTitle:  "网页读取结果",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected page_read governance path to be handled")
+	}
+	if assessment.OperationName != "page_read" || assessment.TargetObject != "https://example.com/demo" {
+		t.Fatalf("unexpected page_read assessment: %+v", assessment)
+	}
+	if !assessment.ApprovalRequired {
+		t.Fatalf("expected page_read to require approval when flagged, got %+v", assessment)
+	}
+	webpages, _ := assessment.ImpactScope["webpages"].([]string)
+	if len(webpages) != 1 || webpages[0] != "https://example.com/demo" {
+		t.Fatalf("expected webpage impact scope to include target URL, got %+v", assessment.ImpactScope)
+	}
+}
+
+func TestAssessGovernancePageSearchPreservesQueryInput(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_page_search_auth",
+		RunID:  "run_page_search_auth",
+		Intent: map[string]any{"name": "page_search", "arguments": map[string]any{
+			"url":   "https://example.com/search",
+			"query": "alpha",
+			"limit": 2,
+		}},
+		DeliveryType: "bubble",
+		ResultTitle:  "网页搜索结果",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected page_search governance path to be handled")
+	}
+	if assessment.OperationName != "page_search" || assessment.TargetObject != "https://example.com/search" {
+		t.Fatalf("unexpected page_search assessment: %+v", assessment)
+	}
+	webpages, _ := assessment.ImpactScope["webpages"].([]string)
+	if len(webpages) != 1 || webpages[0] != "https://example.com/search" {
+		t.Fatalf("expected webpage impact scope to include search URL, got %+v", assessment.ImpactScope)
+	}
+}
+
 type stubExecutionCapability struct {
 	result tools.CommandExecutionResult
 	err    error

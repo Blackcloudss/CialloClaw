@@ -3,6 +3,9 @@ package sidecarclient
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +34,15 @@ func (s *stubWorkerInvoker) Invoke(ctx context.Context, request sidecarRequest) 
 		return sidecarResponse{}, s.err
 	}
 	return s.response, nil
+}
+
+func writeTempWorkerScript(t *testing.T, source string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "worker.js")
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write temp worker script: %v", err)
+	}
+	return path
 }
 
 func TestPlaywrightSidecarRuntimeLifecycle(t *testing.T) {
@@ -134,7 +146,7 @@ func TestPlaywrightSidecarRuntimeStartFailsHealthCheck(t *testing.T) {
 	}
 }
 
-func TestPlaywrightSidecarRuntimeFailureClearsReadyState(t *testing.T) {
+func TestPlaywrightSidecarRuntimeRequestFailureKeepsReadyState(t *testing.T) {
 	osCapability := platform.NewLocalOSCapabilityAdapter()
 	runtime, err := NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
 	if err != nil {
@@ -144,20 +156,43 @@ func TestPlaywrightSidecarRuntimeFailureClearsReadyState(t *testing.T) {
 	if err := runtime.Start(); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
-	runtime.invoker = &stubWorkerInvoker{err: errors.New("worker crashed")}
+	runtime.invoker = &stubWorkerInvoker{err: sidecarRequestError{code: "http_404", message: "page not found"}}
+	_, err = runtime.Client().ReadPage(t.Context(), "https://example.com")
+	if !errors.Is(err, tools.ErrPlaywrightSidecarFailed) {
+		t.Fatalf("expected wrapped sidecar failure, got %v", err)
+	}
+	if !runtime.Ready() {
+		t.Fatal("expected runtime to stay ready after request failure")
+	}
+	if !osCapability.HasNamedPipe(runtime.PipeName()) {
+		t.Fatal("expected named pipe to stay registered after request failure")
+	}
+}
+
+func TestPlaywrightSidecarRuntimeTransportFailureClearsReadyState(t *testing.T) {
+	osCapability := platform.NewLocalOSCapabilityAdapter()
+	runtime, err := NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+	if err != nil {
+		t.Fatalf("NewPlaywrightSidecarRuntime returned error: %v", err)
+	}
+	runtime.invoker = &stubWorkerInvoker{response: sidecarResponse{OK: true, Result: map[string]any{"status": "ok"}}}
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	runtime.invoker = &stubWorkerInvoker{err: sidecarTransportError{err: errors.New("worker crashed")}}
 	_, err = runtime.Client().ReadPage(t.Context(), "https://example.com")
 	if !errors.Is(err, tools.ErrPlaywrightSidecarFailed) {
 		t.Fatalf("expected wrapped sidecar failure, got %v", err)
 	}
 	if runtime.Ready() {
-		t.Fatal("expected runtime to leave ready state after failure")
+		t.Fatal("expected runtime to leave ready state after transport failure")
 	}
 	if osCapability.HasNamedPipe(runtime.PipeName()) {
-		t.Fatal("expected named pipe to be closed after failure")
+		t.Fatal("expected named pipe to be closed after transport failure")
 	}
 }
 
-func TestPlaywrightSidecarRuntimeInvokeTimeout(t *testing.T) {
+func TestPlaywrightSidecarRuntimeInvokeTimeoutKeepsReadyState(t *testing.T) {
 	osCapability := platform.NewLocalOSCapabilityAdapter()
 	runtime, err := NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
 	if err != nil {
@@ -174,7 +209,78 @@ func TestPlaywrightSidecarRuntimeInvokeTimeout(t *testing.T) {
 	if !errors.Is(err, tools.ErrPlaywrightSidecarFailed) {
 		t.Fatalf("expected sidecar failure on timeout, got %v", err)
 	}
-	if runtime.Ready() {
-		t.Fatal("expected runtime to leave ready state after timeout")
+	if !runtime.Ready() {
+		t.Fatal("expected runtime to stay ready after request timeout")
+	}
+}
+
+func TestResolveRelativePathFromRootsFindsWorkerEntry(t *testing.T) {
+	root := t.TempDir()
+	entryPath := filepath.Join(root, "workers", "playwright-worker", "src", "index.js")
+	if err := os.MkdirAll(filepath.Dir(entryPath), 0o755); err != nil {
+		t.Fatalf("mkdir worker path: %v", err)
+	}
+	if err := os.WriteFile(entryPath, []byte("console.log('ok')\n"), 0o644); err != nil {
+		t.Fatalf("write worker entry: %v", err)
+	}
+	resolved, err := resolveRelativePathFromRoots(playwrightWorkerRelativePath, []string{filepath.Join(root, "services", "local-service")})
+	if err != nil {
+		t.Fatalf("resolveRelativePathFromRoots returned error: %v", err)
+	}
+	if resolved != entryPath {
+		t.Fatalf("expected resolved entry %q, got %q", entryPath, resolved)
+	}
+	if _, err := resolveRelativePathFromRoots(playwrightWorkerRelativePath, []string{filepath.Join(t.TempDir(), "missing")}); err == nil {
+		t.Fatal("expected missing worker entry lookup to fail")
+	}
+}
+
+func TestCommandWorkerInvokerInvokeReturnsStructuredRequestError(t *testing.T) {
+	entryPath := writeTempWorkerScript(t, `process.stdin.resume(); process.stdin.on("end", () => { process.stdout.write(JSON.stringify({ ok: false, error: { code: "http_404", message: "page not found" } })); process.exitCode = 1; });`)
+	invoker := newCommandWorkerInvoker(entryPath)
+	response, err := invoker.Invoke(context.Background(), sidecarRequest{Action: "page_read", URL: "https://example.com"})
+	if response.OK {
+		t.Fatalf("expected request error response, got %+v", response)
+	}
+	var requestErr sidecarRequestError
+	if !errors.As(err, &requestErr) {
+		t.Fatalf("expected request error, got %v", err)
+	}
+	if requestErr.code != "http_404" {
+		t.Fatalf("expected request error code http_404, got %+v", requestErr)
+	}
+	if shouldMarkRuntimeFailure(err) {
+		t.Fatal("expected request error not to mark runtime failure")
+	}
+}
+
+func TestCommandWorkerInvokerInvokeReturnsTransportErrorForInvalidOutput(t *testing.T) {
+	entryPath := writeTempWorkerScript(t, `process.stderr.write("crashed\n"); process.stdout.write("not-json"); process.exitCode = 1;`)
+	invoker := newCommandWorkerInvoker(entryPath)
+	_, err := invoker.Invoke(context.Background(), sidecarRequest{Action: "health"})
+	var transportErr sidecarTransportError
+	if !errors.As(err, &transportErr) {
+		t.Fatalf("expected transport error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "crashed") {
+		t.Fatalf("expected stderr in transport error, got %v", err)
+	}
+	if !shouldMarkRuntimeFailure(err) {
+		t.Fatal("expected transport error to mark runtime failure")
+	}
+}
+
+func TestCommandWorkerInvokerInvokeTimeoutReturnsRequestError(t *testing.T) {
+	entryPath := writeTempWorkerScript(t, `setTimeout(() => { process.stdout.write(JSON.stringify({ ok: true, result: { status: "late" } })); }, 200);`)
+	invoker := newCommandWorkerInvoker(entryPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err := invoker.Invoke(ctx, sidecarRequest{Action: "health"})
+	var requestErr sidecarRequestError
+	if !errors.As(err, &requestErr) {
+		t.Fatalf("expected timeout request error, got %v", err)
+	}
+	if requestErr.code != "timeout" {
+		t.Fatalf("expected timeout request error code, got %+v", requestErr)
 	}
 }

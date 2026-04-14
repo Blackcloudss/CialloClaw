@@ -1198,6 +1198,21 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 				if len(input) > 0 {
 					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
+			case "page_read":
+				urlValue := stringValue(args, "url", "")
+				if urlValue != "" {
+					return intentName, map[string]any{"url": urlValue}, s.toolExecutionContext(s.workspace, request), true, nil
+				}
+			case "page_search":
+				urlValue := stringValue(args, "url", "")
+				queryValue := stringValue(args, "query", "")
+				if urlValue != "" && queryValue != "" {
+					input := map[string]any{"url": urlValue, "query": queryValue}
+					if limit, ok := args["limit"]; ok {
+						input["limit"] = limit
+					}
+					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
+				}
 			}
 		}
 	}
@@ -1273,6 +1288,8 @@ func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 		return stringValue(toolInput, "path", "")
 	case "exec_command":
 		return firstNonEmpty(stringValue(toolInput, "working_dir", ""), execCtx.WorkspacePath)
+	case "page_read", "page_search":
+		return stringValue(toolInput, "url", "")
 	default:
 		return stringValue(toolInput, "path", "")
 	}

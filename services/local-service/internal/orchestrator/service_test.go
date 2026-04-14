@@ -3339,6 +3339,51 @@ func TestServiceStartTaskWithExecutorDeliversPageReadBubble(t *testing.T) {
 	}
 }
 
+func TestServiceStartTaskWithExecutorDeliversPageSearchBubble(t *testing.T) {
+	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, stubPlaywrightClient{searchResult: tools.BrowserPageSearchResult{
+		Matches:    []string{"Keyword beta lives here"},
+		MatchCount: 1,
+		Source:     "playwright_sidecar",
+	}})
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_page_search",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请搜索这个网页",
+		},
+		"intent": map[string]any{
+			"name": "page_search",
+			"arguments": map[string]any{
+				"url":   "https://example.com",
+				"query": "beta",
+				"limit": 2,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	deliveryResult := result["delivery_result"].(map[string]any)
+	if deliveryResult["type"] != "bubble" {
+		t.Fatalf("expected bubble delivery result, got %+v", deliveryResult)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if !strings.Contains(bubble["text"].(string), "关键词") {
+		t.Fatalf("expected page_search bubble summary, got %+v", bubble)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LatestToolCall["tool_name"] != "page_search" {
+		t.Fatalf("expected runtime task to record page_search tool call, got %+v", record.LatestToolCall)
+	}
+}
+
 func TestServiceStartTaskWithExecutorPageReadFailureUsesUnifiedError(t *testing.T) {
 	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, stubPlaywrightClient{err: tools.ErrPlaywrightSidecarFailed})
 

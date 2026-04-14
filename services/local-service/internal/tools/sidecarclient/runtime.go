@@ -1,12 +1,15 @@
 package sidecarclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	runtimesrc "runtime"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +21,7 @@ import (
 
 const sidecarHealthTimeout = 5 * time.Second
 const sidecarDefaultTimeout = 20 * time.Second
+const playwrightWorkerRelativePath = "workers/playwright-worker/src/index.js"
 
 type workerInvoker interface {
 	Invoke(ctx context.Context, request sidecarRequest) (sidecarResponse, error)
@@ -42,16 +46,46 @@ type sidecarErrorBody struct {
 }
 
 type commandWorkerInvoker struct {
-	workdir string
-	command string
-	args    []string
+	entryPath string
+	command   string
+	args      []string
 }
 
-func newCommandWorkerInvoker(workdir string) commandWorkerInvoker {
+type sidecarTransportError struct {
+	err error
+}
+
+func (e sidecarTransportError) Error() string {
+	if e.err == nil {
+		return "sidecar transport failed"
+	}
+	return e.err.Error()
+}
+
+func (e sidecarTransportError) Unwrap() error {
+	return e.err
+}
+
+type sidecarRequestError struct {
+	code    string
+	message string
+}
+
+func (e sidecarRequestError) Error() string {
+	if strings.TrimSpace(e.message) != "" {
+		return strings.TrimSpace(e.message)
+	}
+	if strings.TrimSpace(e.code) != "" {
+		return strings.TrimSpace(e.code)
+	}
+	return "sidecar request failed"
+}
+
+func newCommandWorkerInvoker(entryPath string) commandWorkerInvoker {
 	return commandWorkerInvoker{
-		workdir: workdir,
-		command: "node",
-		args:    []string{"workers/playwright-worker/src/index.js"},
+		entryPath: entryPath,
+		command:   "node",
+		args:      []string{entryPath},
 	}
 }
 
@@ -60,31 +94,33 @@ func (i commandWorkerInvoker) Invoke(ctx context.Context, request sidecarRequest
 	if err != nil {
 		return sidecarResponse{}, err
 	}
+	if strings.TrimSpace(i.entryPath) == "" {
+		return sidecarResponse{}, sidecarTransportError{err: errors.New("worker entry path is required")}
+	}
 	cmd := exec.CommandContext(ctx, i.command, i.args...)
-	if strings.TrimSpace(i.workdir) != "" {
-		cmd.Dir = i.workdir
-	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	cmd.Stdin = strings.NewReader(string(payload))
-	output, err := cmd.Output()
+	err = cmd.Run()
+	response, decodeErr := decodeSidecarResponse(stdout.Bytes())
+	if decodeErr == nil {
+		if !response.OK {
+			return response, sidecarRequestError{code: stringValue(responseErrorMap(response.Error), "code"), message: firstNonEmptyString(stringValue(responseErrorMap(response.Error), "message"), strings.TrimSpace(stderr.String()))}
+		}
+		if err == nil {
+			return response, nil
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return sidecarResponse{}, sidecarRequestError{code: "timeout", message: context.DeadlineExceeded.Error()}
+	}
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			stderr := strings.TrimSpace(string(exitErr.Stderr))
-			if stderr != "" {
-				return sidecarResponse{}, fmt.Errorf("worker command failed: %s", stderr)
-			}
-		}
-		return sidecarResponse{}, err
+		return sidecarResponse{}, sidecarTransportError{err: commandWorkerError(err, stderr.String())}
 	}
-	var response sidecarResponse
-	if err := json.Unmarshal(output, &response); err != nil {
-		return sidecarResponse{}, fmt.Errorf("decode worker response: %w", err)
-	}
-	if !response.OK {
-		if response.Error != nil && strings.TrimSpace(response.Error.Message) != "" {
-			return sidecarResponse{}, fmt.Errorf("worker error: %s", response.Error.Message)
-		}
-		return sidecarResponse{}, errors.New("worker returned failure response")
+	if decodeErr != nil {
+		return sidecarResponse{}, sidecarTransportError{err: fmt.Errorf("decode worker response: %w", decodeErr)}
 	}
 	return response, nil
 }
@@ -99,7 +135,9 @@ func (c runtimePlaywrightClient) ReadPage(ctx context.Context, url string) (tool
 	}
 	response, err := c.runtime.invoke(ctx, sidecarRequest{Action: "page_read", URL: url})
 	if err != nil {
-		_ = c.runtime.markFailure()
+		if shouldMarkRuntimeFailure(err) {
+			_ = c.runtime.markFailure()
+		}
 		return tools.BrowserPageReadResult{}, fmt.Errorf("%w: %v", tools.ErrPlaywrightSidecarFailed, err)
 	}
 	return tools.BrowserPageReadResult{
@@ -118,7 +156,9 @@ func (c runtimePlaywrightClient) SearchPage(ctx context.Context, url, query stri
 	}
 	response, err := c.runtime.invoke(ctx, sidecarRequest{Action: "page_search", URL: url, Query: query, Limit: limit})
 	if err != nil {
-		_ = c.runtime.markFailure()
+		if shouldMarkRuntimeFailure(err) {
+			_ = c.runtime.markFailure()
+		}
 		return tools.BrowserPageSearchResult{}, fmt.Errorf("%w: %v", tools.ErrPlaywrightSidecarFailed, err)
 	}
 	return tools.BrowserPageSearchResult{
@@ -152,14 +192,14 @@ func NewPlaywrightSidecarRuntime(pluginService *plugin.Service, osCapability pla
 	if !ok {
 		return nil, errors.New("playwright sidecar not declared")
 	}
-	workdir, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	entryPath, err := resolveWorkerEntryPath()
 	if err != nil {
 		return nil, err
 	}
 	runtime := &PlaywrightSidecarRuntime{
 		spec:    spec,
 		os:      osCapability,
-		invoker: newCommandWorkerInvoker(workdir),
+		invoker: newCommandWorkerInvoker(entryPath),
 	}
 	runtime.client = runtimePlaywrightClient{runtime: runtime}
 	return runtime, nil
@@ -233,14 +273,7 @@ func (r *PlaywrightSidecarRuntime) invoke(ctx context.Context, request sidecarRe
 		defer cancel()
 		ctx = boundedCtx
 	}
-	response, err := r.invoker.Invoke(ctx, request)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return sidecarResponse{}, fmt.Errorf("timeout: %w", context.DeadlineExceeded)
-		}
-		return sidecarResponse{}, err
-	}
-	return response, nil
+	return r.invoker.Invoke(ctx, request)
 }
 
 func (r *PlaywrightSidecarRuntime) markFailure() error {
@@ -293,6 +326,92 @@ func stringSliceValue(values map[string]any, key string) []string {
 		return append([]string(nil), typed...)
 	}
 	return nil
+}
+
+func resolveWorkerEntryPath() (string, error) {
+	return resolveRelativePathFromRoots(playwrightWorkerRelativePath, workerSearchRoots())
+}
+
+func workerSearchRoots() []string {
+	roots := make([]string, 0, 3)
+	if exePath, err := os.Executable(); err == nil && strings.TrimSpace(exePath) != "" {
+		roots = append(roots, filepath.Dir(exePath))
+	}
+	if _, file, _, ok := runtimesrc.Caller(0); ok && strings.TrimSpace(file) != "" {
+		roots = append(roots, filepath.Dir(file))
+	}
+	if workingDir, err := os.Getwd(); err == nil && strings.TrimSpace(workingDir) != "" {
+		roots = append(roots, workingDir)
+	}
+	return roots
+}
+
+func resolveRelativePathFromRoots(relativePath string, roots []string) (string, error) {
+	seen := make(map[string]struct{})
+	for _, root := range roots {
+		candidate, ok := searchUpwardsForRelativePath(root, relativePath, seen)
+		if ok {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("playwright worker entry not found: %s", relativePath)
+}
+
+func searchUpwardsForRelativePath(start, relativePath string, seen map[string]struct{}) (string, bool) {
+	if strings.TrimSpace(start) == "" {
+		return "", false
+	}
+	current := filepath.Clean(start)
+	for {
+		if _, ok := seen[current]; ok {
+			return "", false
+		}
+		seen[current] = struct{}{}
+		candidate := filepath.Join(current, relativePath)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", false
+		}
+		current = parent
+	}
+}
+
+func decodeSidecarResponse(payload []byte) (sidecarResponse, error) {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 {
+		return sidecarResponse{}, errors.New("empty worker response")
+	}
+	var response sidecarResponse
+	if err := json.Unmarshal(trimmed, &response); err != nil {
+		return sidecarResponse{}, err
+	}
+	return response, nil
+}
+
+func responseErrorMap(errBody *sidecarErrorBody) map[string]any {
+	if errBody == nil {
+		return nil
+	}
+	return map[string]any{
+		"code":    errBody.Code,
+		"message": errBody.Message,
+	}
+}
+
+func commandWorkerError(err error, stderr string) error {
+	trimmed := strings.TrimSpace(stderr)
+	if trimmed != "" {
+		return fmt.Errorf("worker command failed: %s", trimmed)
+	}
+	return err
+}
+
+func shouldMarkRuntimeFailure(err error) bool {
+	var transportErr sidecarTransportError
+	return errors.As(err, &transportErr)
 }
 
 func sidecarPipeName(name string) string {
