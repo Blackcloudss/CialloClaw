@@ -12,7 +12,7 @@ import type {
 } from "@cialloclaw/protocol";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { getSecuritySummaryDetailed, listSecurityPendingDetailed, respondSecurityDetailed } from "@/rpc/methods";
-import { buildMockRespondResult, securityPendingMock, securitySummaryMock } from "./securityModuleMock";
+import { securityPendingMock, securitySummaryMock } from "./securityModuleMock";
 
 export type SecurityModuleSource = "rpc" | "mock";
 
@@ -137,14 +137,8 @@ export async function respondToApproval(
     };
   } catch (error) {
     if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback("security approval response", error);
-      return {
-        response: buildMockRespondResult(approval.approval_id, approval.task_id, decision, rememberRule),
-        rpcContext: {
-          serverTime: null,
-          warnings: [],
-        },
-      };
+      logRpcMockFallback("security approval response blocked", error);
+      throw new Error("JSON-RPC 当前不可用，安全审批未提交。请恢复连接后重试。");
     }
 
     throw error;

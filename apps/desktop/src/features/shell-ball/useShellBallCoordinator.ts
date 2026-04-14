@@ -261,6 +261,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const previousVisibleBubbleCountRef = useRef(visibleBubbleCountRef.current);
   const detachedPinnedBubbleIdsRef = useRef(new Set<string>());
   const deliveryReadyBubbleKeysRef = useRef(new Set<string>());
+  const shellBallTaskIdsRef = useRef(new Set<string>());
   const helperWindowsVisibleRef = useRef(input.helperWindowsVisible ?? true);
   const regionActiveRef = useRef(false);
   const bubbleHoveredRef = useRef(false);
@@ -389,6 +390,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         },
         source: "floating_ball",
       });
+      shellBallTaskIdsRef.current.add(result.task.task_id);
 
       syncShellBallVisualStateFromTaskStatus(result.task.status);
 
@@ -515,6 +517,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
   useEffect(() => {
     return subscribeDeliveryReady((payload) => {
+      if (!shellBallTaskIdsRef.current.has(payload.task_id)) {
+        return;
+      }
+
       const bubbleText = payload.delivery_result.preview_text.trim() || payload.delivery_result.title;
       const bubbleKey = `${payload.task_id}:${payload.delivery_result.type}:${bubbleText}`;
 
@@ -707,6 +713,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
           const result = await handlersRef.current.onSubmitText();
           if (isShellBallInputSubmitResult(result)) {
+            shellBallTaskIdsRef.current.add(result.task.task_id);
             setBubbleItems((currentItems) =>
               sortShellBallBubbleItemsByTimestamp([
                 ...currentItems,
@@ -772,6 +779,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         }
 
         syncShellBallVisualStateFromTaskStatus(result.task.status);
+        shellBallTaskIdsRef.current.add(result.task.task_id);
 
         setBubbleItems((currentItems) =>
           sortShellBallBubbleItemsByTimestamp([

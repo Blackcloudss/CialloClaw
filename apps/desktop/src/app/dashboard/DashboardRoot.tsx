@@ -11,7 +11,7 @@ import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/fe
 import { TasksPage } from "@/features/dashboard/tasks/TasksPage";
 import { cn } from "@/utils/cn";
 import { DashboardHome } from "./DashboardHome";
-import { subscribeApprovalPending, subscribeDeliveryReady } from "@/rpc/subscriptions";
+import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import "./dashboard.css";
 
 function useDashboardDomainExpansion() {
@@ -91,6 +91,10 @@ function DashboardRoutes() {
   });
 
   useEffect(() => {
+    const clearTaskSubscription = subscribeTaskUpdated(() => {
+      void queryClient.invalidateQueries({ queryKey: ["dashboard", "home"] });
+    });
+
     const clearApprovalSubscription = subscribeApprovalPending(() => {
       void queryClient.invalidateQueries({ queryKey: ["dashboard", "home"] });
     });
@@ -100,6 +104,7 @@ function DashboardRoutes() {
     });
 
     return () => {
+      clearTaskSubscription();
       clearApprovalSubscription();
       clearDeliverySubscription();
     };

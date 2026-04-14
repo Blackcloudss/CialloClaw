@@ -34,8 +34,6 @@ import type {
   DashboardVoiceSequence,
 } from "./dashboardHome.types";
 
-const DASHBOARD_HOME_RPC_TIMEOUT_MS = 2_500;
-
 const dashboardModuleLabels: Record<DashboardHomeModuleKey, string> = {
   memory: "镜子",
   notes: "便签",
@@ -80,15 +78,6 @@ function createRequestMeta(scope: string): RequestMeta {
     client_time: new Date().toISOString(),
     trace_id: `trace_${scope}_${Date.now()}`,
   };
-}
-
-async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      window.setTimeout(() => reject(new Error(`${label} request timed out`)), DASHBOARD_HOME_RPC_TIMEOUT_MS);
-    }),
-  ]);
 }
 
 function cloneStateData(state: DashboardHomeStateData): DashboardHomeStateData {
@@ -696,58 +685,40 @@ function buildDashboardHomeData(input: {
 export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
   try {
     const [overview, tasksModule, notesModule, memoryModule, safetyModule, recommendations] = await Promise.all([
-      withTimeout(
-        getDashboardOverview({
-          focus_mode: false,
-          include: ["focus_summary", "trust_summary", "quick_actions", "high_value_signal"],
-          request_meta: createRequestMeta("dashboard_overview"),
-        }),
-        "dashboard overview",
-      ),
-      withTimeout(
-        getDashboardModule({
-          module: "tasks",
-          request_meta: createRequestMeta("dashboard_module_tasks"),
-          tab: dashboardModuleTabs.tasks,
-        }),
-        "dashboard module tasks",
-      ),
-      withTimeout(
-        getDashboardModule({
-          module: "notes",
-          request_meta: createRequestMeta("dashboard_module_notes"),
-          tab: dashboardModuleTabs.notes,
-        }),
-        "dashboard module notes",
-      ),
-      withTimeout(
-        getDashboardModule({
-          module: "memory",
-          request_meta: createRequestMeta("dashboard_module_memory"),
-          tab: dashboardModuleTabs.memory,
-        }),
-        "dashboard module memory",
-      ),
-      withTimeout(
-        getDashboardModule({
-          module: "safety",
-          request_meta: createRequestMeta("dashboard_module_safety"),
-          tab: dashboardModuleTabs.safety,
-        }),
-        "dashboard module safety",
-      ),
-      withTimeout(
-        getRecommendations({
-          context: {
-            app_name: "CialloClaw Desktop",
-            page_title: "Dashboard Orbit",
-          },
-          request_meta: createRequestMeta("dashboard_recommendations"),
-          scene: "idle",
-          source: "dashboard",
-        }),
-        "dashboard recommendations",
-      ),
+      getDashboardOverview({
+        focus_mode: false,
+        include: ["focus_summary", "trust_summary", "quick_actions", "high_value_signal"],
+        request_meta: createRequestMeta("dashboard_overview"),
+      }),
+      getDashboardModule({
+        module: "tasks",
+        request_meta: createRequestMeta("dashboard_module_tasks"),
+        tab: dashboardModuleTabs.tasks,
+      }),
+      getDashboardModule({
+        module: "notes",
+        request_meta: createRequestMeta("dashboard_module_notes"),
+        tab: dashboardModuleTabs.notes,
+      }),
+      getDashboardModule({
+        module: "memory",
+        request_meta: createRequestMeta("dashboard_module_memory"),
+        tab: dashboardModuleTabs.memory,
+      }),
+      getDashboardModule({
+        module: "safety",
+        request_meta: createRequestMeta("dashboard_module_safety"),
+        tab: dashboardModuleTabs.safety,
+      }),
+      getRecommendations({
+        context: {
+          app_name: "CialloClaw Desktop",
+          page_title: "Dashboard Orbit",
+        },
+        request_meta: createRequestMeta("dashboard_recommendations"),
+        scene: "idle",
+        source: "dashboard",
+      }),
     ]);
 
     return buildDashboardHomeData({
