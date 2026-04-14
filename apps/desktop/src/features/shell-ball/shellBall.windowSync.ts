@@ -16,12 +16,15 @@ export const shellBallWindowSyncEvents = Object.freeze({
   inputRequestFocus: "desktop-shell-ball:input-request-focus",
   inputDraft: "desktop-shell-ball:input-draft",
   primaryAction: "desktop-shell-ball:primary-action",
+  intentDecision: "desktop-shell-ball:intent-decision",
   bubbleAction: "desktop-shell-ball:bubble-action",
 });
 
 export type ShellBallHelperWindowRole = "bubble" | "input" | "pinned";
 
 export type ShellBallPrimaryAction = "attach_file" | "submit" | "primary_click";
+
+export type ShellBallIntentDecision = "confirm" | "cancel";
 
 export type ShellBallBubbleAction = "pin" | "unpin" | "delete";
 
@@ -103,6 +106,12 @@ export type ShellBallInputRequestFocusPayload = {
 export type ShellBallPrimaryActionPayload = {
   source: ShellBallHelperWindowRole;
   action: ShellBallPrimaryAction;
+};
+
+export type ShellBallIntentDecisionPayload = {
+  source: ShellBallBubbleActionSource;
+  taskId: string;
+  decision: ShellBallIntentDecision;
 };
 
 export type ShellBallBubbleActionPayload = {

@@ -13,12 +13,22 @@ type DashboardVoiceFieldProps = {
   isOpen: boolean;
   onClose: () => void;
   onCommand: (module: DashboardHomeModuleKey) => void;
+  onRecommendationConfirm?: (recommendationId: string) => void;
   sequences: DashboardVoiceSequence[];
 };
 
 const stageOrder: DashboardVoiceStage[] = ["ready", "listening", "understanding", "confirming", "executing"];
 
-export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: DashboardVoiceFieldProps) {
+const fallbackSequence: DashboardVoiceSequence = {
+  echoPool: [],
+  executingSteps: ["暂无可执行建议"],
+  fragments: [],
+  module: "tasks",
+  suggestion: "暂无可用建议",
+  summary: "当前没有可执行的语音建议。",
+};
+
+export function DashboardVoiceField({ isOpen, onClose, onCommand, onRecommendationConfirm, sequences }: DashboardVoiceFieldProps) {
   const [stage, setStage] = useState<DashboardVoiceStage>("ready");
   const [summary, setSummary] = useState("");
   const [fragments, setFragments] = useState<string[]>([]);
@@ -33,7 +43,7 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
   const titleId = useId();
   const descriptionId = useId();
 
-  const activeSequence = sequences[currentSequenceIndex % sequences.length];
+  const activeSequence = sequences.length > 0 ? sequences[currentSequenceIndex % sequences.length] : fallbackSequence;
   const mascotState: ShellBallVisualState = stage === "listening" ? "voice_listening" : stage === "executing" ? "voice_locked" : stage === "understanding" ? "processing" : "hover_input";
   const motionConfig = useMemo(() => getShellBallMotionConfig(mascotState), [mascotState]);
 
@@ -141,6 +151,9 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
   }, [activeSequence.executingSteps, activeSequence.module, clearTimer, isOpen, onClose, onCommand, stage]);
 
   function handleConfirm() {
+    if (activeSequence.recommendationId) {
+      onRecommendationConfirm?.(activeSequence.recommendationId);
+    }
     setStage("executing");
   }
 
@@ -298,22 +311,28 @@ export function DashboardVoiceField({ isOpen, onClose, onCommand, sequences }: D
             </div>
           ) : (
             <div className="dashboard-voice-field__suggestions">
-              {sequences.map((sequence, index) => (
-                <button
-                  key={sequence.suggestion}
-                  className="dashboard-voice-field__suggestion-chip"
-                  data-active={index === currentSequenceIndex % sequences.length ? "true" : "false"}
-                  onClick={() => {
-                    setCurrentSequenceIndex(index);
-                    setStage("listening");
-                    setFragments([]);
-                    setSummary("");
-                  }}
-                  type="button"
-                >
-                  {sequence.suggestion}
-                </button>
-              ))}
+              {sequences.length > 0 ? (
+                sequences.map((sequence, index) => (
+                  <button
+                    key={sequence.suggestion}
+                    className="dashboard-voice-field__suggestion-chip"
+                    data-active={index === currentSequenceIndex % sequences.length ? "true" : "false"}
+                    onClick={() => {
+                      setCurrentSequenceIndex(index);
+                      setStage("listening");
+                      setFragments([]);
+                      setSummary("");
+                    }}
+                    type="button"
+                  >
+                    {sequence.suggestion}
+                  </button>
+                ))
+              ) : (
+                <span className="dashboard-voice-field__suggestion-chip" data-active="false">
+                  暂无可用建议
+                </span>
+              )}
             </div>
           )}
         </motion.div>

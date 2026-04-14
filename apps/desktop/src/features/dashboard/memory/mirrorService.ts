@@ -5,6 +5,7 @@ import type {
   RequestMeta,
 } from "@cialloclaw/protocol";
 import mirrorOverviewMock from "./mirrorOverview.json";
+import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { getMirrorOverviewDetailed as requestMirrorOverview } from "@/rpc/methods";
 
 type MirrorOverviewMock = typeof mirrorOverviewMock;
@@ -98,21 +99,30 @@ export async function loadMirrorOverviewData(source: MirrorOverviewSource = "rpc
     return getInitialMirrorOverviewData();
   }
 
-  const params: AgentMirrorOverviewGetParams = {
-    request_meta: createRequestMeta(),
-    include: ["history_summary", "daily_summary", "profile", "memory_references"],
-  };
+  try {
+    const params: AgentMirrorOverviewGetParams = {
+      request_meta: createRequestMeta(),
+      include: ["history_summary", "daily_summary", "profile", "memory_references"],
+    };
 
-  const response = await requestMirrorOverview(params);
-  const overview = response.data;
+    const response = await requestMirrorOverview(params);
+    const overview = response.data;
 
-  return {
-    overview,
-    insight: buildMirrorInsightPreview(overview),
-    rpcContext: {
-      serverTime: response.meta?.server_time ?? null,
-      warnings: response.warnings,
-    },
-    source: "rpc",
-  };
+    return {
+      overview,
+      insight: buildMirrorInsightPreview(overview),
+      rpcContext: {
+        serverTime: response.meta?.server_time ?? null,
+        warnings: response.warnings,
+      },
+      source: "rpc",
+    };
+  } catch (error) {
+    if (isRpcChannelUnavailable(error)) {
+      logRpcMockFallback("mirror overview", error);
+      return getInitialMirrorOverviewData();
+    }
+
+    throw error;
+  }
 }

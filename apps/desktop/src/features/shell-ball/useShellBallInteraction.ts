@@ -5,7 +5,9 @@ import {
   createShellBallInteractionController,
   getShellBallInputBarMode,
   getShellBallVoicePreview,
+  getShellBallVisualStateForTaskStatus,
   SHELL_BALL_LONG_PRESS_MS,
+  resolveShellBallVoiceReleaseEvent,
   shouldRetainShellBallHoverInput,
   type ShellBallVoicePreview,
 } from "./shellBall.interaction";
@@ -16,6 +18,8 @@ import {
   getShellBallSpeechRecognitionLanguage,
   type ShellBallSpeechRecognition,
 } from "./shellBall.speech";
+import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
+import { createMockShellBallSubmitResult } from "./shellBall.mock";
 import type { ShellBallInteractionEvent, ShellBallVisualState } from "./shellBall.types";
 import { useShellBallStore } from "../../stores/shellBallStore";
 
@@ -75,7 +79,6 @@ export function createShellBallInputSubmitParams(input: {
       files: [],
     },
     options: {
-      confirm_required: false,
       preferred_delivery: "bubble",
     },
   };
@@ -95,8 +98,21 @@ async function submitShellBallInput(input: {
   const importRpcMethods = new Function("return import('../../rpc/methods')") as () => Promise<{
     submitInput: (request: AgentInputSubmitParams) => Promise<ShellBallInputSubmitResult>;
   }>;
-  const rpcMethods = await importRpcMethods();
-  return rpcMethods.submitInput(params);
+
+  try {
+    const rpcMethods = await importRpcMethods();
+    return rpcMethods.submitInput(params);
+  } catch (error) {
+    if (isRpcChannelUnavailable(error)) {
+      logRpcMockFallback("shell-ball submit", error);
+      return createMockShellBallSubmitResult({
+        inputMode: input.inputMode,
+        text: input.text,
+      });
+    }
+
+    throw error;
+  }
 }
 
 export function mapShellBallInteractionConsumedEventToFlag(event: ShellBallInteractionConsumedEvent) {
@@ -244,6 +260,13 @@ export function useShellBallInteraction() {
     setVisualState(controllerRef.current?.getState() ?? visualState);
   }
 
+  function syncVisualStateFromTaskStatus(status: Parameters<typeof getShellBallVisualStateForTaskStatus>[0], fallbackState: ShellBallVisualState) {
+    controllerRef.current?.forceState(getShellBallVisualStateForTaskStatus(status, fallbackState), {
+      regionActive: regionActiveRef.current,
+    });
+    syncVisualState();
+  }
+
   function clearLongPressTimer() {
     if (longPressHandleRef.current === null) {
       if (longPressProgressHandleRef.current !== null) {
@@ -326,12 +349,15 @@ export function useShellBallInteraction() {
     }
 
     try {
-      await submitShellBallInput({
+      const result = await submitShellBallInput({
         text: resolution.finalizedSpeechPayload,
         trigger: "voice_commit",
         inputMode: "voice",
       });
       setFinalizedSpeechPayload(resolution.finalizedSpeechPayload);
+      if (result !== null) {
+        syncVisualStateFromTaskStatus(result.task.status, resolution.nextVisualState);
+      }
     } catch (error) {
       console.warn("shell-ball voice submit failed", error);
     }
@@ -509,6 +535,9 @@ export function useShellBallInteraction() {
       setInputValue(reset.nextInputValue);
       inputFocusedRef.current = reset.nextFocused;
       setInputFocused(reset.nextFocused);
+      if (result !== null) {
+        syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
+      }
       return result;
     } catch (error) {
       console.warn("shell-ball text submit failed", error);

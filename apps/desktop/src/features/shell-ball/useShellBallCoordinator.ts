@@ -1,6 +1,7 @@
-import type { BubbleMessage } from "@cialloclaw/protocol";
+import type { BubbleMessage, DeliveryResult } from "@cialloclaw/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { subscribeDeliveryReady } from "@/rpc/subscriptions";
 import {
   SHELL_BALL_PINNED_BUBBLE_WINDOW_FRAME,
   closeShellBallPinnedBubbleWindow,
@@ -16,6 +17,7 @@ import { cloneShellBallBubbleItems, type ShellBallBubbleItem } from "./shellBall
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
 import type { ShellBallInputBarMode, ShellBallVisualState } from "./shellBall.types";
 import type { ShellBallInputSubmitResult } from "./useShellBallInteraction";
+import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import {
   createDefaultShellBallWindowSnapshot,
   createShellBallWindowSnapshot,
@@ -24,6 +26,7 @@ import {
   type ShellBallBubbleActionPayload,
   type ShellBallBubbleHoverPayload,
   type ShellBallBubbleVisibilityPhase,
+  type ShellBallIntentDecisionPayload,
   shellBallWindowSyncEvents,
   type ShellBallHelperReadyPayload,
   type ShellBallHelperWindowRole,
@@ -37,6 +40,9 @@ import {
   type ShellBallPrimaryActionPayload,
 } from "./shellBall.windowSync";
 import { getShellBallBubbleAnchor } from "./useShellBallWindowMetrics";
+import { getShellBallVisualStateForTaskStatus } from "./shellBall.interaction";
+import { createMockShellBallConfirmResult } from "./shellBall.mock";
+import { useShellBallStore } from "../../stores/shellBallStore";
 
 type ShellBallCoordinatorInput = {
   visualState: ShellBallVisualState;
@@ -62,6 +68,18 @@ type ShellBallHelperSnapshotInput = {
 const SHELL_BALL_LOCAL_BUBBLE_ITEMS: ShellBallBubbleItem[] = [];
 const SHELL_BALL_BUBBLE_HIDE_DELAY_MS = 5_000;
 const SHELL_BALL_BUBBLE_FADE_DURATION_MS = 420;
+
+function createShellBallRequestMeta() {
+  const now = new Date().toISOString();
+  const traceId = typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID()
+    : `trace_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+  return {
+    trace_id: traceId,
+    client_time: now,
+  };
+}
 
 export function compareShellBallBubbleItemsByTimestamp(left: ShellBallBubbleItem, right: ShellBallBubbleItem) {
   const createdAtOrder = left.bubble.created_at.localeCompare(right.bubble.created_at);
@@ -127,6 +145,26 @@ function createShellBallTextBubbleItem(input: {
       motionHint: "settle",
     },
   } satisfies ShellBallBubbleItem;
+}
+
+function createShellBallDeliveryResultBubbleItem(input: {
+  taskId: string;
+  deliveryResult: DeliveryResult;
+  createdAt: string;
+}) {
+  return createShellBallTextBubbleItem({
+    role: "agent",
+    text: input.deliveryResult.preview_text.trim() || input.deliveryResult.title,
+    bubbleType: "result",
+    createdAt: input.createdAt,
+    taskId: input.taskId,
+  });
+}
+
+function syncShellBallVisualStateFromTaskStatus(status: Parameters<typeof getShellBallVisualStateForTaskStatus>[0]) {
+  const currentState = useShellBallStore.getState().visualState;
+  const nextState = getShellBallVisualStateForTaskStatus(status, currentState);
+  useShellBallStore.getState().setVisualState(nextState);
 }
 
 function createShellBallAgentBubbleItem(result: ShellBallInputSubmitResult, fallbackCreatedAt: string) {
@@ -217,6 +255,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const visibleBubbleCountRef = useRef(getShellBallVisibleBubbleItems(bubbleItems).length);
   const previousVisibleBubbleCountRef = useRef(visibleBubbleCountRef.current);
   const detachedPinnedBubbleIdsRef = useRef(new Set<string>());
+  const deliveryReadyBubbleKeysRef = useRef(new Set<string>());
   const helperWindowsVisibleRef = useRef(input.helperWindowsVisible ?? true);
   const regionActiveRef = useRef(false);
   const bubbleHoveredRef = useRef(false);
@@ -411,6 +450,42 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   }, [input.finalizedSpeechPayload]);
 
   useEffect(() => {
+    return subscribeDeliveryReady((payload) => {
+      const bubbleText = payload.delivery_result.preview_text.trim() || payload.delivery_result.title;
+      const bubbleKey = `${payload.task_id}:${payload.delivery_result.type}:${bubbleText}`;
+
+      if (deliveryReadyBubbleKeysRef.current.has(bubbleKey)) {
+        return;
+      }
+
+      deliveryReadyBubbleKeysRef.current.add(bubbleKey);
+
+      setBubbleItems((currentItems) => {
+        if (
+          currentItems.some(
+            (item) =>
+              item.bubble.task_id === payload.task_id &&
+              item.bubble.type === "result" &&
+              item.bubble.text === bubbleText,
+          )
+        ) {
+          return currentItems;
+        }
+
+        return sortShellBallBubbleItemsByTimestamp([
+          ...currentItems,
+          createShellBallDeliveryResultBubbleItem({
+            createdAt: new Date().toISOString(),
+            deliveryResult: payload.delivery_result,
+            taskId: payload.task_id,
+          }),
+        ]);
+      });
+      revealBubbleRegion();
+    });
+  }, [revealBubbleRegion]);
+
+  useEffect(() => {
     const currentWindow = getCurrentWindow();
     const latestSnapshot = snapshot;
 
@@ -573,6 +648,67 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       }
     }
 
+    async function handleIntentDecision(payload: ShellBallIntentDecisionPayload) {
+      const importRpcMethods = new Function("return import('../../rpc/methods')") as () => Promise<{
+        confirmTask: (request: {
+          confirmed: boolean;
+          request_meta: ReturnType<typeof createShellBallRequestMeta>;
+          task_id: string;
+        }) => Promise<ShellBallInputSubmitResult>;
+      }>;
+
+      try {
+        const rpcMethods = await importRpcMethods();
+        const createdAt = new Date().toISOString();
+        const decisionText = payload.decision === "confirm" ? "确认继续" : "取消";
+
+        setBubbleItems((currentItems) =>
+          sortShellBallBubbleItemsByTimestamp([
+            ...currentItems,
+            createShellBallTextBubbleItem({
+              createdAt,
+              role: "user",
+              text: decisionText,
+              bubbleType: "status",
+              taskId: payload.taskId,
+            }),
+          ]),
+        );
+
+        let result: ShellBallInputSubmitResult;
+
+        try {
+          result = await rpcMethods.confirmTask({
+            confirmed: payload.decision === "confirm",
+            request_meta: createShellBallRequestMeta(),
+            task_id: payload.taskId,
+          });
+        } catch (error) {
+          if (!isRpcChannelUnavailable(error)) {
+            throw error;
+          }
+
+          logRpcMockFallback("shell-ball confirm", error);
+          result = createMockShellBallConfirmResult({
+            confirmed: payload.decision === "confirm",
+            taskId: payload.taskId,
+          });
+        }
+
+        syncShellBallVisualStateFromTaskStatus(result.task.status);
+
+        setBubbleItems((currentItems) =>
+          sortShellBallBubbleItemsByTimestamp([
+            ...currentItems,
+            createShellBallAgentBubbleItem(result, new Date().toISOString()),
+          ]),
+        );
+        revealBubbleRegion();
+      } catch (error) {
+        console.warn("shell-ball intent decision failed", error);
+      }
+    }
+
     function handleBubbleAction(payload: ShellBallBubbleActionPayload) {
       setBubbleItems((currentItems) => applyShellBallBubbleAction(currentItems, payload));
 
@@ -629,6 +765,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           void handlePrimaryAction(payload.action);
         },
       ),
+      currentWindow.listen<ShellBallIntentDecisionPayload>(shellBallWindowSyncEvents.intentDecision, ({ payload }) => {
+        void handleIntentDecision(payload);
+      }),
       currentWindow.listen<ShellBallBubbleActionPayload>(shellBallWindowSyncEvents.bubbleAction, ({ payload }) => {
         handleBubbleAction(payload);
       }),
@@ -742,6 +881,18 @@ export async function emitShellBallPrimaryAction(action: ShellBallPrimaryAction,
   await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.primaryAction, {
     action,
     source,
+  });
+}
+
+export async function emitShellBallIntentDecision(
+  decision: ShellBallIntentDecisionPayload["decision"],
+  taskId: string,
+  source: ShellBallIntentDecisionPayload["source"],
+) {
+  await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.intentDecision, {
+    decision,
+    source,
+    taskId,
   });
 }
 

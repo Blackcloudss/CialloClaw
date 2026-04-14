@@ -10,6 +10,7 @@ import type {
   JsonRpcPage,
   RequestMeta,
 } from "@cialloclaw/protocol";
+import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { getSecuritySummaryDetailed, listSecurityPendingDetailed, respondSecurityDetailed } from "@/rpc/methods";
 import { buildMockRespondResult, securityPendingMock, securitySummaryMock } from "./securityModuleMock";
 
@@ -62,33 +63,42 @@ export async function loadSecurityModuleData(source: SecurityModuleSource = "rpc
 }
 
 export async function loadSecurityModuleRpcData(): Promise<SecurityModuleData> {
-  const summaryParams: AgentSecuritySummaryGetParams = {
-    request_meta: createRequestMeta(),
-  };
+  try {
+    const summaryParams: AgentSecuritySummaryGetParams = {
+      request_meta: createRequestMeta(),
+    };
 
-  const pendingParams: AgentSecurityPendingListParams = {
-    request_meta: createRequestMeta(),
-    limit: 20,
-    offset: 0,
-  };
+    const pendingParams: AgentSecurityPendingListParams = {
+      request_meta: createRequestMeta(),
+      limit: 20,
+      offset: 0,
+    };
 
-  const [summaryResult, pendingResult] = await Promise.all([
-    getSecuritySummaryDetailed(summaryParams),
-    listSecurityPendingDetailed(pendingParams),
-  ]);
+    const [summaryResult, pendingResult] = await Promise.all([
+      getSecuritySummaryDetailed(summaryParams),
+      listSecurityPendingDetailed(pendingParams),
+    ]);
 
-  const serverTime = pendingResult.meta?.server_time ?? summaryResult.meta?.server_time ?? null;
+    const serverTime = pendingResult.meta?.server_time ?? summaryResult.meta?.server_time ?? null;
 
-  return {
-    summary: summaryResult.data.summary,
-    pending: pendingResult.data.items,
-    pendingPage: pendingResult.data.page,
-    rpcContext: {
-      serverTime,
-      warnings: [...summaryResult.warnings, ...pendingResult.warnings],
-    },
-    source: "rpc",
-  };
+    return {
+      summary: summaryResult.data.summary,
+      pending: pendingResult.data.items,
+      pendingPage: pendingResult.data.page,
+      rpcContext: {
+        serverTime,
+        warnings: [...summaryResult.warnings, ...pendingResult.warnings],
+      },
+      source: "rpc",
+    };
+  } catch (error) {
+    if (isRpcChannelUnavailable(error)) {
+      logRpcMockFallback("security module", error);
+      return getInitialSecurityModuleData();
+    }
+
+    throw error;
+  }
 }
 
 export async function respondToApproval(
@@ -115,13 +125,28 @@ export async function respondToApproval(
     };
   }
 
-  const response = await respondSecurityDetailed(params);
+  try {
+    const response = await respondSecurityDetailed(params);
 
-  return {
-    response: response.data,
-    rpcContext: {
-      serverTime: response.meta?.server_time ?? null,
-      warnings: response.warnings,
-    },
-  };
+    return {
+      response: response.data,
+      rpcContext: {
+        serverTime: response.meta?.server_time ?? null,
+        warnings: response.warnings,
+      },
+    };
+  } catch (error) {
+    if (isRpcChannelUnavailable(error)) {
+      logRpcMockFallback("security approval response", error);
+      return {
+        response: buildMockRespondResult(approval.approval_id, approval.task_id, decision, rememberRule),
+        rpcContext: {
+          serverTime: null,
+          warnings: [],
+        },
+      };
+    }
+
+    throw error;
+  }
 }

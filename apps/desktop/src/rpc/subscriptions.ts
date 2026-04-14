@@ -1,4 +1,4 @@
-import type { ApprovalPendingNotification, MirrorOverviewUpdatedNotification } from "@cialloclaw/protocol";
+import type { ApprovalPendingNotification, DeliveryReadyNotification, MirrorOverviewUpdatedNotification } from "@cialloclaw/protocol";
 import { NOTIFICATION_METHODS } from "@cialloclaw/protocol";
 
 // subscribeTask 处理当前模块的相关逻辑。
@@ -88,6 +88,42 @@ export function subscribeApprovalPending(onMessage: (payload: ApprovalPendingNot
     .subscribe(NOTIFICATION_METHODS.APPROVAL_PENDING, (payload) => {
       if (!disposed) {
         const message = payload as { params?: ApprovalPendingNotification };
+        if (message.params) {
+          onMessage(message.params);
+        }
+      }
+    })
+    .then((subscription) => {
+      if (disposed) {
+        void subscription.unsubscribe();
+        return;
+      }
+
+      unsubscribe = subscription.unsubscribe;
+    });
+
+  return () => {
+    disposed = true;
+    if (unsubscribe) {
+      void unsubscribe();
+    }
+  };
+}
+
+export function subscribeDeliveryReady(onMessage: (payload: DeliveryReadyNotification) => void) {
+  const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
+
+  if (!bridge?.subscribe) {
+    return () => {};
+  }
+
+  let disposed = false;
+  let unsubscribe: (() => Promise<void>) | null = null;
+
+  void bridge
+    .subscribe(NOTIFICATION_METHODS.DELIVERY_READY, (payload) => {
+      if (!disposed) {
+        const message = payload as { params?: DeliveryReadyNotification };
         if (message.params) {
           onMessage(message.params);
         }
