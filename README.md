@@ -51,6 +51,8 @@ scripts/
 
 ## 文档入口
 
+### 核心技术文档
+
 - `docs/architecture-overview.md`
 - `docs/development-guidelines.md`
 - `docs/protocol-design.md`
@@ -58,6 +60,15 @@ scripts/
 - `docs/module-design.md`
 - `docs/work-priority-plan.md`
 - `docs/atomic-features.md`
+
+### 产品设计文档
+
+- `docs/dashboard-design.md` - 仪表盘展示设计文档
+- `docs/control-panel-settings.md` - 控制面板设置设计文档
+- `docs/product-interaction-design.md` - 产品交互设计汇总文档
+
+### Agent 工作规范
+
 - `AGENTS.md`
 
 ## 当前协议方向
