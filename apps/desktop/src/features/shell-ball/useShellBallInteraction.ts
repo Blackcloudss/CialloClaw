@@ -1,4 +1,4 @@
-import type { AgentInputSubmitParams, AgentInputSubmitResult, AgentTaskStartParams, DeliveryResult, RequestMeta } from "@cialloclaw/protocol";
+import type { AgentInputSubmitParams, AgentTaskStartParams, RequestMeta } from "@cialloclaw/protocol";
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import { submitTextInput, createTextInputSubmitParams } from "../../services/agentInputService";
@@ -6,7 +6,9 @@ import {
   createShellBallInteractionController,
   getShellBallInputBarMode,
   getShellBallVoicePreview,
+  getShellBallVisualStateForTaskStatus,
   SHELL_BALL_LONG_PRESS_MS,
+  resolveShellBallVoiceReleaseEvent,
   shouldRetainShellBallHoverInput,
   type ShellBallVoicePreview,
 } from "./shellBall.interaction";
@@ -17,6 +19,9 @@ import {
   getShellBallSpeechRecognitionLanguage,
   type ShellBallSpeechRecognition,
 } from "./shellBall.speech";
+import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
+import { createMockShellBallSubmitResult } from "./shellBall.mock";
+import { startTaskFromFiles } from "@/services/taskService";
 import type { ShellBallInteractionEvent, ShellBallVisualState } from "./shellBall.types";
 import { useShellBallStore } from "../../stores/shellBallStore";
 
@@ -110,10 +115,9 @@ export function createShellBallTaskStartParams(input: {
   }
 
   const normalizedText = input.text.trim();
-  const requestMeta = createShellBallRequestMeta();
 
   return {
-    request_meta: requestMeta,
+    request_meta: createShellBallRequestMeta(),
     source: "floating_ball",
     trigger: "file_drop",
     input: {
@@ -131,34 +135,48 @@ async function submitShellBallInput(input: {
   text: string;
   trigger: "voice_commit" | "hover_text_input";
   inputMode: "voice" | "text";
-}) {
-  return submitTextInput({
-    text: input.text,
-    source: "floating_ball",
-    trigger: input.trigger,
-    inputMode: input.inputMode,
-    options: {
-      confirm_required: false,
-      preferred_delivery: "bubble",
-    },
-  });
+}): Promise<ShellBallInputSubmitResult | null> {
+  try {
+    return await submitTextInput({
+      text: input.text,
+      source: "floating_ball",
+      trigger: input.trigger,
+      inputMode: input.inputMode,
+      options: {
+        confirm_required: false,
+        preferred_delivery: "bubble",
+      },
+    });
+  } catch (error) {
+    if (isRpcChannelUnavailable(error)) {
+      logRpcMockFallback("shell-ball submit", error);
+      return createMockShellBallSubmitResult({
+        inputMode: input.inputMode,
+        text: input.text,
+      });
+    }
+
+    throw error;
+  }
 }
 
 async function startShellBallFileTask(input: {
   text: string;
   files: string[];
 }): Promise<ShellBallInputSubmitResult | null> {
-  const params = createShellBallTaskStartParams(input);
+  const normalizedFiles = normalizeShellBallPendingFiles(input.files);
 
-  if (params === null) {
+  if (normalizedFiles.length === 0) {
     return null;
   }
 
-  const importRpcMethods = new Function("return import('../../rpc/methods')") as () => Promise<{
-    startTask: (request: AgentTaskStartParams) => Promise<ShellBallInputSubmitResult>;
-  }>;
-  const rpcMethods = await importRpcMethods();
-  return rpcMethods.startTask(params);
+  return startTaskFromFiles(normalizedFiles, {
+    delivery: {
+      preferred: "bubble",
+      fallback: "task_detail",
+    },
+    source: "floating_ball",
+  });
 }
 
 export function mapShellBallInteractionConsumedEventToFlag(event: ShellBallInteractionConsumedEvent) {
@@ -234,12 +252,6 @@ function getShellBallPostSubmitReset(input: {
 
 export function getShellBallPressCancelEvent(state: ShellBallVisualState): Extract<ShellBallInteractionEvent, "voice_cancel"> | null {
   return state === "voice_listening" ? "voice_cancel" : null;
-}
-
-export function resolveShellBallVoiceReleaseEvent(
-  preview: ShellBallVoicePreview,
-): Extract<ShellBallInteractionEvent, "voice_cancel" | "voice_finish"> {
-  return preview === "cancel" ? "voice_cancel" : "voice_finish";
 }
 
 export function syncShellBallInteractionController(input: {
@@ -328,6 +340,13 @@ export function useShellBallInteraction() {
     setVisualState(controllerRef.current?.getState() ?? visualState);
   }
 
+  function syncVisualStateFromTaskStatus(status: Parameters<typeof getShellBallVisualStateForTaskStatus>[0], fallbackState: ShellBallVisualState) {
+    controllerRef.current?.forceState(getShellBallVisualStateForTaskStatus(status, fallbackState), {
+      regionActive: regionActiveRef.current,
+    });
+    syncVisualState();
+  }
+
   function clearLongPressTimer() {
     if (longPressHandleRef.current === null) {
       if (longPressProgressHandleRef.current !== null) {
@@ -410,12 +429,15 @@ export function useShellBallInteraction() {
     }
 
     try {
-      await submitShellBallInput({
+      const result = await submitShellBallInput({
         text: resolution.finalizedSpeechPayload,
         trigger: "voice_commit",
         inputMode: "voice",
       });
       setFinalizedSpeechPayload(resolution.finalizedSpeechPayload);
+      if (result !== null) {
+        syncVisualStateFromTaskStatus(result.task.status, resolution.nextVisualState);
+      }
     } catch (error) {
       console.warn("shell-ball voice submit failed", error);
     }
@@ -572,37 +594,40 @@ export function useShellBallInteraction() {
 
     dispatch("pointer_leave_region", {
       regionActive: false,
-      hoverRetained: getHoverRetained(),
+      hoverRetained: false,
     });
   }
 
   async function handleSubmitText() {
     const currentDraft = inputValue.trim();
-    const currentPendingFiles = normalizeShellBallPendingFiles(pendingFiles);
     const reset = getShellBallPostSubmitReset({
       inputValue,
-      pendingFiles: currentPendingFiles,
+      pendingFiles,
     });
     if (reset === null) {
       return null;
     }
 
     try {
-      const result = currentPendingFiles.length > 0
-        ? await startShellBallFileTask({
-            text: currentDraft,
-            files: currentPendingFiles,
-          })
-        : await submitShellBallInput({
-            text: currentDraft,
-            trigger: "hover_text_input",
-            inputMode: "text",
-          });
+      const result =
+        pendingFiles.length > 0
+          ? await startShellBallFileTask({
+              text: currentDraft,
+              files: pendingFiles,
+            })
+          : await submitShellBallInput({
+              text: currentDraft,
+              trigger: "hover_text_input",
+              inputMode: "text",
+            });
       dispatch("submit_text");
       setInputValue(reset.nextInputValue);
       setPendingFiles(reset.nextPendingFiles);
       inputFocusedRef.current = reset.nextFocused;
       setInputFocused(reset.nextFocused);
+      if (result !== null) {
+        syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
+      }
       return result;
     } catch (error) {
       console.warn("shell-ball text submit failed", error);
@@ -611,26 +636,30 @@ export function useShellBallInteraction() {
   }
 
   function handleAttachFile() {
-    handleInputFocusRequest();
+    dispatch("attach_file");
   }
 
-  function handleDroppedFiles(filePaths: string[]) {
-    const normalizedFiles = normalizeShellBallPendingFiles(filePaths);
-    if (normalizedFiles.length === 0) {
+  function handleDroppedFiles(paths: string[]) {
+    const normalizedPaths = normalizeShellBallPendingFiles(paths);
+    if (normalizedPaths.length === 0) {
       return;
     }
 
-    setPendingFiles((currentPaths) => mergeShellBallPendingFiles(currentPaths, normalizedFiles));
-    handleInputFocusRequest();
+    setPendingFiles((currentPaths) => mergeShellBallPendingFiles(currentPaths, normalizedPaths));
+    inputFocusedRef.current = true;
+    setInputFocused(true);
+    regionActiveRef.current = true;
+    controllerRef.current?.forceState("hover_input", { regionActive: true, hoverRetained: false });
+    syncVisualState();
   }
 
   function handleRemovePendingFile(path: string) {
-    const trimmedPath = path.trim();
-    if (trimmedPath === "") {
+    const normalizedPath = path.trim();
+    if (normalizedPath === "") {
       return;
     }
 
-    setPendingFiles((currentPaths) => currentPaths.filter((currentPath) => currentPath !== trimmedPath));
+    setPendingFiles((currentPaths) => currentPaths.filter((currentPath) => currentPath !== normalizedPath));
   }
 
   function handlePressStart(event: PointerEvent<HTMLButtonElement>) {
@@ -783,12 +812,6 @@ export function useShellBallInteraction() {
     }
 
     if (!focused) {
-      if (!regionActiveRef.current) {
-        controllerRef.current?.forceState("idle", { regionActive: false, hoverRetained: false });
-        syncVisualState();
-        return;
-      }
-
       syncHoverRetention();
     }
   }
@@ -815,24 +838,8 @@ export function useShellBallInteraction() {
   }
 
   useEffect(() => {
-    if (regionActiveRef.current) {
-      return;
-    }
-
-    if (controllerRef.current?.getState() !== "hover_input") {
-      return;
-    }
-
-    controllerRef.current?.dispatch("pointer_leave_region", {
-      regionActive: false,
-      hoverRetained: shouldRetainShellBallHoverInput({
-        regionActive: false,
-        inputFocused: inputFocusedRef.current,
-        hasDraft: inputValue.trim() !== "" || pendingFiles.length > 0,
-      }),
-    });
-    setVisualStateRef.current(controllerRef.current?.getState() ?? visualState);
-  }, [inputValue, pendingFiles, visualState]);
+    syncHoverRetention();
+  }, [inputValue, pendingFiles]);
 
   useEffect(() => {
     if (controllerRef.current === null) {
@@ -848,31 +855,8 @@ export function useShellBallInteraction() {
 
   useEffect(() => {
     return () => {
-      if (longPressHandleRef.current !== null) {
-        globalThis.clearTimeout(longPressHandleRef.current);
-        longPressHandleRef.current = null;
-      }
-      if (longPressProgressHandleRef.current !== null) {
-        cancelAnimationFrame(longPressProgressHandleRef.current);
-        longPressProgressHandleRef.current = null;
-      }
-      longPressStartAtRef.current = null;
-      setVoiceHoldProgress(0);
-
-      recognitionSessionIdRef.current += 1;
-      recognitionStopReasonRef.current = "none";
-      voiceTranscriptRef.current = "";
-      const recognition = recognitionRef.current;
-      recognitionRef.current = null;
-      if (recognition !== null) {
-        recognition.onresult = null;
-        recognition.onerror = null;
-        recognition.onend = null;
-        try {
-          recognition.abort();
-        } catch {}
-      }
-
+      clearLongPressTimer();
+      disposeVoiceRecognition();
       pressStartXRef.current = null;
       pressStartYRef.current = null;
       voicePreviewRef.current = null;

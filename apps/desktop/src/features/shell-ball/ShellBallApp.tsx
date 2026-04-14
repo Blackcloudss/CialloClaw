@@ -316,7 +316,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     void openOrFocusDesktopWindow("dashboard");
   }
 
-  useShellBallCoordinator({
+  const { handleDroppedFiles } = useShellBallCoordinator({
     visualState,
     helperWindowsVisible: dashboardTransitionPhase === "idle",
     inputValue,
@@ -334,6 +334,30 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     onAttachFile: handleAttachFile,
     onPrimaryClick: handlePrimaryClick,
   });
+
+  useEffect(() => {
+    const currentWindow = getCurrentWindow();
+    let cleanup: (() => void) | null = null;
+    let disposed = false;
+
+    void currentWindow.onDragDropEvent((event) => {
+      if (event.payload.type === "drop") {
+        void handleDroppedFiles(event.payload.paths);
+      }
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+        return;
+      }
+
+      cleanup = unlisten;
+    });
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, [handleDroppedFiles]);
 
   return (
     <ShellBallSurface
