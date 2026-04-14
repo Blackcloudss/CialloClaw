@@ -28,11 +28,21 @@ function loadDashboardSafetyNavigationModule() {
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSafetyNavigation.js")) as {
       buildDashboardSafetyNavigationState: (detail: AgentTaskDetailGetResult) => unknown;
       readDashboardSafetyNavigationState: (value: unknown) => unknown;
+      resolveDashboardSafetyNavigationRoute: (input: {
+        locationState: unknown;
+        livePending: ApprovalRequest[];
+        liveRestorePoint: RecoveryPoint | null;
+      }) => unknown;
       resolveDashboardSafetyFocusTarget: (input: {
         state: unknown;
         livePending: ApprovalRequest[];
         liveRestorePoint: RecoveryPoint | null;
       }) => unknown;
+      shouldRetainDashboardSafetyActiveDetail: (input: {
+        activeDetailKey: string | null;
+        approvalSnapshot: ApprovalRequest | null;
+        cardKeys: string[];
+      }) => boolean;
     },
   );
 }
@@ -43,6 +53,8 @@ function loadTaskPageQueryModule() {
       buildDashboardTaskBucketQueryKey: (dataMode: "rpc" | "mock", group: "unfinished" | "finished", limit: number) => unknown;
       buildDashboardTaskDetailQueryKey: (dataMode: "rpc" | "mock", taskId: string) => unknown;
       getDashboardTaskSecurityRefreshPlan: (dataMode: "rpc" | "mock") => unknown;
+      resolveDashboardTaskSafetyOpenPlan: (detailSource: "rpc" | "mock" | "fallback") => unknown;
+      shouldEnableDashboardTaskDetailQuery: (selectedTaskId: string | null, detailOpen: boolean) => boolean;
       dashboardTaskBucketQueryPrefix: unknown;
       dashboardTaskDetailQueryPrefix: unknown;
     },
@@ -427,39 +439,109 @@ test("task page query helpers expose stable prefixes and keys", () => {
   });
 });
 
-test("task and safety pages adopt the shared dashboard task helpers", () => {
-  const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
-  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+test("SecurityApp route resolution reacts to each new route state and exposes task refresh targets", () => {
+  const { resolveDashboardSafetyNavigationRoute } = loadDashboardSafetyNavigationModule();
 
-  assert.match(taskPageSource, /buildDashboardTaskBucketQueryKey/);
-  assert.match(taskPageSource, /buildDashboardTaskDetailQueryKey/);
-  assert.match(taskPageSource, /getDashboardTaskSecurityRefreshPlan/);
-  assert.match(taskPageSource, /buildDashboardSafetyNavigationState\((detailData|resolvedDetailData)\.detail\)/);
+  assert.deepEqual(
+    resolveDashboardSafetyNavigationRoute({
+      locationState: {
+        approvalRequest: createApprovalRequest(),
+        source: "task-detail",
+        taskId: "task_dashboard_001",
+      },
+      livePending: [],
+      liveRestorePoint: null,
+    }),
+    {
+      activeDetailKey: "approval:approval_dashboard_001",
+      approvalSnapshot: createApprovalRequest(),
+      feedback: "实时安全数据已变化，当前展示的是路由携带的快照。",
+      restorePointSnapshot: null,
+      routedTaskId: "task_dashboard_001",
+      shouldClearRouteState: true,
+    },
+  );
 
-  assert.match(securityAppSource, /readDashboardSafetyNavigationState/);
-  assert.match(securityAppSource, /resolveDashboardSafetyFocusTarget/);
-  assert.match(securityAppSource, /getDashboardTaskSecurityRefreshPlan/);
-  assert.match(securityAppSource, /useLocation\(/);
-  assert.match(securityAppSource, /useQueryClient\(/);
+  assert.deepEqual(
+    resolveDashboardSafetyNavigationRoute({
+      locationState: {
+        restorePoint: createRecoveryPoint(),
+        source: "task-detail",
+        taskId: "task_dashboard_001",
+      },
+      livePending: [],
+      liveRestorePoint: createRecoveryPoint(),
+    }),
+    {
+      activeDetailKey: "restore",
+      approvalSnapshot: null,
+      feedback: null,
+      restorePointSnapshot: createRecoveryPoint(),
+      routedTaskId: "task_dashboard_001",
+      shouldClearRouteState: true,
+    },
+  );
+
+  assert.deepEqual(
+    resolveDashboardSafetyNavigationRoute({
+      locationState: null,
+      livePending: [],
+      liveRestorePoint: null,
+    }),
+    {
+      activeDetailKey: null,
+      approvalSnapshot: null,
+      feedback: null,
+      restorePointSnapshot: null,
+      routedTaskId: null,
+      shouldClearRouteState: false,
+    },
+  );
 });
 
-test("SecurityApp reacts to later route-state arrivals and keeps snapshot-only approval focus renderable", () => {
-  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+test("SecurityApp keeps snapshot-only approval detail renderable when live cards no longer contain it", () => {
+  const { shouldRetainDashboardSafetyActiveDetail } = loadDashboardSafetyNavigationModule();
 
-  assert.doesNotMatch(securityAppSource, /navigationStateConsumedRef/);
-  assert.match(securityAppSource, /readDashboardSafetyNavigationState\(location\.state\)/);
-  assert.match(securityAppSource, /navigate\(location\.pathname, \{ replace: true, state: null \}\)/);
-  assert.match(securityAppSource, /activeDetailKey\.startsWith\("approval:"\).*approvalSnapshot/s);
+  assert.equal(
+    shouldRetainDashboardSafetyActiveDetail({
+      activeDetailKey: "approval:approval_dashboard_001",
+      approvalSnapshot: createApprovalRequest(),
+      cardKeys: ["status", "restore"],
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldRetainDashboardSafetyActiveDetail({
+      activeDetailKey: "approval:approval_dashboard_001",
+      approvalSnapshot: createApprovalRequest({ approval_id: "approval_dashboard_999" }),
+      cardKeys: ["status", "restore"],
+    }),
+    false,
+  );
+
+  assert.equal(
+    shouldRetainDashboardSafetyActiveDetail({
+      activeDetailKey: "restore",
+      approvalSnapshot: null,
+      cardKeys: ["status", "restore"],
+    }),
+    true,
+  );
 });
 
-test("TaskPage fetches safety anchors from real detail without requiring the selected task to stay in the loaded bucket", () => {
-  const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+test("TaskPage wiring helpers require real detail for safety focus and keep detail query task-id centric", () => {
+  const { resolveDashboardTaskSafetyOpenPlan, shouldEnableDashboardTaskDetailQuery } = loadTaskPageQueryModule();
 
-  assert.match(taskPageSource, /enabled: Boolean\(selectedTaskId && detailOpen\)/);
-  assert.doesNotMatch(taskPageSource, /enabled: Boolean\(selectedTaskId && detailOpen && selectedTaskItem\)/);
-  assert.match(taskPageSource, /detailData\.source === "fallback"/);
-  assert.match(taskPageSource, /await taskDetailQuery\.refetch\(/);
-  assert.match(taskPageSource, /buildDashboardSafetyNavigationState\(resolvedDetailData\.detail\)/);
+  assert.deepEqual(resolveDashboardTaskSafetyOpenPlan("fallback"), {
+    shouldRefetchDetail: true,
+  });
+  assert.deepEqual(resolveDashboardTaskSafetyOpenPlan("rpc"), {
+    shouldRefetchDetail: false,
+  });
+  assert.equal(shouldEnableDashboardTaskDetailQuery("task_dashboard_001", true), true);
+  assert.equal(shouldEnableDashboardTaskDetailQuery("task_dashboard_001", false), false);
+  assert.equal(shouldEnableDashboardTaskDetailQuery(null, true), false);
 });
 
 test("task detail normalization rejects string restore points in rpc mode and keeps null approval fallback", () => {

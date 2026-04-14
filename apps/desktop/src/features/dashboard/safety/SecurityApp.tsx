@@ -31,12 +31,13 @@ import type {
   Task,
 } from "@cialloclaw/protocol";
 import { JsonRpcClientError } from "@/rpc/client";
-import { subscribeApprovalPending } from "@/rpc/subscriptions";
+import { subscribeApprovalPending, subscribeTask } from "@/rpc/subscriptions";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
 import {
-  readDashboardSafetyNavigationState,
+  resolveDashboardSafetyNavigationRoute,
   resolveDashboardSafetyFocusTarget,
+  shouldRetainDashboardSafetyActiveDetail,
 } from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import {
   getInitialSecurityModuleData,
@@ -569,6 +570,7 @@ export function SecurityApp() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [approvalSnapshot, setApprovalSnapshot] = useState<ApprovalRequest | null>(null);
   const [restorePointSnapshot, setRestorePointSnapshot] = useState<RecoveryPoint | null>(null);
+  const [routedTaskId, setRoutedTaskId] = useState<string | null>(null);
   const [lastResolvedApproval, setLastResolvedApproval] = useState<SecurityRespondOutcome | null>(null);
   const [rememberRuleByApprovalId, setRememberRuleByApprovalId] = useState<Record<string, boolean>>({});
   const [titleMotionTick, setTitleMotionTick] = useState(0);
@@ -592,7 +594,6 @@ export function SecurityApp() {
   const dragStateRef = useRef<DragState | null>(null);
   const refreshSequenceRef = useRef(0);
   const taskRefreshPlan = useMemo(() => getDashboardTaskSecurityRefreshPlan(dataMode), [dataMode]);
-  const navigationState = useMemo(() => readDashboardSafetyNavigationState(location.state), [location.state]);
 
   const queueRpcRefresh = useCallback(() => {
     if (dataMode !== "rpc") {
@@ -676,8 +677,11 @@ export function SecurityApp() {
   useEffect(() => {
     if (
       activeDetailKey &&
-      !cardKeys.includes(activeDetailKey) &&
-      !(activeDetailKey.startsWith("approval:") && approvalSnapshot?.approval_id === activeDetailKey.slice("approval:".length))
+      !shouldRetainDashboardSafetyActiveDetail({
+        activeDetailKey,
+        approvalSnapshot,
+        cardKeys,
+      })
     ) {
       setActiveDetailKey(null);
     }
@@ -688,30 +692,45 @@ export function SecurityApp() {
   }, []);
 
   useEffect(() => {
-    if (!moduleData || !navigationState) {
+    if (!moduleData) {
       return;
     }
 
-    const focusTarget = resolveDashboardSafetyFocusTarget({
+    const routeResolution = resolveDashboardSafetyNavigationRoute({
+      locationState: location.state,
       livePending: moduleData.pending,
       liveRestorePoint: moduleData.summary.latest_restore_point,
-      state: navigationState,
     });
 
-    setApprovalSnapshot(focusTarget.approvalSnapshot);
-    setRestorePointSnapshot(focusTarget.restorePointSnapshot);
-
-    if (focusTarget.activeDetailKey) {
-      setActiveDetailKey(focusTarget.activeDetailKey);
-      bringCardToFront(focusTarget.activeDetailKey);
+    if (!routeResolution.shouldClearRouteState) {
+      return;
     }
 
-    if (focusTarget.feedback) {
-      setFeedback((current) => current ?? focusTarget.feedback);
+    setApprovalSnapshot(routeResolution.approvalSnapshot);
+    setRestorePointSnapshot(routeResolution.restorePointSnapshot);
+    setRoutedTaskId(routeResolution.routedTaskId);
+
+    if (routeResolution.activeDetailKey) {
+      setActiveDetailKey(routeResolution.activeDetailKey);
+      bringCardToFront(routeResolution.activeDetailKey);
+    }
+
+    if (routeResolution.feedback) {
+      setFeedback((current) => current ?? routeResolution.feedback);
     }
 
     navigate(location.pathname, { replace: true, state: null });
-  }, [bringCardToFront, location.pathname, moduleData, navigate, navigationState]);
+  }, [bringCardToFront, location.pathname, location.state, moduleData, navigate]);
+
+  useEffect(() => {
+    if (dataMode !== "rpc" || !routedTaskId) {
+      return;
+    }
+
+    return subscribeTask(routedTaskId, () => {
+      queueRpcRefresh();
+    });
+  }, [dataMode, queueRpcRefresh, routedTaskId]);
 
   const handleTitleClick = useCallback(() => {
     setTitleMotionTick((currentTick) => currentTick + 1);

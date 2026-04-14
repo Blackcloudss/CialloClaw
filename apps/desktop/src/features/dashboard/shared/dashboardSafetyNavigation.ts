@@ -17,6 +17,11 @@ export type DashboardSafetyFocusTarget = {
   feedback: string | null;
 };
 
+export type DashboardSafetyRouteResolution = DashboardSafetyFocusTarget & {
+  routedTaskId: string | null;
+  shouldClearRouteState: boolean;
+};
+
 export function buildDashboardSafetyNavigationState(detail: AgentTaskDetailGetResult): DashboardSafetyNavigationState {
   const approvalRequest = detail.approval_request ?? null;
   const latestRestorePoint = detail.security_summary.latest_restore_point ?? null;
@@ -156,4 +161,47 @@ export function resolveDashboardSafetyFocusTarget({
     feedback: null,
     restorePointSnapshot: null,
   };
+}
+
+export function resolveDashboardSafetyNavigationRoute({
+  locationState,
+  livePending,
+  liveRestorePoint,
+}: {
+  locationState: unknown;
+  livePending: ApprovalRequest[];
+  liveRestorePoint: RecoveryPoint | null;
+}): DashboardSafetyRouteResolution {
+  const state = readDashboardSafetyNavigationState(locationState);
+  const focusTarget = resolveDashboardSafetyFocusTarget({
+    livePending,
+    liveRestorePoint,
+    state,
+  });
+
+  return {
+    ...focusTarget,
+    routedTaskId: state?.taskId ?? null,
+    shouldClearRouteState: state !== null,
+  };
+}
+
+export function shouldRetainDashboardSafetyActiveDetail({
+  activeDetailKey,
+  approvalSnapshot,
+  cardKeys,
+}: {
+  activeDetailKey: string | null;
+  approvalSnapshot: ApprovalRequest | null;
+  cardKeys: string[];
+}) {
+  if (!activeDetailKey) {
+    return false;
+  }
+
+  if (cardKeys.includes(activeDetailKey)) {
+    return true;
+  }
+
+  return activeDetailKey.startsWith("approval:") && approvalSnapshot?.approval_id === activeDetailKey.slice("approval:".length);
 }

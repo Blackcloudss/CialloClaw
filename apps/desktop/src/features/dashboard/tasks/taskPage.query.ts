@@ -16,3 +16,13 @@ export function getDashboardTaskSecurityRefreshPlan(dataMode: "rpc" | "mock") {
     refetchOnMount: "always" as const,
   };
 }
+
+export function shouldEnableDashboardTaskDetailQuery(selectedTaskId: string | null, detailOpen: boolean) {
+  return Boolean(selectedTaskId && detailOpen);
+}
+
+export function resolveDashboardTaskSafetyOpenPlan(detailSource: "rpc" | "mock" | "fallback") {
+  return {
+    shouldRefetchDetail: detailSource === "fallback",
+  };
+}

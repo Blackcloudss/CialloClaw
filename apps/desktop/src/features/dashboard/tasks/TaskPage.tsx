@@ -12,7 +12,13 @@ import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboard
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
 import { describeCurrentStep, getFinishedTaskGroups, isTaskEnded, sortTasksByLatest } from "./taskPage.mapper";
-import { buildDashboardTaskBucketQueryKey, buildDashboardTaskDetailQueryKey, getDashboardTaskSecurityRefreshPlan } from "./taskPage.query";
+import {
+  buildDashboardTaskBucketQueryKey,
+  buildDashboardTaskDetailQueryKey,
+  getDashboardTaskSecurityRefreshPlan,
+  resolveDashboardTaskSafetyOpenPlan,
+  shouldEnableDashboardTaskDetailQuery,
+} from "./taskPage.query";
 import { buildFallbackTaskDetailData, controlTaskByAction, loadTaskBucketPage, loadTaskDetailData, type TaskPageDataMode } from "./taskPage.service";
 import { TaskDetailPanel } from "./components/TaskDetailPanel";
 import { TaskPreviewCard } from "./components/TaskPreviewCard";
@@ -104,7 +110,7 @@ export function TaskPage() {
   }, [allTasks, finishedTasks, location.pathname, location.state, navigate, selectedTaskId, unfinishedTasks]);
 
   const taskDetailQuery = useQuery({
-    enabled: Boolean(selectedTaskId && detailOpen),
+    enabled: shouldEnableDashboardTaskDetailQuery(selectedTaskId, detailOpen),
     queryKey: buildDashboardTaskDetailQueryKey(dataMode, selectedTaskId ?? ""),
     queryFn: () => loadTaskDetailData(selectedTaskId!, dataMode),
     refetchOnMount: securityRefreshPlan.refetchOnMount,
@@ -179,8 +185,9 @@ export function TaskPage() {
     }
 
     let resolvedDetailData = detailData;
+    const safetyOpenPlan = resolveDashboardTaskSafetyOpenPlan(detailData.source);
 
-    if (detailData.source === "fallback") {
+    if (safetyOpenPlan.shouldRefetchDetail) {
       const refetchResult = await taskDetailQuery.refetch();
 
       if (!refetchResult.data || refetchResult.isError) {
