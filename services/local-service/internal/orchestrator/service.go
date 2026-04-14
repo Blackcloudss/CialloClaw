@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
@@ -29,10 +30,11 @@ import (
 
 // ErrTaskNotFound 表示调用方给出的 task_id 在当前运行态中不存在。
 var (
-	ErrTaskNotFound        = errors.New("task not found")
-	ErrTaskStatusInvalid   = errors.New("task status invalid")
-	ErrTaskAlreadyFinished = errors.New("task already finished")
-	ErrStorageQueryFailed  = errors.New("storage query failed")
+	ErrTaskNotFound          = errors.New("task not found")
+	ErrTaskStatusInvalid     = errors.New("task status invalid")
+	ErrTaskAlreadyFinished   = errors.New("task already finished")
+	ErrStorageQueryFailed    = errors.New("storage query failed")
+	ErrRecoveryPointNotFound = errors.New("recovery point not found")
 )
 
 // Service 提供当前模块的服务能力。
@@ -780,6 +782,96 @@ func (s *Service) SecurityAuditList(params map[string]any) (map[string]any, erro
 	return map[string]any{
 		"items": items,
 		"page":  pageMap(limit, offset, total),
+	}, nil
+}
+
+// SecurityRestorePointsList 处理 agent.security.restore_points.list。
+func (s *Service) SecurityRestorePointsList(params map[string]any) (map[string]any, error) {
+	limit := clampListLimit(intValue(params, "limit", 20))
+	offset := clampListOffset(intValue(params, "offset", 0))
+	taskID := stringValue(params, "task_id", "")
+	if s.storage == nil {
+		return map[string]any{"items": []map[string]any{}, "page": pageMap(limit, offset, 0)}, nil
+	}
+	points, total, err := s.storage.RecoveryPointStore().ListRecoveryPoints(context.Background(), taskID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	items := make([]map[string]any, 0, len(points))
+	for _, point := range points {
+		items = append(items, map[string]any{
+			"recovery_point_id": point.RecoveryPointID,
+			"task_id":           point.TaskID,
+			"summary":           point.Summary,
+			"created_at":        point.CreatedAt,
+			"objects":           append([]string(nil), point.Objects...),
+		})
+	}
+	return map[string]any{
+		"items": items,
+		"page":  pageMap(limit, offset, total),
+	}, nil
+}
+
+// SecurityRestoreApply 处理 agent.security.restore.apply。
+func (s *Service) SecurityRestoreApply(params map[string]any) (map[string]any, error) {
+	recoveryPointID := stringValue(params, "recovery_point_id", "")
+	if strings.TrimSpace(recoveryPointID) == "" {
+		return nil, errors.New("recovery_point_id is required")
+	}
+	taskID := stringValue(params, "task_id", "")
+	point, err := s.findRecoveryPointFromStorage(taskID, recoveryPointID)
+	if err != nil {
+		return nil, err
+	}
+	resolvedTaskID := firstNonEmptyString(strings.TrimSpace(taskID), point.TaskID)
+	task, ok := s.runEngine.GetTask(resolvedTaskID)
+	if !ok {
+		if s.storage == nil {
+			return nil, ErrTaskNotFound
+		}
+		persisted, loadErr := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
+		if loadErr != nil {
+			return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, loadErr)
+		}
+		loadedTask, found := findTaskRecordFromStorage(persisted, resolvedTaskID)
+		if !found {
+			return nil, ErrTaskNotFound
+		}
+		task = s.runEngine.HydrateTaskFromStorage(loadedTask)
+	}
+
+	recoveryPoint := recoveryPointMap(point)
+	applied := false
+	securityStatus := "recovered"
+	bubbleText := fmt.Sprintf("已根据恢复点 %s 恢复 %d 个对象。", point.RecoveryPointID, len(point.Objects))
+	if s.executor == nil {
+		securityStatus = "execution_error"
+		bubbleText = "恢复失败：执行后端不可用。"
+	} else if applyResult, err := s.executor.ApplyRecoveryPoint(context.Background(), point); err != nil {
+		securityStatus = "execution_error"
+		bubbleText = fmt.Sprintf("恢复失败：%s", err.Error())
+	} else {
+		applied = true
+		if len(applyResult.RestoredObjects) > 0 {
+			bubbleText = fmt.Sprintf("已根据恢复点 %s 恢复 %d 个对象。", point.RecoveryPointID, len(applyResult.RestoredObjects))
+		}
+	}
+
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", bubbleText, time.Now().Format(dateTimeLayout))
+	updatedTask, ok := s.runEngine.ApplyRecoveryOutcome(task.TaskID, securityStatus, recoveryPoint, bubble)
+	if !ok {
+		return nil, ErrTaskNotFound
+	}
+	auditRecord := s.writeRestoreAuditRecord(updatedTask.TaskID, point, applied, bubbleText)
+	updatedTask = s.appendAuditData(updatedTask, compactAuditRecords(auditRecord), nil)
+
+	return map[string]any{
+		"applied":        applied,
+		"task":           taskMap(updatedTask),
+		"recovery_point": recoveryPoint,
+		"audit_record":   auditRecord,
+		"bubble_message": bubble,
 	}, nil
 }
 
@@ -1597,6 +1689,140 @@ func (s *Service) latestRestorePointFromStorage(taskID string) map[string]any {
 		"created_at":        item.CreatedAt,
 		"objects":           append([]string(nil), item.Objects...),
 	}
+}
+
+func (s *Service) findRecoveryPointFromStorage(taskID, recoveryPointID string) (checkpoint.RecoveryPoint, error) {
+	if s.storage == nil {
+		return checkpoint.RecoveryPoint{}, fmt.Errorf("%w: recovery point store unavailable", ErrStorageQueryFailed)
+	}
+	item, err := s.storage.RecoveryPointStore().GetRecoveryPoint(context.Background(), recoveryPointID)
+	if err != nil {
+		if errors.Is(err, storage.ErrRecoveryPointNotFound) {
+			return checkpoint.RecoveryPoint{}, ErrRecoveryPointNotFound
+		}
+		return checkpoint.RecoveryPoint{}, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	if taskID != "" && item.TaskID != taskID {
+		return checkpoint.RecoveryPoint{}, ErrRecoveryPointNotFound
+	}
+	return item, nil
+}
+
+func recoveryPointMap(point checkpoint.RecoveryPoint) map[string]any {
+	return map[string]any{
+		"recovery_point_id": point.RecoveryPointID,
+		"task_id":           point.TaskID,
+		"summary":           point.Summary,
+		"created_at":        point.CreatedAt,
+		"objects":           append([]string(nil), point.Objects...),
+	}
+}
+
+func (s *Service) writeRestoreAuditRecord(taskID string, point checkpoint.RecoveryPoint, applied bool, summary string) map[string]any {
+	if s.audit == nil {
+		return nil
+	}
+	input := audit.RecordInput{
+		TaskID:  taskID,
+		Type:    "recovery",
+		Action:  "restore_apply",
+		Summary: firstNonEmptyString(strings.TrimSpace(summary), "restore apply completed"),
+		Target:  firstNonEmptyString(strings.Join(point.Objects, ", "), "recovery_scope"),
+		Result:  map[bool]string{true: "success", false: "failed"}[applied],
+	}
+	if record, err := s.audit.Write(context.Background(), input); err == nil {
+		return record.Map()
+	}
+	if record, err := s.audit.BuildRecord(input); err == nil {
+		return record.Map()
+	}
+	return nil
+}
+
+func findTaskRecordFromStorage(records []storage.TaskRunRecord, taskID string) (runengine.TaskRecord, bool) {
+	for _, record := range records {
+		if record.TaskID == taskID {
+			return runengine.TaskRecord{
+				TaskID:            record.TaskID,
+				SessionID:         record.SessionID,
+				RunID:             record.RunID,
+				Title:             record.Title,
+				SourceType:        record.SourceType,
+				Status:            record.Status,
+				Intent:            cloneMap(record.Intent),
+				PreferredDelivery: record.PreferredDelivery,
+				FallbackDelivery:  record.FallbackDelivery,
+				CurrentStep:       record.CurrentStep,
+				RiskLevel:         record.RiskLevel,
+				StartedAt:         record.StartedAt,
+				UpdatedAt:         record.UpdatedAt,
+				FinishedAt:        cloneStorageTimePointer(record.FinishedAt),
+				Timeline:          taskTimelineFromStorage(record.Timeline),
+				BubbleMessage:     cloneMap(record.BubbleMessage),
+				DeliveryResult:    cloneMap(record.DeliveryResult),
+				Artifacts:         cloneMapSlice(record.Artifacts),
+				AuditRecords:      cloneMapSlice(record.AuditRecords),
+				MirrorReferences:  cloneMapSlice(record.MirrorReferences),
+				SecuritySummary:   cloneMap(record.SecuritySummary),
+				ApprovalRequest:   cloneMap(record.ApprovalRequest),
+				PendingExecution:  cloneMap(record.PendingExecution),
+				Authorization:     cloneMap(record.Authorization),
+				ImpactScope:       cloneMap(record.ImpactScope),
+				TokenUsage:        cloneMap(record.TokenUsage),
+				MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
+				MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
+				StorageWritePlan:  cloneMap(record.StorageWritePlan),
+				ArtifactPlans:     cloneMapSlice(record.ArtifactPlans),
+				Notifications:     taskNotificationsFromStorage(record.Notifications),
+				LatestEvent:       cloneMap(record.LatestEvent),
+				LatestToolCall:    cloneMap(record.LatestToolCall),
+				CurrentStepStatus: record.CurrentStepStatus,
+			}, true
+		}
+	}
+	return runengine.TaskRecord{}, false
+}
+
+func taskTimelineFromStorage(timeline []storage.TaskStepSnapshot) []runengine.TaskStepRecord {
+	if len(timeline) == 0 {
+		return nil
+	}
+	result := make([]runengine.TaskStepRecord, len(timeline))
+	for index, step := range timeline {
+		result[index] = runengine.TaskStepRecord{
+			StepID:        step.StepID,
+			TaskID:        step.TaskID,
+			Name:          step.Name,
+			Status:        step.Status,
+			OrderIndex:    step.OrderIndex,
+			InputSummary:  step.InputSummary,
+			OutputSummary: step.OutputSummary,
+		}
+	}
+	return result
+}
+
+func taskNotificationsFromStorage(values []storage.NotificationSnapshot) []runengine.NotificationRecord {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make([]runengine.NotificationRecord, len(values))
+	for index, value := range values {
+		result[index] = runengine.NotificationRecord{
+			Method:    value.Method,
+			Params:    cloneMap(value.Params),
+			CreatedAt: value.CreatedAt,
+		}
+	}
+	return result
+}
+
+func cloneStorageTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func latestOutputPathFromTasks(tasks []runengine.TaskRecord) string {

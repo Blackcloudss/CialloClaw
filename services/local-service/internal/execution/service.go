@@ -353,12 +353,11 @@ func (s *Service) executeThroughToolExecutor(ctx context.Context, request Reques
 		}
 		return failedResult, false, fmt.Errorf("execute tool %s: %w", toolName, err)
 	}
-
 	result := Result{
 		Content:        outputText,
 		DeliveryResult: deliveryResult,
 		Artifacts:      toolArtifactsFromResult(request.TaskID, toolResult),
-		RecoveryPoint:  cloneMap(recoveryPoint),
+		RecoveryPoint:  firstNonEmptyRecoveryPoint(recoveryPoint, extractRecoveryPoint(toolResult.RawOutput)),
 		ToolCalls:      []tools.ToolCallRecord{normalizeFilesystemToolCall(toolResult.ToolCall, toolInput)},
 		ToolName:       toolName,
 		ToolInput:      toolInput,
@@ -574,6 +573,83 @@ func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID string,
 	}
 
 	return merged, artifact, nil
+}
+
+// ApplyRecoveryPoint 将某个恢复点对应的工作区快照重新写回目标对象。
+func (s *Service) ApplyRecoveryPoint(ctx context.Context, point checkpoint.RecoveryPoint) (checkpoint.ApplyResult, error) {
+	if s.checkpoint == nil {
+		return checkpoint.ApplyResult{}, fmt.Errorf("apply recovery point: checkpoint service unavailable")
+	}
+	if s.fileSystem == nil {
+		return checkpoint.ApplyResult{}, fmt.Errorf("apply recovery point: file system unavailable")
+	}
+	result, err := s.checkpoint.Apply(ctx, s.fileSystem, point)
+	if err != nil {
+		return checkpoint.ApplyResult{}, fmt.Errorf("apply recovery point %s: %w", point.RecoveryPointID, err)
+	}
+	return result, nil
+}
+
+func (s *Service) prepareWriteFileRecoveryPoint(ctx context.Context, request Request, toolName string, toolInput map[string]any) (map[string]any, error) {
+	if toolName != "write_file" || s.checkpoint == nil || s.fileSystem == nil {
+		return nil, nil
+	}
+	targetPath := stringValue(toolInput, "path", "")
+	if targetPath == "" {
+		return nil, nil
+	}
+	if _, err := s.fileSystem.Stat(targetPath); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("inspect write_file target %s: %w", targetPath, err)
+		}
+	}
+	point, err := s.checkpoint.CreateWithSnapshots(ctx, s.fileSystem, checkpoint.CreateInput{
+		TaskID:  request.TaskID,
+		Summary: "write_file_before_change",
+		Objects: []string{checkpointObjectPath(targetPath)},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create pre-write recovery point: %w", err)
+	}
+	return map[string]any{
+		"recovery_point_id": point.RecoveryPointID,
+		"task_id":           point.TaskID,
+		"summary":           point.Summary,
+		"created_at":        point.CreatedAt,
+		"objects":           append([]string(nil), point.Objects...),
+	}, nil
+}
+
+func extractRecoveryPoint(output map[string]any) map[string]any {
+	if len(output) == 0 {
+		return nil
+	}
+	recoveryPoint, ok := output["recovery_point"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return cloneOutput(recoveryPoint)
+}
+
+func firstNonEmptyRecoveryPoint(primary, fallback map[string]any) map[string]any {
+	if len(primary) > 0 {
+		return cloneMap(primary)
+	}
+	if len(fallback) > 0 {
+		return cloneMap(fallback)
+	}
+	return nil
+}
+
+func checkpointObjectPath(targetPath string) string {
+	if targetPath == "" {
+		return ""
+	}
+	normalized := strings.TrimSpace(strings.ReplaceAll(targetPath, "\\", "/"))
+	if normalized == "" || strings.HasPrefix(normalized, "workspace/") {
+		return normalized
+	}
+	return path.Join("workspace", normalized)
 }
 
 func cloneOutput(input map[string]any) map[string]any {
@@ -1126,7 +1202,7 @@ func (s *Service) toolExecutionContext(workspacePath string, request Request) *t
 		WorkspacePath:        workspacePath,
 		ApprovalGranted:      request.ApprovalGranted,
 		ApprovedOperation:    stringValue(request.Intent, "name", ""),
-		ApprovedTargetObject: approvedTargetObject(request.Intent, workspacePath),
+		ApprovedTargetObject: approvedTargetObject(request.Intent, s.workspace),
 		Platform:             s.fileSystem,
 		Execution:            s.execution,
 		Playwright:           s.playwright,
@@ -1144,16 +1220,10 @@ func (s *Service) prepareGovernanceRecoveryPoint(ctx context.Context, request Re
 		if targetPath == "" {
 			return nil, nil
 		}
-		if _, err := s.fileSystem.Stat(targetPath); err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil, nil
-			}
-			return nil, fmt.Errorf("%w: inspect target path %s: %v", ErrRecoveryPointPrepareFailed, targetPath, err)
-		}
-		point, err := s.checkpoint.Create(ctx, checkpoint.CreateInput{
+		point, err := s.checkpoint.CreateWithSnapshots(ctx, s.fileSystem, checkpoint.CreateInput{
 			TaskID:  request.TaskID,
 			Summary: "write_file_before_change",
-			Objects: []string{targetPath},
+			Objects: []string{checkpointObjectPath(targetPath)},
 		})
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrRecoveryPointPrepareFailed, err)

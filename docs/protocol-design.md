@@ -492,6 +492,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.dashboard.module.get`
 - `agent.mirror.overview.get`
 - `agent.security.summary.get`
+- `agent.security.restore_points.list`
+- `agent.security.restore.apply`
 - `agent.security.pending.list`
 - `agent.security.respond`
 
@@ -503,8 +505,6 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 ### 7.2 planned
 
 - `agent.security.audit.list`
-- `agent.security.restore_points.list`
-- `agent.security.restore.apply`
 - `agent.mirror.memory.manage`
 - `agent.task.artifact.list`
 - `agent.task.artifact.open`
@@ -2144,6 +2144,183 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     },
     "meta": {
       "server_time": "2026-04-07T11:04:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+---
+
+### 8.3.7 `agent.security.restore_points.list`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：用户在安全卫士或任务详情中查看恢复点列表时
+- **系统处理**：按任务或全局范围返回恢复点列表
+- **入参**：可选任务 ID、分页参数
+- **出参**：恢复点列表、分页信息
+
+### agent.security.restore_points.list 入参说明
+
+| 字段      | 中文说明        |
+| --------- | --------------- |
+| `task_id` | 可选的任务 ID   |
+| `limit`   | 每页条数        |
+| `offset`  | 分页偏移        |
+
+### agent.security.restore_points.list 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_restore_points_001",
+  "method": "agent.security.restore_points.list",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_security_restore_points_001",
+      "client_time": "2026-04-07T11:05:00+08:00"
+    },
+    "task_id": "task_301",
+    "limit": 20,
+    "offset": 0
+  }
+}
+```
+
+### agent.security.restore_points.list 出参说明
+
+| 字段                             | 中文说明     |
+| -------------------------------- | ------------ |
+| `data.items`                     | 恢复点列表   |
+| `data.items[].recovery_point_id` | 恢复点 ID    |
+| `data.items[].task_id`           | 关联任务 ID  |
+| `data.items[].summary`           | 恢复点说明   |
+| `data.items[].objects`           | 关联对象清单 |
+| `data.page`                      | 分页信息     |
+
+### agent.security.restore_points.list 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_restore_points_001",
+  "result": {
+    "data": {
+      "items": [
+        {
+          "recovery_point_id": "rp_001",
+          "task_id": "task_301",
+          "summary": "write_file_before_change",
+          "created_at": "2026-04-07T11:04:30+08:00",
+          "objects": ["workspace/notes/output.md"]
+        }
+      ],
+      "page": {
+        "limit": 20,
+        "offset": 0,
+        "total": 1,
+        "has_more": false
+      }
+    },
+    "meta": {
+      "server_time": "2026-04-07T11:05:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
+
+---
+
+### 8.3.8 `agent.security.restore.apply`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：用户选定某个恢复点并发起回滚时
+- **系统处理**：执行恢复点对应的工作区回滚，并回写任务、安全状态与审计记录
+- **入参**：可选任务 ID、恢复点 ID
+- **出参**：是否成功、更新后的任务、恢复点、审计记录、状态气泡
+
+### agent.security.restore.apply 入参说明
+
+| 字段                | 中文说明       |
+| ------------------- | -------------- |
+| `task_id`           | 可选的任务 ID  |
+| `recovery_point_id` | 目标恢复点 ID  |
+
+### agent.security.restore.apply 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_restore_apply_001",
+  "method": "agent.security.restore.apply",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_security_restore_apply_001",
+      "client_time": "2026-04-07T11:06:00+08:00"
+    },
+    "task_id": "task_301",
+    "recovery_point_id": "rp_001"
+  }
+}
+```
+
+### agent.security.restore.apply 出参说明
+
+| 字段                  | 中文说明         |
+| --------------------- | ---------------- |
+| `data.applied`        | 是否恢复成功     |
+| `data.task`           | 更新后的任务对象 |
+| `data.recovery_point` | 本次使用的恢复点 |
+| `data.audit_record`   | 恢复审计记录     |
+| `data.bubble_message` | 状态提示气泡     |
+
+### agent.security.restore.apply 错误说明
+
+| 错误码 | 错误名 | 中文说明 |
+| ------ | ------ | -------- |
+| `1005001` | `SQLITE_WRITE_FAILED` | 恢复点读取或持久化存储查询失败 |
+| `1005002` | `ARTIFACT_NOT_FOUND` | 指定恢复点不存在，或与目标任务不匹配 |
+
+### agent.security.restore.apply 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_security_restore_apply_001",
+  "result": {
+    "data": {
+      "applied": true,
+      "task": {
+        "task_id": "task_301",
+        "status": "completed"
+      },
+      "recovery_point": {
+        "recovery_point_id": "rp_001",
+        "task_id": "task_301",
+        "summary": "write_file_before_change",
+        "created_at": "2026-04-07T11:04:30+08:00",
+        "objects": ["workspace/notes/output.md"]
+      },
+      "audit_record": {
+        "audit_id": "audit_001",
+        "task_id": "task_301",
+        "type": "recovery",
+        "action": "restore_apply",
+        "summary": "已根据恢复点 rp_001 恢复 1 个对象。",
+        "target": "workspace/notes/output.md",
+        "result": "success",
+        "created_at": "2026-04-07T11:06:01+08:00"
+      },
+      "bubble_message": {
+        "bubble_id": "bubble_301",
+        "task_id": "task_301",
+        "type": "status",
+        "text": "已根据恢复点 rp_001 恢复 1 个对象。"
+      }
+    },
+    "meta": {
+      "server_time": "2026-04-07T11:06:01+08:00"
     },
     "warnings": []
   }
