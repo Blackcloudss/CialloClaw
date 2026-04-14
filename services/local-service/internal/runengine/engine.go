@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -276,6 +277,35 @@ func (e *Engine) GetTask(taskID string) (TaskRecord, bool) {
 	return record.clone(), true
 }
 
+// HydrateTaskFromStorage 将持久化快照重新装载回运行时内存，用于恢复重启后的治理动作。
+func (e *Engine) HydrateTaskFromStorage(record TaskRecord) TaskRecord {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	cloned := record.clone()
+	if existing, ok := e.tasks[cloned.TaskID]; ok {
+		*existing = cloned
+		e.persistTaskLocked(existing)
+		return existing.clone()
+	}
+	stored := cloned
+	e.tasks[stored.TaskID] = &stored
+	e.taskOrder = append([]string{stored.TaskID}, e.taskOrder...)
+	if stored.SessionID != "" {
+		seen := false
+		for _, sessionID := range e.sessionOrder {
+			if sessionID == stored.SessionID {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			e.sessionOrder = append(e.sessionOrder, stored.SessionID)
+		}
+	}
+	e.persistTaskLocked(&stored)
+	return stored.clone()
+}
+
 // ListTasks 列出Tasks。
 
 // ListTasks 按未完成/已完成分组列出任务，并在分页前应用统一排序规则。
@@ -432,6 +462,11 @@ func (e *Engine) SetPresentation(taskID string, bubbleMessage map[string]any, de
 
 // RecordToolCall 记录主链路最近一次完成的 tool_call 兼容层快照。
 func (e *Engine) RecordToolCall(taskID, toolName string, input, output map[string]any, durationMS int64) (TaskRecord, bool) {
+	return e.RecordToolCallLifecycle(taskID, toolName, "succeeded", input, output, durationMS, nil)
+}
+
+// RecordToolCallLifecycle 根据工具执行状态记录最近一次 tool_call 快照。
+func (e *Engine) RecordToolCallLifecycle(taskID, toolName, status string, input, output map[string]any, durationMS int64, errorCode any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -441,11 +476,92 @@ func (e *Engine) RecordToolCall(taskID, toolName string, input, output map[strin
 	}
 
 	record.UpdatedAt = e.now()
-	record.LatestToolCall = e.buildToolCallRecord(record, toolName, input, output, durationMS, nil)
+	record.LatestToolCall = e.buildToolCallRecord(record, toolName, status, input, output, durationMS, errorCode)
 	record.LatestEvent = e.buildEventWithPayload(record, "tool_call.completed", map[string]any{
-		"status":    record.Status,
-		"tool_name": toolName,
+		"status":      record.Status,
+		"tool_name":   toolName,
+		"tool_status": firstNonEmpty(status, "succeeded"),
 	})
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
+// FailTaskExecution 将任务收敛到 failed，用于执行失败或恢复点准备失败场景。
+func (e *Engine) FailTaskExecution(taskID, stepName, securityStatus, outputSummary string, impactScope map[string]any, bubbleMessage map[string]any, latestRestorePoint ...map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	now := e.now()
+	record.Status = "failed"
+	record.CurrentStep = firstNonEmpty(stepName, "execution_failed")
+	record.UpdatedAt = now
+	record.FinishedAt = &now
+	record.PendingExecution = nil
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.ImpactScope = cloneMap(impactScope)
+	restorePoint := latestRestorePointFromSummary(record.SecuritySummary)
+	if len(latestRestorePoint) > 0 && len(latestRestorePoint[0]) > 0 {
+		restorePoint = cloneMap(latestRestorePoint[0])
+	}
+	record.SecuritySummary = map[string]any{
+		"security_status":        firstNonEmpty(securityStatus, "execution_error"),
+		"risk_level":             record.RiskLevel,
+		"pending_authorizations": 0,
+		"latest_restore_point":   restorePoint,
+	}
+	record.Timeline = advanceTimeline(record.Timeline, record.CurrentStep, "failed", firstNonEmpty(outputSummary, "执行失败"))
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
+// BlockTaskByPolicy 将被治理策略拦截的任务收敛到 cancelled。
+func (e *Engine) BlockTaskByPolicy(taskID, riskLevel, outputSummary string, impactScope map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	now := e.now()
+	record.Status = "cancelled"
+	record.CurrentStep = "risk_blocked"
+	record.UpdatedAt = now
+	record.FinishedAt = &now
+	record.PendingExecution = nil
+	record.ApprovalRequest = nil
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.ImpactScope = cloneMap(impactScope)
+	if riskLevel != "" {
+		record.RiskLevel = riskLevel
+	}
+	record.SecuritySummary = map[string]any{
+		"security_status":        "intercepted",
+		"risk_level":             record.RiskLevel,
+		"pending_authorizations": 0,
+		"latest_restore_point":   latestRestorePointFromSummary(record.SecuritySummary),
+	}
+	record.Timeline = advanceTimeline(record.Timeline, "risk_blocked", "cancelled", firstNonEmpty(outputSummary, "高风险操作已被策略拦截"))
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEvent(record, "task.updated")
 	record.queueNotification("task.updated", map[string]any{
 		"task_id": record.TaskID,
 		"status":  record.Status,
@@ -458,7 +574,7 @@ func (e *Engine) RecordToolCall(taskID, toolName string, input, output map[strin
 // CompleteTask 完成Task。
 
 // CompleteTask 把任务收敛到 completed，并写入正式交付结果、artifact 和恢复点摘要。
-func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubbleMessage map[string]any, artifacts []map[string]any) (TaskRecord, bool) {
+func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubbleMessage map[string]any, artifacts []map[string]any, latestRestorePoint ...map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -477,7 +593,11 @@ func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubb
 	record.Artifacts = cloneMapSlice(artifacts)
 	record.Timeline = advanceTimeline(record.Timeline, "return_result", "completed", "结果已正式交付")
 	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
-	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, buildRecoveryPoint(record.TaskID, now))
+	restorePoint := buildRecoveryPoint(record.TaskID, now)
+	if len(latestRestorePoint) > 0 && len(latestRestorePoint[0]) > 0 {
+		restorePoint = cloneMap(latestRestorePoint[0])
+	}
+	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, restorePoint)
 	record.LatestEvent = e.buildEvent(record, "delivery.ready")
 	record.queueNotification("task.updated", map[string]any{
 		"task_id": record.TaskID,
@@ -486,6 +606,53 @@ func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubb
 	record.queueNotification("delivery.ready", map[string]any{
 		"task_id":         record.TaskID,
 		"delivery_result": cloneMap(record.DeliveryResult),
+	})
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
+// ApplyRecoveryOutcome 在恢复点应用后刷新任务的状态、安全摘要与通知回写。
+func (e *Engine) ApplyRecoveryOutcome(taskID, taskStatus, securityStatus string, recoveryPoint map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.UpdatedAt = e.now()
+	if strings.TrimSpace(taskStatus) != "" {
+		record.Status = taskStatus
+		if taskStatus == "completed" || taskStatus == "failed" || taskStatus == "cancelled" {
+			now := e.now()
+			record.FinishedAt = &now
+		} else {
+			record.FinishedAt = nil
+		}
+	}
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.PendingExecution = nil
+	record.ApprovalRequest = nil
+	record.SecuritySummary = map[string]any{
+		"security_status":        firstNonEmpty(securityStatus, "recovered"),
+		"risk_level":             record.RiskLevel,
+		"pending_authorizations": 0,
+		"latest_restore_point":   cloneMap(recoveryPoint),
+	}
+	eventType := "recovery.failed"
+	if securityStatus == "recovered" {
+		eventType = "recovery.applied"
+	}
+	record.LatestEvent = e.buildEventWithPayload(record, eventType, map[string]any{
+		"status":            record.Status,
+		"security_status":   firstNonEmpty(securityStatus, "recovered"),
+		"recovery_point_id": stringValue(cloneMap(recoveryPoint), "recovery_point_id", ""),
+	})
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
 	})
 	e.persistTaskLocked(record)
 
@@ -600,11 +767,12 @@ func (e *Engine) MarkWaitingApprovalWithPlan(taskID string, approvalRequest map[
 		record.RiskLevel = riskLevel
 	}
 	record.BubbleMessage = cloneMap(bubbleMessage)
+	latestRestorePoint := latestRestorePointFromSummary(record.SecuritySummary)
 	record.SecuritySummary = map[string]any{
 		"security_status":        "pending_confirmation",
 		"risk_level":             record.RiskLevel,
 		"pending_authorizations": 1,
-		"latest_restore_point":   nil,
+		"latest_restore_point":   latestRestorePoint,
 	}
 	record.Timeline = advanceTimeline(record.Timeline, "waiting_authorization", "running", "等待用户授权")
 	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
@@ -1075,10 +1243,10 @@ func (e *Engine) buildEventWithPayload(record *TaskRecord, eventType string, pay
 
 // buildToolCall 为当前任务生成一条兼容层 ToolCall 记录。
 func (e *Engine) buildToolCall(record *TaskRecord, toolName string) map[string]any {
-	return e.buildToolCallRecord(record, toolName, map[string]any{}, map[string]any{}, 120, nil)
+	return e.buildToolCallRecord(record, toolName, "succeeded", map[string]any{}, map[string]any{}, 120, nil)
 }
 
-func (e *Engine) buildToolCallRecord(record *TaskRecord, toolName string, input, output map[string]any, durationMS int64, errorCode any) map[string]any {
+func (e *Engine) buildToolCallRecord(record *TaskRecord, toolName, status string, input, output map[string]any, durationMS int64, errorCode any) map[string]any {
 	if durationMS <= 0 {
 		durationMS = 1
 	}
@@ -1089,7 +1257,7 @@ func (e *Engine) buildToolCallRecord(record *TaskRecord, toolName string, input,
 		"task_id":      record.TaskID,
 		"step_id":      timelineCurrentStepID(record.Timeline),
 		"tool_name":    toolName,
-		"status":       "succeeded",
+		"status":       firstNonEmpty(status, "succeeded"),
 		"input":        cloneMap(input),
 		"output":       cloneMap(output),
 		"error_code":   errorCode,

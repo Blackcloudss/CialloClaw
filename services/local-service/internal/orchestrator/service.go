@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
@@ -30,10 +31,11 @@ import (
 
 // ErrTaskNotFound 表示调用方给出的 task_id 在当前运行态中不存在。
 var (
-	ErrTaskNotFound        = errors.New("task not found")
-	ErrTaskStatusInvalid   = errors.New("task status invalid")
-	ErrTaskAlreadyFinished = errors.New("task already finished")
-	ErrStorageQueryFailed  = errors.New("storage query failed")
+	ErrTaskNotFound          = errors.New("task not found")
+	ErrTaskStatusInvalid     = errors.New("task status invalid")
+	ErrTaskAlreadyFinished   = errors.New("task already finished")
+	ErrStorageQueryFailed    = errors.New("storage query failed")
+	ErrRecoveryPointNotFound = errors.New("recovery point not found")
 )
 
 // Service 提供当前模块的服务能力。
@@ -190,22 +192,18 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), task.StartedAt.Format(dateTimeLayout))
 	deliveryResult := map[string]any(nil)
 	if !suggestion.RequiresConfirm {
-		if requiresAuthorization(suggestion.Intent) {
-			pendingExecution := s.buildPendingExecution(task, suggestion.Intent)
-			approvalRequest := buildApprovalRequest(task.TaskID, suggestion.Intent, "red")
-			bubble = s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", task.StartedAt.Format(dateTimeLayout))
-			if _, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble); ok {
-				task, _ = s.runEngine.GetTask(task.TaskID)
-			}
-			return map[string]any{
-				"task":           taskMap(task),
-				"bubble_message": bubble,
-			}, nil
+		governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, suggestion.Intent)
+		if governanceErr != nil {
+			return nil, governanceErr
 		}
-		var err error
-		task, bubble, deliveryResult, _, err = s.executeTask(task, snapshot, suggestion.Intent)
-		if err != nil {
-			return nil, err
+		if handled {
+			return governedResponse, nil
+		}
+		task = governedTask
+		var execErr error
+		task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
+		if execErr != nil {
+			return nil, execErr
 		}
 	} else {
 		if _, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
@@ -263,22 +261,20 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		return response, nil
 	}
 
-	if requiresAuthorization(suggestion.Intent) {
-		pendingExecution := s.buildPendingExecution(task, suggestion.Intent)
-		approvalRequest := buildApprovalRequest(task.TaskID, suggestion.Intent, "red")
-		bubble = s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", task.StartedAt.Format(dateTimeLayout))
-		if _, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble); ok {
-			task, _ = s.runEngine.GetTask(task.TaskID)
-			response["task"] = taskMap(task)
-			response["bubble_message"] = bubble
-		}
-		return response, nil
+	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, suggestion.Intent)
+	if governanceErr != nil {
+		return nil, governanceErr
 	}
+	if handled {
+		return governedResponse, nil
+	}
+	task = governedTask
 
-	var err error
-	task, bubble, deliveryResult, _, err := s.executeTask(task, snapshot, suggestion.Intent)
-	if err != nil {
-		return nil, err
+	deliveryResult := map[string]any(nil)
+	var execErr error
+	task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
+	if execErr != nil {
+		return nil, execErr
 	}
 	response["task"] = taskMap(task)
 	response["bubble_message"] = bubble
@@ -336,28 +332,21 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	updatedTitle := s.intent.Suggest(snapshotFromTask(task), intentValue, false).TaskTitle
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已按新的要求开始处理", task.UpdatedAt.Format(dateTimeLayout))
-	if requiresAuthorization(intentValue) {
-		updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, updatedTitle, intentValue)
-		if !ok {
-			return nil, ErrTaskNotFound
-		}
-		s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshotFromTask(updatedTask), intentValue)
-
-		pendingExecution := s.buildPendingExecution(updatedTask, intentValue)
-		approvalRequest := buildApprovalRequest(task.TaskID, intentValue, "red")
-		bubble = s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", updatedTask.UpdatedAt.Format(dateTimeLayout))
-		updatedTask, ok = s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
-		if !ok {
-			return nil, ErrTaskNotFound
-		}
-		return map[string]any{
-			"task":            taskMap(updatedTask),
-			"bubble_message":  bubble,
-			"delivery_result": nil,
-		}, nil
+	updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, updatedTitle, intentValue)
+	if !ok {
+		return nil, ErrTaskNotFound
 	}
+	s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshotFromTask(updatedTask), intentValue)
+	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(updatedTask, intentValue)
+	if governanceErr != nil {
+		return nil, governanceErr
+	}
+	if handled {
+		return governedResponse, nil
+	}
+	updatedTask = governedTask
 
-	updatedTask, ok := s.runEngine.ConfirmTask(task.TaskID, updatedTitle, intentValue, bubble)
+	updatedTask, ok = s.runEngine.ConfirmTask(task.TaskID, updatedTitle, intentValue, bubble)
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
@@ -871,6 +860,117 @@ func (s *Service) SecurityAuditList(params map[string]any) (map[string]any, erro
 	}, nil
 }
 
+// SecurityRestorePointsList 处理 agent.security.restore_points.list。
+func (s *Service) SecurityRestorePointsList(params map[string]any) (map[string]any, error) {
+	limit := clampListLimit(intValue(params, "limit", 20))
+	offset := clampListOffset(intValue(params, "offset", 0))
+	taskID := stringValue(params, "task_id", "")
+	if s.storage == nil {
+		return map[string]any{"items": []map[string]any{}, "page": pageMap(limit, offset, 0)}, nil
+	}
+	points, total, err := s.storage.RecoveryPointStore().ListRecoveryPoints(context.Background(), taskID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	items := make([]map[string]any, 0, len(points))
+	for _, point := range points {
+		items = append(items, map[string]any{
+			"recovery_point_id": point.RecoveryPointID,
+			"task_id":           point.TaskID,
+			"summary":           point.Summary,
+			"created_at":        point.CreatedAt,
+			"objects":           append([]string(nil), point.Objects...),
+		})
+	}
+	return map[string]any{
+		"items": items,
+		"page":  pageMap(limit, offset, total),
+	}, nil
+}
+
+// SecurityRestoreApply 处理 agent.security.restore.apply。
+func (s *Service) SecurityRestoreApply(params map[string]any) (map[string]any, error) {
+	recoveryPointID := stringValue(params, "recovery_point_id", "")
+	if strings.TrimSpace(recoveryPointID) == "" {
+		return nil, errors.New("recovery_point_id is required")
+	}
+	taskID := stringValue(params, "task_id", "")
+	point, err := s.findRecoveryPointFromStorage(taskID, recoveryPointID)
+	if err != nil {
+		return nil, err
+	}
+	resolvedTaskID := firstNonEmptyString(strings.TrimSpace(taskID), point.TaskID)
+	task, ok := s.runEngine.GetTask(resolvedTaskID)
+	if !ok {
+		if s.storage == nil {
+			return nil, ErrTaskNotFound
+		}
+		persisted, loadErr := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
+		if loadErr != nil {
+			return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, loadErr)
+		}
+		loadedTask, found := findTaskRecordFromStorage(persisted, resolvedTaskID)
+		if !found {
+			return nil, ErrTaskNotFound
+		}
+		task = s.runEngine.HydrateTaskFromStorage(loadedTask)
+	}
+
+	recoveryPoint := recoveryPointMap(point)
+	assessment := restoreApplyAssessment(point)
+	pendingExecution := buildRestoreApplyPendingExecution(point, assessment)
+	approvalRequest := buildApprovalRequest(task.TaskID, task.Intent, assessment)
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "恢复点回滚属于高风险操作，请先确认授权。", time.Now().Format(dateTimeLayout))
+	updatedTask, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
+	if !ok {
+		return nil, ErrTaskNotFound
+	}
+	return map[string]any{
+		"applied":        false,
+		"task":           taskMap(updatedTask),
+		"recovery_point": recoveryPoint,
+		"audit_record":   nil,
+		"bubble_message": bubble,
+	}, nil
+}
+
+func (s *Service) applyRestoreAfterApproval(task runengine.TaskRecord, point checkpoint.RecoveryPoint) (runengine.TaskRecord, map[string]any, map[string]any, error) {
+	recoveryPoint := recoveryPointMap(point)
+	applied := false
+	securityStatus := "recovered"
+	finalStatus := "completed"
+	bubbleText := fmt.Sprintf("已根据恢复点 %s 恢复 %d 个对象。", point.RecoveryPointID, len(point.Objects))
+	if s.executor == nil {
+		securityStatus = "execution_error"
+		finalStatus = "failed"
+		bubbleText = "恢复失败：执行后端不可用。"
+	} else if applyResult, err := s.executor.ApplyRecoveryPoint(context.Background(), point); err != nil {
+		securityStatus = "execution_error"
+		finalStatus = "failed"
+		bubbleText = "恢复失败：恢复点内容不可用或恢复执行失败。"
+	} else {
+		applied = true
+		if len(applyResult.RestoredObjects) > 0 {
+			bubbleText = fmt.Sprintf("已根据恢复点 %s 恢复 %d 个对象。", point.RecoveryPointID, len(applyResult.RestoredObjects))
+		}
+	}
+
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", bubbleText, time.Now().Format(dateTimeLayout))
+	updatedTask, ok := s.runEngine.ApplyRecoveryOutcome(task.TaskID, finalStatus, securityStatus, recoveryPoint, bubble)
+	if !ok {
+		return runengine.TaskRecord{}, nil, nil, ErrTaskNotFound
+	}
+	auditRecord := s.writeRestoreAuditRecord(updatedTask.TaskID, point, applied, bubbleText)
+	updatedTask = s.appendAuditData(updatedTask, compactAuditRecords(auditRecord), nil)
+	return updatedTask, bubble, map[string]any{
+		"applied":        applied,
+		"task":           taskMap(updatedTask),
+		"recovery_point": recoveryPoint,
+		"audit_record":   auditRecord,
+		"bubble_message": bubble,
+	}, nil
+}
+
 func clampListLimit(limit int) int {
 	if limit <= 0 {
 		return 20
@@ -958,6 +1058,7 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 	}
 	pendingExecution = s.applyResolvedDeliveryToPlan(task, pendingExecution, task.Intent)
 	impactScope := s.buildImpactScope(task, pendingExecution)
+	operationName := stringValue(pendingExecution, "operation_name", "")
 	if decision == "deny_once" {
 		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已拒绝本次操作，任务已取消。", task.UpdatedAt.Format(dateTimeLayout))
 		updatedTask, ok := s.runEngine.DenyAfterApproval(task.TaskID, authorizationRecord, impactScope, bubble)
@@ -979,6 +1080,27 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 		return nil, ErrTaskNotFound
 	}
 	processingTask = s.appendAuditData(processingTask, compactAuditRecords(s.audit.BuildAuthorizationAudit(processingTask.TaskID, processingTask.RunID, decision, impactScope)), nil)
+	if operationName == "restore_apply" {
+		recoveryPointID := stringValue(pendingExecution, "recovery_point_id", "")
+		point, err := s.findRecoveryPointFromStorage(task.TaskID, recoveryPointID)
+		if err != nil {
+			return nil, err
+		}
+		updatedTask, _, response, err := s.applyRestoreAfterApproval(processingTask, point)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"authorization_record": authorizationRecord,
+			"task":                 taskMap(updatedTask),
+			"bubble_message":       response["bubble_message"],
+			"impact_scope":         impactScope,
+			"delivery_result":      nil,
+			"recovery_point":       response["recovery_point"],
+			"audit_record":         response["audit_record"],
+			"applied":              response["applied"],
+		}, nil
+	}
 
 	resultTitle := stringValue(pendingExecution, "result_title", "处理结果")
 	resultPreview := stringValue(pendingExecution, "preview_text", "已为你写入文档并打开")
@@ -991,15 +1113,25 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 	if err != nil {
 		return nil, err
 	}
-	updatedTask, _ = s.runEngine.ResolveAuthorization(task.TaskID, authorizationRecord, impactScope)
+	if updatedTask.Status == "completed" {
+		updatedTask, _ = s.runEngine.ResolveAuthorization(task.TaskID, authorizationRecord, impactScope)
+	}
+	if updatedTask.Status == "failed" {
+		deliveryResult = nil
+	}
 
-	return map[string]any{
+	response := map[string]any{
 		"authorization_record": authorizationRecord,
 		"task":                 taskMap(updatedTask),
 		"bubble_message":       resultBubble,
-		"delivery_result":      deliveryResult,
 		"impact_scope":         impactScope,
-	}, nil
+	}
+	if len(deliveryResult) > 0 {
+		response["delivery_result"] = deliveryResult
+	} else {
+		response["delivery_result"] = nil
+	}
+	return response, nil
 }
 
 // SettingsGet 设置tingsGet。
@@ -1861,6 +1993,198 @@ func (s *Service) latestRestorePointFromStorage(taskID string) map[string]any {
 	}
 }
 
+func (s *Service) findRecoveryPointFromStorage(taskID, recoveryPointID string) (checkpoint.RecoveryPoint, error) {
+	if s.storage == nil {
+		return checkpoint.RecoveryPoint{}, fmt.Errorf("%w: recovery point store unavailable", ErrStorageQueryFailed)
+	}
+	item, err := s.storage.RecoveryPointStore().GetRecoveryPoint(context.Background(), recoveryPointID)
+	if err != nil {
+		if errors.Is(err, storage.ErrRecoveryPointNotFound) {
+			return checkpoint.RecoveryPoint{}, ErrRecoveryPointNotFound
+		}
+		return checkpoint.RecoveryPoint{}, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	if taskID != "" && item.TaskID != taskID {
+		return checkpoint.RecoveryPoint{}, ErrRecoveryPointNotFound
+	}
+	return item, nil
+}
+
+func recoveryPointMap(point checkpoint.RecoveryPoint) map[string]any {
+	return map[string]any{
+		"recovery_point_id": point.RecoveryPointID,
+		"task_id":           point.TaskID,
+		"summary":           point.Summary,
+		"created_at":        point.CreatedAt,
+		"objects":           append([]string(nil), point.Objects...),
+	}
+}
+
+func restoreApplyAssessment(point checkpoint.RecoveryPoint) execution.GovernanceAssessment {
+	impactScope := restoreImpactScope(point)
+	return execution.GovernanceAssessment{
+		OperationName:      "restore_apply",
+		TargetObject:       firstNonEmptyString(firstImpactFile(impactScope), firstNonEmptyString(strings.Join(point.Objects, ", "), "workspace")),
+		RiskLevel:          "red",
+		ApprovalRequired:   true,
+		CheckpointRequired: false,
+		Reason:             "policy_requires_authorization",
+		ImpactScope:        impactScope,
+	}
+}
+
+func buildRestoreApplyPendingExecution(point checkpoint.RecoveryPoint, assessment execution.GovernanceAssessment) map[string]any {
+	return map[string]any{
+		"operation_name":      assessment.OperationName,
+		"target_object":       assessment.TargetObject,
+		"risk_level":          assessment.RiskLevel,
+		"risk_reason":         assessment.Reason,
+		"impact_scope":        cloneMap(assessment.ImpactScope),
+		"recovery_point_id":   point.RecoveryPointID,
+		"checkpoint_required": assessment.CheckpointRequired,
+	}
+}
+
+func restoreImpactScope(point checkpoint.RecoveryPoint) map[string]any {
+	files := append([]string(nil), point.Objects...)
+	outOfWorkspace := false
+	for _, filePath := range files {
+		normalized := strings.TrimSpace(strings.ReplaceAll(filePath, "\\", "/"))
+		if normalized == "" {
+			continue
+		}
+		if !strings.HasPrefix(normalized, "workspace/") && normalized != "workspace" {
+			outOfWorkspace = true
+			break
+		}
+	}
+	return map[string]any{
+		"files":                    files,
+		"webpages":                 []string{},
+		"apps":                     []string{},
+		"out_of_workspace":         outOfWorkspace,
+		"overwrite_or_delete_risk": true,
+	}
+}
+
+func firstImpactFile(impactScope map[string]any) string {
+	if len(impactScope) == 0 {
+		return ""
+	}
+	files, ok := impactScope["files"].([]string)
+	if !ok || len(files) == 0 {
+		return ""
+	}
+	return files[0]
+}
+
+func (s *Service) writeRestoreAuditRecord(taskID string, point checkpoint.RecoveryPoint, applied bool, summary string) map[string]any {
+	if s.audit == nil {
+		return nil
+	}
+	input := audit.RecordInput{
+		TaskID:  taskID,
+		Type:    "recovery",
+		Action:  "restore_apply",
+		Summary: firstNonEmptyString(strings.TrimSpace(summary), "restore apply completed"),
+		Target:  firstNonEmptyString(strings.Join(point.Objects, ", "), "recovery_scope"),
+		Result:  map[bool]string{true: "success", false: "failed"}[applied],
+	}
+	if record, err := s.audit.Write(context.Background(), input); err == nil {
+		return record.Map()
+	}
+	if record, err := s.audit.BuildRecord(input); err == nil {
+		return record.Map()
+	}
+	return nil
+}
+
+func findTaskRecordFromStorage(records []storage.TaskRunRecord, taskID string) (runengine.TaskRecord, bool) {
+	for _, record := range records {
+		if record.TaskID == taskID {
+			return runengine.TaskRecord{
+				TaskID:            record.TaskID,
+				SessionID:         record.SessionID,
+				RunID:             record.RunID,
+				Title:             record.Title,
+				SourceType:        record.SourceType,
+				Status:            record.Status,
+				Intent:            cloneMap(record.Intent),
+				PreferredDelivery: record.PreferredDelivery,
+				FallbackDelivery:  record.FallbackDelivery,
+				CurrentStep:       record.CurrentStep,
+				RiskLevel:         record.RiskLevel,
+				StartedAt:         record.StartedAt,
+				UpdatedAt:         record.UpdatedAt,
+				FinishedAt:        cloneStorageTimePointer(record.FinishedAt),
+				Timeline:          taskTimelineFromStorage(record.Timeline),
+				BubbleMessage:     cloneMap(record.BubbleMessage),
+				DeliveryResult:    cloneMap(record.DeliveryResult),
+				Artifacts:         cloneMapSlice(record.Artifacts),
+				AuditRecords:      cloneMapSlice(record.AuditRecords),
+				MirrorReferences:  cloneMapSlice(record.MirrorReferences),
+				SecuritySummary:   cloneMap(record.SecuritySummary),
+				ApprovalRequest:   cloneMap(record.ApprovalRequest),
+				PendingExecution:  cloneMap(record.PendingExecution),
+				Authorization:     cloneMap(record.Authorization),
+				ImpactScope:       cloneMap(record.ImpactScope),
+				TokenUsage:        cloneMap(record.TokenUsage),
+				MemoryReadPlans:   cloneMapSlice(record.MemoryReadPlans),
+				MemoryWritePlans:  cloneMapSlice(record.MemoryWritePlans),
+				StorageWritePlan:  cloneMap(record.StorageWritePlan),
+				ArtifactPlans:     cloneMapSlice(record.ArtifactPlans),
+				Notifications:     taskNotificationsFromStorage(record.Notifications),
+				LatestEvent:       cloneMap(record.LatestEvent),
+				LatestToolCall:    cloneMap(record.LatestToolCall),
+				CurrentStepStatus: record.CurrentStepStatus,
+			}, true
+		}
+	}
+	return runengine.TaskRecord{}, false
+}
+
+func taskTimelineFromStorage(timeline []storage.TaskStepSnapshot) []runengine.TaskStepRecord {
+	if len(timeline) == 0 {
+		return nil
+	}
+	result := make([]runengine.TaskStepRecord, len(timeline))
+	for index, step := range timeline {
+		result[index] = runengine.TaskStepRecord{
+			StepID:        step.StepID,
+			TaskID:        step.TaskID,
+			Name:          step.Name,
+			Status:        step.Status,
+			OrderIndex:    step.OrderIndex,
+			InputSummary:  step.InputSummary,
+			OutputSummary: step.OutputSummary,
+		}
+	}
+	return result
+}
+
+func taskNotificationsFromStorage(values []storage.NotificationSnapshot) []runengine.NotificationRecord {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make([]runengine.NotificationRecord, len(values))
+	for index, value := range values {
+		result[index] = runengine.NotificationRecord{
+			Method:    value.Method,
+			Params:    cloneMap(value.Params),
+			CreatedAt: value.CreatedAt,
+		}
+	}
+	return result
+}
+
+func cloneStorageTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
 func latestOutputPathFromTasks(tasks []runengine.TaskRecord) string {
 	for _, task := range tasks {
 		if outputPath := pathFromDeliveryResult(task.DeliveryResult); outputPath != "" {
@@ -2031,28 +2355,12 @@ func (s *Service) attachPostDeliveryHandoffs(taskID, runID string, snapshot cont
 	_, _ = s.runEngine.SetDeliveryPlans(taskID, storageWritePlan, artifactPlans)
 }
 
-// requiresAuthorization 处理当前模块的相关逻辑。
-
-// requiresAuthorization 判断当前意图是否必须进入等待授权链路。
-func requiresAuthorization(taskIntent map[string]any) bool {
-	if stringValue(taskIntent, "name", "") == "write_file" {
-		return true
-	}
-
-	arguments := mapValue(taskIntent, "arguments")
-	if requireAuthorization, ok := arguments["require_authorization"].(bool); ok {
-		return requireAuthorization
-	}
-
-	return false
-}
-
 // buildApprovalRequest 处理当前模块的相关逻辑。
 
 // buildApprovalRequest 构造统一的 approval_request 结构。
-func buildApprovalRequest(taskID string, taskIntent map[string]any, riskLevel string) map[string]any {
+func buildApprovalRequest(taskID string, taskIntent map[string]any, assessment execution.GovernanceAssessment) map[string]any {
 	arguments := mapValue(taskIntent, "arguments")
-	targetObject := stringValue(arguments, "target_path", "workspace_document")
+	targetObject := firstNonEmptyString(assessment.TargetObject, stringValue(arguments, "target_path", "workspace_document"))
 	if targetObject == "" {
 		targetObject = "workspace_document"
 	}
@@ -2060,10 +2368,10 @@ func buildApprovalRequest(taskID string, taskIntent map[string]any, riskLevel st
 	return map[string]any{
 		"approval_id":    fmt.Sprintf("appr_%s", taskID),
 		"task_id":        taskID,
-		"operation_name": firstNonEmptyString(stringValue(taskIntent, "name", ""), "write_file"),
-		"risk_level":     firstNonEmptyString(riskLevel, "red"),
+		"operation_name": firstNonEmptyString(assessment.OperationName, firstNonEmptyString(stringValue(taskIntent, "name", ""), "write_file")),
+		"risk_level":     firstNonEmptyString(assessment.RiskLevel, "red"),
 		"target_object":  targetObject,
-		"reason":         "policy_requires_authorization",
+		"reason":         firstNonEmptyString(assessment.Reason, "policy_requires_authorization"),
 		"status":         "pending",
 		"created_at":     time.Now().Format(dateTimeLayout),
 	}
@@ -2073,6 +2381,9 @@ func buildApprovalRequest(taskID string, taskIntent map[string]any, riskLevel st
 
 // buildImpactScope 构造最小影响范围摘要，用于授权结果回传和安全面板展示。
 func (s *Service) buildImpactScope(task runengine.TaskRecord, pendingExecution map[string]any) map[string]any {
+	if impactScope, ok := pendingExecution["impact_scope"].(map[string]any); ok && len(impactScope) > 0 {
+		return cloneMap(impactScope)
+	}
 	files := deriveImpactScopeFiles(task, pendingExecution, s.delivery)
 	workspacePath := workspacePathFromSettings(s.runEngine.Settings())
 	outOfWorkspace := false
@@ -2184,6 +2495,158 @@ func deliveryPreferenceFromStart(params map[string]any) (string, string) {
 func (s *Service) buildPendingExecution(task runengine.TaskRecord, taskIntent map[string]any) map[string]any {
 	plan := s.delivery.BuildApprovalExecutionPlan(task.TaskID, taskIntent)
 	return s.applyResolvedDeliveryToPlan(task, plan, taskIntent)
+}
+
+func (s *Service) applyGovernanceAssessment(plan map[string]any, assessment execution.GovernanceAssessment) map[string]any {
+	updatedPlan := cloneMap(plan)
+	if updatedPlan == nil {
+		updatedPlan = map[string]any{}
+	}
+	if len(assessment.ImpactScope) > 0 {
+		updatedPlan["impact_scope"] = cloneMap(assessment.ImpactScope)
+	}
+	if assessment.OperationName != "" {
+		updatedPlan["operation_name"] = assessment.OperationName
+	}
+	if assessment.TargetObject != "" {
+		updatedPlan["target_object"] = assessment.TargetObject
+	}
+	if assessment.RiskLevel != "" {
+		updatedPlan["risk_level"] = assessment.RiskLevel
+	}
+	if assessment.Reason != "" {
+		updatedPlan["risk_reason"] = assessment.Reason
+	}
+	updatedPlan["checkpoint_required"] = assessment.CheckpointRequired
+	return updatedPlan
+}
+
+func (s *Service) assessTaskGovernance(task runengine.TaskRecord, taskIntent map[string]any) (execution.GovernanceAssessment, bool, error) {
+	if s.executor == nil {
+		return execution.GovernanceAssessment{}, false, nil
+	}
+	resultTitle, _, _ := resultSpecFromIntent(taskIntent)
+	return s.executor.AssessGovernance(context.Background(), execution.Request{
+		TaskID:       task.TaskID,
+		RunID:        task.RunID,
+		Title:        task.Title,
+		Intent:       taskIntent,
+		Snapshot:     snapshotFromTask(task),
+		DeliveryType: resolveTaskDeliveryType(task, taskIntent),
+		ResultTitle:  resultTitle,
+	})
+}
+
+func (s *Service) handleTaskGovernanceDecision(task runengine.TaskRecord, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, bool, error) {
+	assessment, ok, err := s.assessTaskGovernance(task, taskIntent)
+	if err != nil {
+		return task, nil, false, err
+	}
+	if !ok {
+		assessment, ok = s.fallbackGovernanceAssessment(task, taskIntent)
+		if !ok {
+			return task, nil, false, nil
+		}
+	}
+	if assessment.Deny {
+		response, blockedTask, blockErr := s.blockTaskByAssessment(task, assessment)
+		return blockedTask, response, true, blockErr
+	}
+	if !assessment.ApprovalRequired {
+		return task, nil, false, nil
+	}
+	pendingExecution := s.applyGovernanceAssessment(s.buildPendingExecution(task, taskIntent), assessment)
+	approvalRequest := buildApprovalRequest(task.TaskID, taskIntent, assessment)
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", task.UpdatedAt.Format(dateTimeLayout))
+	updatedTask, changed := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
+	if !changed {
+		return task, nil, false, ErrTaskNotFound
+	}
+	return updatedTask, map[string]any{
+		"task":            taskMap(updatedTask),
+		"bubble_message":  bubble,
+		"delivery_result": nil,
+	}, true, nil
+}
+
+func (s *Service) fallbackGovernanceAssessment(task runengine.TaskRecord, taskIntent map[string]any) (execution.GovernanceAssessment, bool) {
+	if stringValue(taskIntent, "name", "") != "write_file" && !boolValue(mapValue(taskIntent, "arguments"), "require_authorization", false) {
+		return execution.GovernanceAssessment{}, false
+	}
+	plan := s.buildPendingExecution(task, taskIntent)
+	impactScope := s.buildImpactScope(task, plan)
+	return execution.GovernanceAssessment{
+		OperationName:    firstNonEmptyString(stringValue(taskIntent, "name", ""), "write_file"),
+		TargetObject:     impactScopeTarget(impactScope, targetPathFromIntent(taskIntent)),
+		RiskLevel:        "red",
+		ApprovalRequired: true,
+		Reason:           "policy_requires_authorization",
+		ImpactScope:      impactScope,
+	}, true
+}
+
+func (s *Service) blockTaskByAssessment(task runengine.TaskRecord, assessment execution.GovernanceAssessment) (map[string]any, runengine.TaskRecord, error) {
+	bubbleText := governanceInterceptionBubble(assessment)
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", bubbleText, task.UpdatedAt.Format(dateTimeLayout))
+	updatedTask, ok := s.runEngine.BlockTaskByPolicy(task.TaskID, assessment.RiskLevel, bubbleText, assessment.ImpactScope, bubble)
+	if !ok {
+		return nil, task, ErrTaskNotFound
+	}
+	auditRecord := s.writeGovernanceAuditRecord(updatedTask.TaskID, updatedTask.RunID, "risk", "intercept_operation", bubbleText, impactScopeTarget(assessment.ImpactScope, assessment.TargetObject), "denied")
+	updatedTask = s.appendAuditData(updatedTask, compactAuditRecords(auditRecord), nil)
+	return map[string]any{
+		"task":            taskMap(updatedTask),
+		"bubble_message":  bubble,
+		"delivery_result": nil,
+		"impact_scope":    cloneMap(assessment.ImpactScope),
+	}, updatedTask, nil
+}
+
+func (s *Service) writeGovernanceAuditRecord(taskID, runID, auditType, action, summary, target, result string) map[string]any {
+	if s.audit == nil {
+		return nil
+	}
+	if record, err := s.audit.Write(context.Background(), audit.RecordInput{
+		TaskID:  taskID,
+		Type:    auditType,
+		Action:  action,
+		Summary: summary,
+		Target:  target,
+		Result:  result,
+	}); err == nil {
+		return record.Map()
+	}
+	if record, err := s.audit.BuildRecord(audit.RecordInput{
+		TaskID:  taskID,
+		Type:    auditType,
+		Action:  action,
+		Summary: summary,
+		Target:  target,
+		Result:  result,
+	}); err == nil {
+		return record.Map()
+	}
+	return nil
+}
+
+func governanceInterceptionBubble(assessment execution.GovernanceAssessment) string {
+	switch assessment.Reason {
+	case risk.ReasonOutOfWorkspace:
+		return "目标超出工作区边界，已阻止本次操作。"
+	case risk.ReasonCommandNotAllowed:
+		return "命令存在高危风险，已被策略拦截。"
+	case risk.ReasonCapabilityDenied:
+		return "当前平台能力不可用，已阻止本次操作。"
+	default:
+		return "高风险操作已被策略拦截，未进入执行。"
+	}
+}
+
+func impactScopeTarget(impactScope map[string]any, fallback string) string {
+	if files := stringSliceValue(impactScope["files"]); len(files) > 0 {
+		return files[0]
+	}
+	return firstNonEmptyString(strings.TrimSpace(fallback), "main_flow")
 }
 
 // applyResolvedDeliveryToPlan 把任务级交付偏好解析结果回填到恢复执行计划中。
@@ -2453,35 +2916,30 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		return updatedTask, resultBubble, deliveryResult, artifacts, nil
 	}
 
+	approvedOperation, approvedTargetObject := approvedExecutionFromTask(processingTask)
 	executionResult, err := s.executor.Execute(context.Background(), execution.Request{
-		TaskID:       processingTask.TaskID,
-		RunID:        processingTask.RunID,
-		Title:        processingTask.Title,
-		Intent:       taskIntent,
-		Snapshot:     snapshot,
-		DeliveryType: deliveryType,
-		ResultTitle:  resultTitle,
+		TaskID:               processingTask.TaskID,
+		RunID:                processingTask.RunID,
+		Title:                processingTask.Title,
+		Intent:               taskIntent,
+		Snapshot:             snapshot,
+		DeliveryType:         deliveryType,
+		ResultTitle:          resultTitle,
+		ApprovalGranted:      processingTask.Authorization != nil,
+		ApprovedOperation:    approvedOperation,
+		ApprovedTargetObject: approvedTargetObject,
 	})
+	processingTask = s.recordExecutionToolCalls(processingTask, executionResult.ToolCalls)
+	auditDeliveryResult := executionResult.DeliveryResult
 	if err != nil {
-		return runengine.TaskRecord{}, nil, nil, nil, fmt.Errorf("execute task %s: %w", processingTask.TaskID, err)
+		auditDeliveryResult = nil
 	}
-
-	for _, toolCall := range executionResult.ToolCalls {
-		if toolCall.ToolName == "" {
-			continue
-		}
-		if recordedTask, ok := s.runEngine.RecordToolCall(
-			processingTask.TaskID,
-			toolCall.ToolName,
-			toolCall.Input,
-			toolCall.Output,
-			toolCall.DurationMS,
-		); ok {
-			processingTask = recordedTask
-		}
-	}
-	executionAuditRecords, executionTokenUsage := s.buildExecutionAudit(processingTask, executionResult.ToolCalls, executionResult.DeliveryResult)
+	executionAuditRecords, executionTokenUsage := s.buildExecutionAudit(processingTask, executionResult.ToolCalls, auditDeliveryResult)
 	processingTask = s.appendAuditData(processingTask, executionAuditRecords, executionTokenUsage)
+	if err != nil {
+		failedTask, failureBubble := s.failExecutionTask(processingTask, taskIntent, executionResult, err)
+		return failedTask, failureBubble, nil, nil, nil
+	}
 
 	resultBubble := s.delivery.BuildBubbleMessage(
 		processingTask.TaskID,
@@ -2489,12 +2947,89 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		firstNonEmptyString(executionResult.BubbleText, resultBubbleText),
 		processingTask.UpdatedAt.Format(dateTimeLayout),
 	)
-	updatedTask, ok := s.runEngine.CompleteTask(processingTask.TaskID, executionResult.DeliveryResult, resultBubble, executionResult.Artifacts)
+	updatedTask, ok := s.runEngine.CompleteTask(processingTask.TaskID, executionResult.DeliveryResult, resultBubble, executionResult.Artifacts, executionResult.RecoveryPoint)
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 	}
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionResult.Artifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionResult.Artifacts, nil
+}
+
+func (s *Service) recordExecutionToolCalls(task runengine.TaskRecord, toolCalls []tools.ToolCallRecord) runengine.TaskRecord {
+	for _, toolCall := range toolCalls {
+		if toolCall.ToolName == "" {
+			continue
+		}
+		if recordedTask, ok := s.runEngine.RecordToolCallLifecycle(
+			task.TaskID,
+			toolCall.ToolName,
+			string(toolCall.Status),
+			toolCall.Input,
+			toolCall.Output,
+			toolCall.DurationMS,
+			toolCallErrorCode(toolCall),
+		); ok {
+			task = recordedTask
+		}
+	}
+	return task
+}
+
+func approvedExecutionFromTask(task runengine.TaskRecord) (string, string) {
+	if len(task.PendingExecution) == 0 {
+		return "", ""
+	}
+	return stringValue(task.PendingExecution, "operation_name", ""), stringValue(task.PendingExecution, "target_object", "")
+}
+
+func toolCallErrorCode(toolCall tools.ToolCallRecord) any {
+	if toolCall.ErrorCode == nil {
+		return nil
+	}
+	return *toolCall.ErrorCode
+}
+
+func (s *Service) failExecutionTask(task runengine.TaskRecord, taskIntent map[string]any, executionResult execution.Result, err error) (runengine.TaskRecord, map[string]any) {
+	impactScope := s.buildImpactScope(task, task.PendingExecution)
+	bubbleText := executionFailureBubble(err)
+	securityStatus := "execution_error"
+	stepName := "execution_failed"
+	auditType := "execution"
+	auditAction := "execute_task"
+	auditTarget := impactScopeTarget(impactScope, targetPathFromIntent(taskIntent))
+	auditResult := "failed"
+	if errors.Is(err, execution.ErrRecoveryPointPrepareFailed) {
+		securityStatus = "execution_error"
+		stepName = "recovery_prepare_failed"
+		auditType = "recovery"
+		auditAction = "create_recovery_point"
+		auditTarget = impactScopeTarget(impactScope, stringValue(executionResult.RecoveryPoint, "summary", "workspace"))
+	}
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", bubbleText, task.UpdatedAt.Format(dateTimeLayout))
+	updatedTask, ok := s.runEngine.FailTaskExecution(task.TaskID, stepName, securityStatus, bubbleText, impactScope, bubble, executionResult.RecoveryPoint)
+	if !ok {
+		return task, bubble
+	}
+	auditRecord := s.writeGovernanceAuditRecord(updatedTask.TaskID, updatedTask.RunID, auditType, auditAction, bubbleText, auditTarget, auditResult)
+	updatedTask = s.appendAuditData(updatedTask, compactAuditRecords(auditRecord), nil)
+	return updatedTask, bubble
+}
+
+func executionFailureBubble(err error) string {
+	switch {
+	case errors.Is(err, execution.ErrRecoveryPointPrepareFailed):
+		return "执行失败：执行前恢复点创建失败，请稍后重试。"
+	case errors.Is(err, tools.ErrWorkspaceBoundaryDenied):
+		return "执行失败：目标超出工作区边界，已阻止本次操作。"
+	case errors.Is(err, tools.ErrCommandNotAllowed):
+		return "执行失败：命令存在高危风险，已被策略拦截。"
+	case errors.Is(err, tools.ErrCapabilityDenied):
+		return "执行失败：当前平台能力不可用，请检查环境后重试。"
+	case errors.Is(err, tools.ErrToolExecutionFailed):
+		return "执行失败：工具运行失败，请检查环境后重试。"
+	default:
+		return "执行失败：请稍后重试。"
+	}
 }
 
 func (s *Service) buildExecutionAudit(task runengine.TaskRecord, toolCalls []tools.ToolCallRecord, deliveryResult map[string]any) ([]map[string]any, map[string]any) {
