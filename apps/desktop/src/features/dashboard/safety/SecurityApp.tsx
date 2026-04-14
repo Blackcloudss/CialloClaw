@@ -863,6 +863,7 @@ export function SecurityApp() {
 
     try {
       const result = await respondToApproval(approval, decision, rememberRule, moduleData.source);
+      const approvalRouteKey = `approval:${approval.approval_id}` as const;
 
       setModuleData((current) => {
         if (!current) {
@@ -897,6 +898,10 @@ export function SecurityApp() {
         delete nextState[approval.approval_id];
         return nextState;
       });
+      if (routeDrivenDetailKey === approvalRouteKey) {
+        setApprovalSnapshot(null);
+        setRouteDrivenDetailKey(null);
+      }
       setLastResolvedApproval(result);
       setFeedback(
         `${result.response.bubble_message?.text ?? "已更新安全审批状态。"} · ${result.response.authorization_record.decision} · remember_rule ${result.response.authorization_record.remember_rule ? "on" : "off"} · task ${result.response.task.task_id} / ${result.response.task.status} · ${formatImpactScopeSummary(result.response.impact_scope)}`,

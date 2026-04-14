@@ -191,7 +191,13 @@ export function TaskPage() {
       const refetchResult = await taskDetailQuery.refetch();
 
       if (!refetchResult.data || refetchResult.isError) {
-        showFeedback("任务详情还在同步，拿到真实安全锚点后再打开安全页。");
+        showFeedback("任务详情还在同步，先打开安全总览。");
+        navigate(resolveDashboardRoutePath("safety"), {
+          state: {
+            source: "task-detail",
+            taskId: detailData.task.task_id,
+          },
+        });
         return;
       }
 
