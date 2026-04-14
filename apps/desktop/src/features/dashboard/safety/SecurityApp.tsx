@@ -37,7 +37,6 @@ import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockTo
 import {
   readDashboardSafetyNavigationState,
   resolveDashboardSafetyFocusTarget,
-  type DashboardSafetyNavigationState,
 } from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import {
   getInitialSecurityModuleData,
@@ -592,9 +591,8 @@ export function SecurityApp() {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
   const refreshSequenceRef = useRef(0);
-  const navigationStateRef = useRef<DashboardSafetyNavigationState | null>(readDashboardSafetyNavigationState(location.state));
-  const navigationStateConsumedRef = useRef(false);
   const taskRefreshPlan = useMemo(() => getDashboardTaskSecurityRefreshPlan(dataMode), [dataMode]);
+  const navigationState = useMemo(() => readDashboardSafetyNavigationState(location.state), [location.state]);
 
   const queueRpcRefresh = useCallback(() => {
     if (dataMode !== "rpc") {
@@ -620,14 +618,6 @@ export function SecurityApp() {
   useEffect(() => {
     saveDashboardDataMode("safety", dataMode);
   }, [dataMode]);
-
-  useEffect(() => {
-    if (!location.state) {
-      return;
-    }
-
-    navigate(location.pathname, { replace: true, state: null });
-  }, [location.pathname, location.state, navigate]);
 
   useEffect(() => {
     const nextSequence = ++refreshSequenceRef.current;
@@ -684,24 +674,28 @@ export function SecurityApp() {
   }, [moduleData]);
 
   useEffect(() => {
-    if (activeDetailKey && !cardKeys.includes(activeDetailKey)) {
+    if (
+      activeDetailKey &&
+      !cardKeys.includes(activeDetailKey) &&
+      !(activeDetailKey.startsWith("approval:") && approvalSnapshot?.approval_id === activeDetailKey.slice("approval:".length))
+    ) {
       setActiveDetailKey(null);
     }
-  }, [activeDetailKey, cardKeys]);
+  }, [activeDetailKey, approvalSnapshot, cardKeys]);
 
   const bringCardToFront = useCallback((key: SecurityCardKey) => {
     setCardStack((currentStack) => [...currentStack.filter((item) => item !== key), key]);
   }, []);
 
   useEffect(() => {
-    if (!moduleData || navigationStateConsumedRef.current) {
+    if (!moduleData || !navigationState) {
       return;
     }
 
     const focusTarget = resolveDashboardSafetyFocusTarget({
       livePending: moduleData.pending,
       liveRestorePoint: moduleData.summary.latest_restore_point,
-      state: navigationStateRef.current,
+      state: navigationState,
     });
 
     setApprovalSnapshot(focusTarget.approvalSnapshot);
@@ -716,9 +710,8 @@ export function SecurityApp() {
       setFeedback((current) => current ?? focusTarget.feedback);
     }
 
-    navigationStateConsumedRef.current = true;
-    navigationStateRef.current = null;
-  }, [bringCardToFront, moduleData]);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [bringCardToFront, location.pathname, moduleData, navigate, navigationState]);
 
   const handleTitleClick = useCallback(() => {
     setTitleMotionTick((currentTick) => currentTick + 1);

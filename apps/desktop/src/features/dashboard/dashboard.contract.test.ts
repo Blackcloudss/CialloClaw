@@ -434,13 +434,32 @@ test("task and safety pages adopt the shared dashboard task helpers", () => {
   assert.match(taskPageSource, /buildDashboardTaskBucketQueryKey/);
   assert.match(taskPageSource, /buildDashboardTaskDetailQueryKey/);
   assert.match(taskPageSource, /getDashboardTaskSecurityRefreshPlan/);
-  assert.match(taskPageSource, /buildDashboardSafetyNavigationState\(detailData\.detail\)/);
+  assert.match(taskPageSource, /buildDashboardSafetyNavigationState\((detailData|resolvedDetailData)\.detail\)/);
 
   assert.match(securityAppSource, /readDashboardSafetyNavigationState/);
   assert.match(securityAppSource, /resolveDashboardSafetyFocusTarget/);
   assert.match(securityAppSource, /getDashboardTaskSecurityRefreshPlan/);
   assert.match(securityAppSource, /useLocation\(/);
   assert.match(securityAppSource, /useQueryClient\(/);
+});
+
+test("SecurityApp reacts to later route-state arrivals and keeps snapshot-only approval focus renderable", () => {
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+
+  assert.doesNotMatch(securityAppSource, /navigationStateConsumedRef/);
+  assert.match(securityAppSource, /readDashboardSafetyNavigationState\(location\.state\)/);
+  assert.match(securityAppSource, /navigate\(location\.pathname, \{ replace: true, state: null \}\)/);
+  assert.match(securityAppSource, /activeDetailKey\.startsWith\("approval:"\).*approvalSnapshot/s);
+});
+
+test("TaskPage fetches safety anchors from real detail without requiring the selected task to stay in the loaded bucket", () => {
+  const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+
+  assert.match(taskPageSource, /enabled: Boolean\(selectedTaskId && detailOpen\)/);
+  assert.doesNotMatch(taskPageSource, /enabled: Boolean\(selectedTaskId && detailOpen && selectedTaskItem\)/);
+  assert.match(taskPageSource, /detailData\.source === "fallback"/);
+  assert.match(taskPageSource, /await taskDetailQuery\.refetch\(/);
+  assert.match(taskPageSource, /buildDashboardSafetyNavigationState\(resolvedDetailData\.detail\)/);
 });
 
 test("task detail normalization rejects string restore points in rpc mode and keeps null approval fallback", () => {

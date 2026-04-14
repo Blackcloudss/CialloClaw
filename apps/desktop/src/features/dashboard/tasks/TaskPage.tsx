@@ -104,7 +104,7 @@ export function TaskPage() {
   }, [allTasks, finishedTasks, location.pathname, location.state, navigate, selectedTaskId, unfinishedTasks]);
 
   const taskDetailQuery = useQuery({
-    enabled: Boolean(selectedTaskId && detailOpen && selectedTaskItem),
+    enabled: Boolean(selectedTaskId && detailOpen),
     queryKey: buildDashboardTaskDetailQueryKey(dataMode, selectedTaskId ?? ""),
     queryFn: () => loadTaskDetailData(selectedTaskId!, dataMode),
     refetchOnMount: securityRefreshPlan.refetchOnMount,
@@ -173,6 +173,27 @@ export function TaskPage() {
     },
   });
 
+  async function handleOpenSafety() {
+    if (!detailData) {
+      return;
+    }
+
+    let resolvedDetailData = detailData;
+
+    if (detailData.source === "fallback") {
+      const refetchResult = await taskDetailQuery.refetch();
+
+      if (!refetchResult.data || refetchResult.isError) {
+        showFeedback("任务详情还在同步，拿到真实安全锚点后再打开安全页。");
+        return;
+      }
+
+      resolvedDetailData = refetchResult.data;
+    }
+
+    navigate(resolveDashboardRoutePath("safety"), { state: buildDashboardSafetyNavigationState(resolvedDetailData.detail) });
+  }
+
   function handlePrimaryAction(action: "pause" | "resume" | "cancel" | "restart" | "edit" | "open-safety") {
     if (!detailData) {
       return;
@@ -184,7 +205,7 @@ export function TaskPage() {
     }
 
     if (action === "open-safety") {
-      navigate(resolveDashboardRoutePath("safety"), { state: buildDashboardSafetyNavigationState(detailData.detail) });
+      void handleOpenSafety();
       return;
     }
 
