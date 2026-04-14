@@ -1391,6 +1391,178 @@ func TestServiceTaskListFallsBackToStoredTaskRuns(t *testing.T) {
 	}
 }
 
+func TestServiceTaskListDoesNotFallbackWhenOffsetExceedsRuntimePage(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "runtime paging")
+
+	_, err := service.StartTask(map[string]any{
+		"session_id": "sess_page",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "runtime finished task",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+			"arguments": map[string]any{
+				"style": "key_points",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start runtime task failed: %v", err)
+	}
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	err = service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_stored_extra",
+		SessionID:   "sess_page",
+		RunID:       "run_stored_extra",
+		Title:       "stored finished task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 14, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 14, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 14, 14, 6, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+
+	listResult, err := service.TaskList(map[string]any{
+		"group":      "finished",
+		"limit":      float64(10),
+		"offset":     float64(100),
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+
+	items := listResult["items"].([]map[string]any)
+	if len(items) != 0 {
+		t.Fatalf("expected empty page beyond runtime total, got %+v", items)
+	}
+	page := listResult["page"].(map[string]any)
+	if page["total"] != 1 {
+		t.Fatalf("expected runtime total to stay unchanged, got %+v", page)
+	}
+}
+
+func TestServiceTaskListFallbackMatchesRuntimeUnknownGroupSemantics(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored unknown group")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_stored_unfinished",
+		SessionID:   "sess_group",
+		RunID:       "run_stored_unfinished",
+		Title:       "stored unfinished task",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 15, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 15, 5, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("save unfinished task run failed: %v", err)
+	}
+	err = service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_stored_finished",
+		SessionID:   "sess_group",
+		RunID:       "run_stored_finished",
+		Title:       "stored finished task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 15, 10, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 15, 15, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 14, 15, 16, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("save finished task run failed: %v", err)
+	}
+
+	listResult, err := service.TaskList(map[string]any{
+		"group":      "unknown_group",
+		"limit":      float64(10),
+		"offset":     float64(0),
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+
+	items := listResult["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["task_id"] != "task_stored_unfinished" {
+		t.Fatalf("expected unknown group fallback to match runtime unfinished semantics, got %+v", items)
+	}
+}
+
+func TestServiceTaskListFallbackMatchesRuntimeSortTieBreaker(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored sort tie")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	finishedAt := time.Date(2026, 4, 14, 16, 0, 0, 0, time.UTC)
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_sort_older_update",
+		SessionID:   "sess_sort",
+		RunID:       "run_sort_old",
+		Title:       "older update task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 15, 30, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 15, 40, 0, 0, time.UTC),
+		FinishedAt:  timePointer(finishedAt),
+	})
+	if err != nil {
+		t.Fatalf("save first task run failed: %v", err)
+	}
+	err = service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_sort_newer_update",
+		SessionID:   "sess_sort",
+		RunID:       "run_sort_new",
+		Title:       "newer update task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 14, 15, 35, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 15, 50, 0, 0, time.UTC),
+		FinishedAt:  timePointer(finishedAt),
+	})
+	if err != nil {
+		t.Fatalf("save second task run failed: %v", err)
+	}
+
+	listResult, err := service.TaskList(map[string]any{
+		"group":      "finished",
+		"limit":      float64(10),
+		"offset":     float64(0),
+		"sort_by":    "finished_at",
+		"sort_order": "desc",
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+
+	items := listResult["items"].([]map[string]any)
+	if len(items) < 2 || items[0]["task_id"] != "task_sort_newer_update" || items[1]["task_id"] != "task_sort_older_update" {
+		t.Fatalf("expected fallback sort tie-breaker to prefer newer updated_at, got %+v", items)
+	}
+}
+
 func TestServiceDashboardOverviewUsesRuntimeAggregation(t *testing.T) {
 	service := newTestService()
 
@@ -1867,6 +2039,47 @@ func TestServiceSecuritySummaryFallsBackToStoredTaskRuns(t *testing.T) {
 	tokenCostSummary := summary["token_cost_summary"].(map[string]any)
 	if tokenCostSummary["current_task_tokens"] != 88 {
 		t.Fatalf("expected storage-backed token usage, got %+v", tokenCostSummary)
+	}
+}
+
+func TestServiceSecuritySummaryCountsStoredPendingAuthorizations(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored waiting auth")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_waiting_auth_stored",
+		SessionID:   "sess_waiting",
+		RunID:       "run_waiting_auth_stored",
+		Title:       "stored waiting auth task",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 14, 17, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 17, 5, 0, 0, time.UTC),
+		ApprovalRequest: map[string]any{
+			"approval_id": "appr_waiting_001",
+			"task_id":     "task_waiting_auth_stored",
+			"risk_level":  "yellow",
+		},
+		SecuritySummary: map[string]any{
+			"security_status": "pending_confirmation",
+		},
+	})
+	if err != nil {
+		t.Fatalf("save waiting auth task run failed: %v", err)
+	}
+
+	result, err := service.SecuritySummaryGet()
+	if err != nil {
+		t.Fatalf("security summary failed: %v", err)
+	}
+
+	summary := result["summary"].(map[string]any)
+	if summary["pending_authorizations"] != 1 {
+		t.Fatalf("expected stored waiting_auth task to count as pending authorization, got %+v", summary)
 	}
 }
 

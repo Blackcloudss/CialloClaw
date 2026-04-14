@@ -422,12 +422,10 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 	sortBy := stringValue(params, "sort_by", "updated_at")
 	sortOrder := stringValue(params, "sort_order", "desc")
 	tasks, total := s.runEngine.ListTasks(group, sortBy, sortOrder, limit, offset)
-	if len(tasks) == 0 {
-		if persistedTasks, ok := s.listTasksFromStorage(group, sortBy, sortOrder, limit, offset); ok {
+	if total == 0 {
+		if persistedTasks, persistedTotal, ok := s.listTasksFromStorage(group, sortBy, sortOrder, limit, offset); ok {
 			tasks = persistedTasks
-			if allPersistedTasks, totalOK := s.listTasksFromStorage(group, sortBy, sortOrder, 0, 0); totalOK {
-				total = len(allPersistedTasks)
-			}
+			total = persistedTotal
 		}
 	}
 
@@ -711,16 +709,19 @@ func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, err
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
 	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
 	if len(finishedTasks) == 0 {
-		if persistedTasks, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
+		if persistedTasks, _, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
 			finishedTasks = persistedTasks
 		}
 	}
 	if len(unfinishedTasks) == 0 {
-		if persistedTasks, ok := s.listTasksFromStorage("unfinished", "updated_at", "desc", 0, 0); ok {
+		if persistedTasks, _, ok := s.listTasksFromStorage("unfinished", "updated_at", "desc", 0, 0); ok {
 			unfinishedTasks = persistedTasks
 		}
 	}
 	_, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+	if pendingTotal == 0 {
+		pendingTotal = countPendingApprovalTasks(unfinishedTasks)
+	}
 	latestAudit := latestAuditRecordFromTasks(append(append([]runengine.TaskRecord{}, unfinishedTasks...), finishedTasks...))
 	if latestAudit == nil {
 		latestAudit = s.latestAuditRecordFromStorage("")
@@ -745,7 +746,7 @@ func (s *Service) MirrorOverviewGet(params map[string]any) (map[string]any, erro
 	_ = params
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
 	if len(finishedTasks) == 0 {
-		if persistedTasks, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
+		if persistedTasks, _, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
 			finishedTasks = persistedTasks
 		}
 	}
@@ -770,14 +771,17 @@ func (s *Service) SecuritySummaryGet() (map[string]any, error) {
 	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
 	if len(unfinishedTasks) == 0 {
-		if persistedTasks, ok := s.listTasksFromStorage("unfinished", "updated_at", "desc", 0, 0); ok {
+		if persistedTasks, _, ok := s.listTasksFromStorage("unfinished", "updated_at", "desc", 0, 0); ok {
 			unfinishedTasks = persistedTasks
 		}
 	}
 	if len(finishedTasks) == 0 {
-		if persistedTasks, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
+		if persistedTasks, _, ok := s.listTasksFromStorage("finished", "finished_at", "desc", 0, 0); ok {
 			finishedTasks = persistedTasks
 		}
+	}
+	if pendingTotal == 0 {
+		pendingTotal = countPendingApprovalTasks(unfinishedTasks)
 	}
 	allTasks := append(append([]runengine.TaskRecord{}, unfinishedTasks...), finishedTasks...)
 	dataLogSettings := mapValue(s.runEngine.Settings(), "data_log")
@@ -1048,13 +1052,13 @@ func pageMap(limit, offset, total int) map[string]any {
 	}
 }
 
-func (s *Service) listTasksFromStorage(group, sortBy, sortOrder string, limit, offset int) ([]runengine.TaskRecord, bool) {
+func (s *Service) listTasksFromStorage(group, sortBy, sortOrder string, limit, offset int) ([]runengine.TaskRecord, int, bool) {
 	if s.storage == nil {
-		return nil, false
+		return nil, 0, false
 	}
 	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
 	if err != nil || len(records) == 0 {
-		return nil, false
+		return nil, 0, false
 	}
 	tasks := make([]runengine.TaskRecord, 0, len(records))
 	for _, record := range records {
@@ -1067,13 +1071,13 @@ func (s *Service) listTasksFromStorage(group, sortBy, sortOrder string, limit, o
 	runengineSortTaskRecords(tasks, sortBy, sortOrder)
 	total := len(tasks)
 	if offset >= total {
-		return []runengine.TaskRecord{}, true
+		return []runengine.TaskRecord{}, total, true
 	}
 	end := offset + limit
 	if limit <= 0 || end > total {
 		end = total
 	}
-	return tasks[offset:end], true
+	return tasks[offset:end], total, true
 }
 
 func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bool) {
@@ -1096,10 +1100,8 @@ func matchesTaskGroup(task runengine.TaskRecord, group string) bool {
 	switch group {
 	case "finished":
 		return isFinishedTaskStatus(task.Status)
-	case "unfinished":
-		return !isFinishedTaskStatus(task.Status)
 	default:
-		return true
+		return !isFinishedTaskStatus(task.Status)
 	}
 }
 
@@ -1125,16 +1127,34 @@ func runengineSortTaskRecords(tasks []runengine.TaskRecord, sortBy, sortOrder st
 		left := taskSortTime(tasks[i], sortBy)
 		right := taskSortTime(tasks[j], sortBy)
 		if left.Equal(right) {
-			if sortOrder == "asc" {
-				return tasks[i].TaskID < tasks[j].TaskID
+			leftUpdated := tasks[i].UpdatedAt
+			rightUpdated := tasks[j].UpdatedAt
+			if leftUpdated.Equal(rightUpdated) {
+				if sortOrder == "asc" {
+					return tasks[i].TaskID < tasks[j].TaskID
+				}
+				return tasks[i].TaskID > tasks[j].TaskID
 			}
-			return tasks[i].TaskID > tasks[j].TaskID
+			if sortOrder == "asc" {
+				return leftUpdated.Before(rightUpdated)
+			}
+			return leftUpdated.After(rightUpdated)
 		}
 		if sortOrder == "asc" {
 			return left.Before(right)
 		}
 		return left.After(right)
 	})
+}
+
+func countPendingApprovalTasks(tasks []runengine.TaskRecord) int {
+	count := 0
+	for _, task := range tasks {
+		if task.Status == "waiting_auth" && len(task.ApprovalRequest) != 0 {
+			count++
+		}
+	}
+	return count
 }
 
 func taskSortTime(task runengine.TaskRecord, sortBy string) time.Time {
