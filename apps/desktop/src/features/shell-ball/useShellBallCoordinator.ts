@@ -82,6 +82,10 @@ export function sortShellBallBubbleItemsByTimestamp(items: ShellBallBubbleItem[]
   return [...items].sort(compareShellBallBubbleItemsByTimestamp);
 }
 
+function isShellBallInputSubmitResult(value: ShellBallInputSubmitResult | null | void): value is ShellBallInputSubmitResult {
+  return value !== null && value !== undefined && typeof value === "object" && "task" in value;
+}
+
 export function createShellBallFinalizedSpeechBubbleItem(input: {
   text: string;
   sequence: number;
@@ -182,6 +186,16 @@ function createShellBallAgentBubbleItem(result: ShellBallInputSubmitResult, fall
   const bubbleMessageText = bubbleMessage?.text.trim() ?? "";
 
   if (bubbleMessageText !== "" && bubbleMessage !== null && bubbleMessage !== undefined) {
+    return createShellBallTextBubbleItem({
+      role: "agent",
+      text: deliveryPreview,
+      bubbleType: "result",
+      createdAt: result.delivery_result?.payload?.task_id ? fallbackCreatedAt : bubbleMessage?.created_at ?? fallbackCreatedAt,
+      taskId: result.task.task_id,
+    });
+  }
+
+  if (bubbleMessage?.text.trim()) {
     return {
       bubble: {
         ...bubbleMessage,
@@ -203,7 +217,7 @@ function createShellBallAgentBubbleItem(result: ShellBallInputSubmitResult, fall
       role: "agent",
       text: deliveryPreview,
       bubbleType: "result",
-      createdAt: result.delivery_result?.payload.task_id ? fallbackCreatedAt : bubbleMessage?.created_at ?? fallbackCreatedAt,
+      createdAt: result.delivery_result?.payload?.task_id ? fallbackCreatedAt : bubbleMessage?.created_at ?? fallbackCreatedAt,
       taskId: result.task.task_id,
     });
   }
@@ -615,7 +629,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           revealBubbleRegion();
 
           const result = await handlersRef.current.onSubmitText();
-          if (result !== null && result !== undefined && typeof result === "object" && "task" in result) {
+          if (isShellBallInputSubmitResult(result)) {
             setBubbleItems((currentItems) =>
               sortShellBallBubbleItemsByTimestamp([
                 ...currentItems,

@@ -29,15 +29,19 @@ export type RequestMeta = {
   client_time: string;
 };
 
+export type RequestSource = "floating_ball" | "dashboard" | "tray_panel";
+
+export type InputMode = "voice" | "text";
+
 export type AgentInputSubmitParams = {
   request_meta: RequestMeta;
   session_id?: string;
-  source: "floating_ball" | "dashboard" | "tray_panel";
+  source: RequestSource;
   trigger: "voice_commit" | "hover_text_input";
   input: {
     type: "text";
     text: string;
-    input_mode: "voice" | "text";
+    input_mode: InputMode;
   };
   context: {
     files: string[];
@@ -56,25 +60,18 @@ export type DeliveryResult = {
 };
 
 export type AgentInputSubmitResult = {
-  task: Task;
+  task: {
+    task_id: string;
+    status: string;
+  };
   bubble_message: BubbleMessage | null;
-  delivery_result?: DeliveryResult | null;
-};
-
-export type AgentTaskStartParams = {
-  request_meta: RequestMeta;
-  session_id?: string;
-  source: "floating_ball" | "dashboard" | "tray_panel";
-  trigger: "voice_commit" | "hover_text_input" | "text_selected_click" | "file_drop" | "error_detected" | "recommendation_click";
-  input: {
-    type: "text" | "text_selection" | "file" | "error";
-    text?: string;
-    files?: string[];
-  };
-  delivery?: {
-    preferred: DeliveryResult["type"];
-    fallback?: DeliveryResult["type"];
-  };
+  delivery_result?: DeliveryResult | {
+    type?: string;
+    preview_text?: string | null;
+    payload?: {
+      task_id?: string | null;
+    } | null;
+  } | null; // 合并 delivery_result 的类型
 };
 
 export type AgentSecuritySummaryGetParams = { request_meta: RequestMeta };

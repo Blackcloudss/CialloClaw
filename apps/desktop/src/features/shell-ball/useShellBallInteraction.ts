@@ -1,6 +1,7 @@
 import type { AgentInputSubmitParams, AgentInputSubmitResult, AgentTaskStartParams, DeliveryResult, RequestMeta } from "@cialloclaw/protocol";
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
+import { submitTextInput, createTextInputSubmitParams } from "../../services/agentInputService";
 import {
   createShellBallInteractionController,
   getShellBallInputBarMode,
@@ -33,8 +34,14 @@ type ShellBallInteractionConsumedEvent =
 
 type ShellBallVoiceRecognitionStopReason = "none" | "finish" | "cancel";
 
-export type ShellBallInputSubmitResult = AgentInputSubmitResult & {
-  delivery_result?: DeliveryResult | null;
+export type ShellBallInputSubmitResult = NonNullable<Awaited<ReturnType<typeof submitTextInput>>> & {
+  delivery_result?: {
+    type?: string;
+    preview_text?: string | null;
+    payload?: {
+      task_id?: string | null;
+    } | null;
+  } | null;
 };
 
 type ShellBallPostSubmitReset = {
@@ -81,31 +88,16 @@ export function createShellBallInputSubmitParams(input: {
   trigger: "voice_commit" | "hover_text_input";
   inputMode: "voice" | "text";
 }): AgentInputSubmitParams | null {
-  const normalizedText = input.text.trim();
-
-  if (normalizedText === "") {
-    return null;
-  }
-
-  const requestMeta = createShellBallRequestMeta();
-
-  return {
-    request_meta: requestMeta,
+  return createTextInputSubmitParams({
+    text: input.text,
     source: "floating_ball",
     trigger: input.trigger,
-    input: {
-      type: "text",
-      text: normalizedText,
-      input_mode: input.inputMode,
-    },
-    context: {
-      files: [],
-    },
+    inputMode: input.inputMode,
     options: {
       confirm_required: false,
       preferred_delivery: "bubble",
     },
-  };
+  });
 }
 
 export function createShellBallTaskStartParams(input: {
@@ -139,18 +131,17 @@ async function submitShellBallInput(input: {
   text: string;
   trigger: "voice_commit" | "hover_text_input";
   inputMode: "voice" | "text";
-}): Promise<ShellBallInputSubmitResult | null> {
-  const params = createShellBallInputSubmitParams(input);
-
-  if (params === null) {
-    return null;
-  }
-
-  const importRpcMethods = new Function("return import('../../rpc/methods')") as () => Promise<{
-    submitInput: (request: AgentInputSubmitParams) => Promise<ShellBallInputSubmitResult>;
-  }>;
-  const rpcMethods = await importRpcMethods();
-  return rpcMethods.submitInput(params);
+}) {
+  return submitTextInput({
+    text: input.text,
+    source: "floating_ball",
+    trigger: input.trigger,
+    inputMode: input.inputMode,
+    options: {
+      confirm_required: false,
+      preferred_delivery: "bubble",
+    },
+  });
 }
 
 async function startShellBallFileTask(input: {
