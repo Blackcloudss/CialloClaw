@@ -205,3 +205,29 @@ export function shouldRetainDashboardSafetyActiveDetail({
 
   return activeDetailKey.startsWith("approval:") && approvalSnapshot?.approval_id === activeDetailKey.slice("approval:".length);
 }
+
+export function resolveDashboardSafetySnapshotLifecycle({
+  activeDetailKey,
+  routeDrivenDetailKey,
+  approvalSnapshot,
+  restorePointSnapshot,
+}: {
+  activeDetailKey: string | null;
+  routeDrivenDetailKey: string | null;
+  approvalSnapshot: ApprovalRequest | null;
+  restorePointSnapshot: RecoveryPoint | null;
+}) {
+  if (routeDrivenDetailKey && activeDetailKey === routeDrivenDetailKey) {
+    return {
+      approvalSnapshot,
+      restorePointSnapshot,
+      routeDrivenDetailKey,
+    };
+  }
+
+  return {
+    approvalSnapshot: null,
+    restorePointSnapshot: null,
+    routeDrivenDetailKey: null,
+  };
+}

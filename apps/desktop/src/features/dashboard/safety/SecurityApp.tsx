@@ -37,6 +37,7 @@ import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockTo
 import {
   resolveDashboardSafetyNavigationRoute,
   resolveDashboardSafetyFocusTarget,
+  resolveDashboardSafetySnapshotLifecycle,
   shouldRetainDashboardSafetyActiveDetail,
 } from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import {
@@ -570,6 +571,7 @@ export function SecurityApp() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [approvalSnapshot, setApprovalSnapshot] = useState<ApprovalRequest | null>(null);
   const [restorePointSnapshot, setRestorePointSnapshot] = useState<RecoveryPoint | null>(null);
+  const [routeDrivenDetailKey, setRouteDrivenDetailKey] = useState<SecurityCardKey | null>(null);
   const [routedTaskId, setRoutedTaskId] = useState<string | null>(null);
   const [lastResolvedApproval, setLastResolvedApproval] = useState<SecurityRespondOutcome | null>(null);
   const [rememberRuleByApprovalId, setRememberRuleByApprovalId] = useState<Record<string, boolean>>({});
@@ -594,6 +596,16 @@ export function SecurityApp() {
   const dragStateRef = useRef<DragState | null>(null);
   const refreshSequenceRef = useRef(0);
   const taskRefreshPlan = useMemo(() => getDashboardTaskSecurityRefreshPlan(dataMode), [dataMode]);
+  const activeSnapshotState = useMemo(
+    () =>
+      resolveDashboardSafetySnapshotLifecycle({
+        activeDetailKey,
+        approvalSnapshot,
+        restorePointSnapshot,
+        routeDrivenDetailKey,
+      }),
+    [activeDetailKey, approvalSnapshot, restorePointSnapshot, routeDrivenDetailKey],
+  );
 
   const queueRpcRefresh = useCallback(() => {
     if (dataMode !== "rpc") {
@@ -676,16 +688,28 @@ export function SecurityApp() {
 
   useEffect(() => {
     if (
+      routeDrivenDetailKey !== activeSnapshotState.routeDrivenDetailKey ||
+      approvalSnapshot !== activeSnapshotState.approvalSnapshot ||
+      restorePointSnapshot !== activeSnapshotState.restorePointSnapshot
+    ) {
+      setRouteDrivenDetailKey(activeSnapshotState.routeDrivenDetailKey as SecurityCardKey | null);
+      setApprovalSnapshot(activeSnapshotState.approvalSnapshot);
+      setRestorePointSnapshot(activeSnapshotState.restorePointSnapshot);
+    }
+  }, [activeSnapshotState, approvalSnapshot, restorePointSnapshot, routeDrivenDetailKey]);
+
+  useEffect(() => {
+    if (
       activeDetailKey &&
       !shouldRetainDashboardSafetyActiveDetail({
         activeDetailKey,
-        approvalSnapshot,
+        approvalSnapshot: activeSnapshotState.approvalSnapshot,
         cardKeys,
       })
     ) {
       setActiveDetailKey(null);
     }
-  }, [activeDetailKey, approvalSnapshot, cardKeys]);
+  }, [activeDetailKey, activeSnapshotState.approvalSnapshot, cardKeys]);
 
   const bringCardToFront = useCallback((key: SecurityCardKey) => {
     setCardStack((currentStack) => [...currentStack.filter((item) => item !== key), key]);
@@ -708,11 +732,14 @@ export function SecurityApp() {
 
     setApprovalSnapshot(routeResolution.approvalSnapshot);
     setRestorePointSnapshot(routeResolution.restorePointSnapshot);
+    setRouteDrivenDetailKey(routeResolution.activeDetailKey);
     setRoutedTaskId(routeResolution.routedTaskId);
 
     if (routeResolution.activeDetailKey) {
       setActiveDetailKey(routeResolution.activeDetailKey);
       bringCardToFront(routeResolution.activeDetailKey);
+    } else {
+      setActiveDetailKey(null);
     }
 
     if (routeResolution.feedback) {
@@ -1330,9 +1357,9 @@ export function SecurityApp() {
     const resolvedDetail = resolveActiveSafetyDetail({
       activeDetailKey,
       approvalLookup,
-      approvalSnapshot,
+      approvalSnapshot: activeSnapshotState.approvalSnapshot,
       moduleData,
-      restorePointSnapshot,
+      restorePointSnapshot: activeSnapshotState.restorePointSnapshot,
     });
     const preview = getCardPreview(
       activeDetailKey,

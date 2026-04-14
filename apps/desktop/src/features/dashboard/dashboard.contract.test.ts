@@ -43,6 +43,16 @@ function loadDashboardSafetyNavigationModule() {
         approvalSnapshot: ApprovalRequest | null;
         cardKeys: string[];
       }) => boolean;
+      resolveDashboardSafetySnapshotLifecycle: (input: {
+        activeDetailKey: string | null;
+        routeDrivenDetailKey: string | null;
+        approvalSnapshot: ApprovalRequest | null;
+        restorePointSnapshot: RecoveryPoint | null;
+      }) => {
+        approvalSnapshot: ApprovalRequest | null;
+        restorePointSnapshot: RecoveryPoint | null;
+        routeDrivenDetailKey: string | null;
+      };
     },
   );
 }
@@ -484,6 +494,25 @@ test("SecurityApp route resolution reacts to each new route state and exposes ta
 
   assert.deepEqual(
     resolveDashboardSafetyNavigationRoute({
+      locationState: {
+        source: "task-detail",
+        taskId: "task_dashboard_001",
+      },
+      livePending: [createApprovalRequest()],
+      liveRestorePoint: createRecoveryPoint(),
+    }),
+    {
+      activeDetailKey: null,
+      approvalSnapshot: null,
+      feedback: null,
+      restorePointSnapshot: null,
+      routedTaskId: "task_dashboard_001",
+      shouldClearRouteState: true,
+    },
+  );
+
+  assert.deepEqual(
+    resolveDashboardSafetyNavigationRoute({
       locationState: null,
       livePending: [],
       liveRestorePoint: null,
@@ -500,7 +529,7 @@ test("SecurityApp route resolution reacts to each new route state and exposes ta
 });
 
 test("SecurityApp keeps snapshot-only approval detail renderable when live cards no longer contain it", () => {
-  const { shouldRetainDashboardSafetyActiveDetail } = loadDashboardSafetyNavigationModule();
+  const { resolveDashboardSafetySnapshotLifecycle, shouldRetainDashboardSafetyActiveDetail } = loadDashboardSafetyNavigationModule();
 
   assert.equal(
     shouldRetainDashboardSafetyActiveDetail({
@@ -527,6 +556,48 @@ test("SecurityApp keeps snapshot-only approval detail renderable when live cards
       cardKeys: ["status", "restore"],
     }),
     true,
+  );
+
+  assert.deepEqual(
+    resolveDashboardSafetySnapshotLifecycle({
+      activeDetailKey: "approval:approval_dashboard_001",
+      routeDrivenDetailKey: "approval:approval_dashboard_001",
+      approvalSnapshot: createApprovalRequest(),
+      restorePointSnapshot: null,
+    }),
+    {
+      approvalSnapshot: createApprovalRequest(),
+      restorePointSnapshot: null,
+      routeDrivenDetailKey: "approval:approval_dashboard_001",
+    },
+  );
+
+  assert.deepEqual(
+    resolveDashboardSafetySnapshotLifecycle({
+      activeDetailKey: "status",
+      routeDrivenDetailKey: "approval:approval_dashboard_001",
+      approvalSnapshot: createApprovalRequest(),
+      restorePointSnapshot: null,
+    }),
+    {
+      approvalSnapshot: null,
+      restorePointSnapshot: null,
+      routeDrivenDetailKey: null,
+    },
+  );
+
+  assert.deepEqual(
+    resolveDashboardSafetySnapshotLifecycle({
+      activeDetailKey: null,
+      routeDrivenDetailKey: "restore",
+      approvalSnapshot: null,
+      restorePointSnapshot: createRecoveryPoint(),
+    }),
+    {
+      approvalSnapshot: null,
+      restorePointSnapshot: null,
+      routeDrivenDetailKey: null,
+    },
   );
 });
 
