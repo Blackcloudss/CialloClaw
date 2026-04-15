@@ -188,6 +188,11 @@
 
 Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
+当前主链路中，除了 `task.updated`、`delivery.ready`、`approval.pending` 外，还允许以下正式通知：
+
+- `task.session_queued`：同一 `session` 中已有运行中的任务，本任务已进入串行队列等待；
+- `task.session_resumed`：前序任务结束后，本任务从 session 队列恢复执行。
+
 ### 4.5 通用分页结构
 
 ```json

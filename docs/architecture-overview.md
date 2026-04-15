@@ -256,7 +256,7 @@ flowchart TB
 - **方法路由**：负责把稳定的 `agent.*` 方法映射到后端主链路服务；
 - **任务与事件中心**：负责请求对象锚定、`session / task / event` 绑定与状态回流；
 - **查询组装**：负责把任务详情、仪表盘、安全摘要、镜子概览等结果装配为前端可消费对象；
-- **通知订阅**：负责 `task.updated`、`delivery.ready`、`approval.pending` 等事件回流与订阅刷新。
+- **通知订阅**：负责 `task.updated`、`delivery.ready`、`approval.pending`、`task.session_queued`、`task.session_resumed` 等事件回流与订阅刷新。
 
 #### 3.2.4 主要边界
 
@@ -299,7 +299,7 @@ flowchart TB
 - 列表类接口统一返回 `items + page`；
 - 安全类接口统一返回 `approval_request / authorization_record / audit_record / recovery_point` 相关对象；
 - 查询类接口统一返回结构化视图结果，不让前端自行拼装底层对象；
-- 通知类事件统一使用 `task.updated`、`delivery.ready`、`approval.pending` 等正式事件名。
+- 通知类事件统一使用 `task.updated`、`delivery.ready`、`approval.pending`、`task.session_queued`、`task.session_resumed` 等正式事件名。
 
 #### 3.2.7 数据结构
 
@@ -384,6 +384,7 @@ flowchart TB
 - 该层是唯一正式任务中枢，worker / plugin / sidecar / subagent 不能自持 `task / run` 状态机；
 - 对外产品对象统一围绕 `task` 组织，对内执行对象统一回流到 `run / step / event / tool_call`；
 - 任务处理层只负责把任务推进起来，不单独拥有交付真源和治理真源；
+- 同一 `session` 下的 Agent Loop 执行必须保持串行，后续任务需要通过正式状态与通知进入等待队列，而不是并行抢占同一会话运行时；
 - 所有能力调用结果都必须继续回流到正式对象链，而不是由调用者私自返回给前端。
 
 #### 3.3.5 关键接口

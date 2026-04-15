@@ -81,6 +81,8 @@ export const NOTIFICATION_METHODS = {
   TASK_UPDATED: "task.updated",
   DELIVERY_READY: "delivery.ready",
   APPROVAL_PENDING: "approval.pending",
+  TASK_SESSION_QUEUED: "task.session_queued",
+  TASK_SESSION_RESUMED: "task.session_resumed",
   MIRROR_OVERVIEW_UPDATED: "mirror.overview.updated",
   PLUGIN_UPDATED: "plugin.updated",
   PLUGIN_METRIC_UPDATED: "plugin.metric.updated",
@@ -600,6 +602,15 @@ export interface DeliveryReadyNotification {
 export interface ApprovalPendingNotification {
   task_id: string;
   approval_request: ApprovalRequest;
+}
+
+export interface TaskSessionQueuedNotification {
+  task_id: string;
+  blocking_task_id: string;
+}
+
+export interface TaskSessionResumedNotification {
+  task_id: string;
 }
 
 export interface MirrorOverviewUpdatedNotification {
