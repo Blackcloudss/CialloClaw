@@ -15,12 +15,12 @@ This module is the only backend entry point for LLM provider access inside `serv
 - Provider: `openai_responses`
 - Request shape: single text input
 - Response shape: single text output
+- Function tool calling with custom function definitions
 - Transport: synchronous HTTP request/response
 
 ## Explicitly Not Supported Yet
 
 - Streaming output
-- Tool calling
 - Multi-modal input
 - Structured JSON output contracts
 - Provider failover or routing strategies
@@ -37,7 +37,7 @@ This module is the only backend entry point for LLM provider access inside `serv
 ## Planned Extension Direction
 
 - Keep `GenerateText` as the stable minimum path
-- Add optional extension interfaces for streaming and tool calling without breaking existing callers
+- Keep optional extension interfaces for streaming and richer tool-calling flows without breaking existing callers
 - Expand provider implementations behind the same module-local abstractions
 
 ## Known Unfrozen Decisions

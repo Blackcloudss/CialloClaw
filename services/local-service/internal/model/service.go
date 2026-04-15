@@ -19,6 +19,7 @@ type Service struct {
 
 // ErrClientNotConfigured 定义当前模块的基础变量。
 var ErrClientNotConfigured = errors.New("model client not configured")
+var ErrToolCallingNotSupported = errors.New("model client does not support tool calling")
 
 // ErrModelProviderRequired 定义当前模块的基础变量。
 var ErrModelProviderRequired = errors.New("model provider is required")
@@ -99,6 +100,26 @@ func (s *Service) GenerateText(ctx context.Context, request GenerateTextRequest)
 	}
 
 	return s.client.GenerateText(ctx, request)
+}
+
+// SupportsToolCalling reports whether the configured client can generate tool calls.
+func (s *Service) SupportsToolCalling() bool {
+	_, ok := s.client.(ToolCallingClient)
+	return ok
+}
+
+// GenerateToolCalls asks the configured model client to choose tools and/or return text.
+func (s *Service) GenerateToolCalls(ctx context.Context, request ToolCallRequest) (ToolCallResult, error) {
+	if s.client == nil {
+		return ToolCallResult{}, ErrClientNotConfigured
+	}
+
+	client, ok := s.client.(ToolCallingClient)
+	if !ok {
+		return ToolCallResult{}, ErrToolCallingNotSupported
+	}
+
+	return client.GenerateToolCalls(ctx, request)
 }
 
 // ValidateModelConfig 处理当前模块的相关逻辑。
