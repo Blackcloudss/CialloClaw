@@ -24,7 +24,6 @@ import (
 
 const (
 	defaultAgentLoopIntentName = "agent_loop"
-	defaultAgentLoopMaxTurns   = 4
 )
 
 // Service 负责在当前仓库代码范围内完成一条可运行的最小执行链路。
@@ -835,8 +834,8 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 	history := []string{}
 	allToolCalls := []tools.ToolCallRecord{}
 	var latestInvocation *model.InvocationRecord
-	for turn := 0; turn < defaultAgentLoopMaxTurns; turn++ {
-		planInput := buildAgentLoopPlannerInput(inputText, history)
+	for turn := 0; turn < s.agentLoopMaxTurns(); turn++ {
+		planInput := buildAgentLoopPlannerInput(inputText, history, s.agentLoopCompressionChars(), s.agentLoopKeepRecent())
 		plan, err := s.model.GenerateToolCalls(ctx, model.ToolCallRequest{
 			TaskID: request.TaskID,
 			RunID:  request.RunID,
@@ -1239,6 +1238,34 @@ func firstNonEmpty(primary, fallback string) string {
 	return fallback
 }
 
+// agentLoopMaxTurns resolves the maximum number of planning turns allowed for a
+// single loop execution. The value is read from model-facing runtime settings so
+// the execution layer stays configurable without introducing a parallel config path.
+func (s *Service) agentLoopMaxTurns() int {
+	if s.model == nil {
+		return 4
+	}
+	return s.model.MaxToolIterations()
+}
+
+// agentLoopCompressionChars resolves the planner-input size budget that should
+// trigger lightweight observation compaction.
+func (s *Service) agentLoopCompressionChars() int {
+	if s.model == nil {
+		return 2400
+	}
+	return s.model.ContextCompressChars()
+}
+
+// agentLoopKeepRecent returns how many recent observations stay verbatim when
+// older tool results are compacted.
+func (s *Service) agentLoopKeepRecent() int {
+	if s.model == nil {
+		return 4
+	}
+	return s.model.ContextKeepRecent()
+}
+
 // isAgentLoopIntent reports whether the current task should execute through the
 // generic agent loop instead of the legacy single-shot prompt path.
 func isAgentLoopIntent(taskIntent map[string]any) bool {
@@ -1317,9 +1344,10 @@ func (s *Service) agentLoopToolDefinitions() []model.ToolDefinition {
 }
 
 // buildAgentLoopPlannerInput assembles the textual context seen by the planner
-// turn. Previous tool observations are appended so the model can react to the
-// latest state instead of restarting from the original user input every time.
-func buildAgentLoopPlannerInput(inputText string, history []string) string {
+// turn. Previous tool observations are compacted when they exceed the configured
+// budget so the loop remains bounded even after several tool iterations.
+func buildAgentLoopPlannerInput(inputText string, history []string, compressChars, keepRecent int) string {
+	compressedHistory := compactAgentLoopHistory(history, compressChars, keepRecent)
 	sections := []string{
 		"You are the planning step of a desktop agent loop.",
 		"Decide whether to answer directly or call one of the provided tools.",
@@ -1330,11 +1358,76 @@ func buildAgentLoopPlannerInput(inputText string, history []string) string {
 		"User context:",
 		strings.TrimSpace(inputText),
 	}
-	if len(history) > 0 {
+	if len(compressedHistory) > 0 {
 		sections = append(sections, "", "Observed tool results:")
-		sections = append(sections, history...)
+		sections = append(sections, compressedHistory...)
 	}
 	return strings.Join(sections, "\n")
+}
+
+func compactAgentLoopHistory(history []string, compressChars, keepRecent int) []string {
+	if len(history) == 0 {
+		return nil
+	}
+	if compressChars <= 0 || keepRecent < 0 {
+		return append([]string(nil), history...)
+	}
+
+	normalized := make([]string, 0, len(history))
+	totalChars := 0
+	for _, item := range history {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+		totalChars += len(trimmed)
+	}
+	if len(normalized) == 0 || totalChars <= compressChars || len(normalized) <= keepRecent {
+		return normalized
+	}
+
+	if keepRecent > len(normalized) {
+		keepRecent = len(normalized)
+	}
+	headCount := len(normalized) - keepRecent
+	headSummary := summarizeAgentLoopHistory(normalized[:headCount], compressChars/2)
+	result := make([]string, 0, keepRecent+1)
+	if headSummary != "" {
+		result = append(result, headSummary)
+	}
+	result = append(result, normalized[headCount:]...)
+	return result
+}
+
+func summarizeAgentLoopHistory(history []string, maxChars int) string {
+	if len(history) == 0 || maxChars <= 0 {
+		return ""
+	}
+
+	builder := strings.Builder{}
+	builder.WriteString(fmt.Sprintf("Compressed earlier observations (%d items):", len(history)))
+	for index, item := range history {
+		snippet := singleLineSummary(item)
+		entry := "\n- " + truncateText(snippet, 160)
+		if builder.Len()+len(entry) > maxChars {
+			remaining := len(history) - index
+			if remaining > 0 {
+				builder.WriteString(fmt.Sprintf("\n- ... %d more observations omitted", remaining))
+			}
+			break
+		}
+		builder.WriteString(entry)
+	}
+	return builder.String()
+}
+
+func singleLineSummary(value string) string {
+	lines := strings.Fields(strings.ReplaceAll(strings.ReplaceAll(value, "\r", " "), "\n", " "))
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, " ")
 }
 
 // executeAgentLoopTool executes one model-selected tool and converts the result

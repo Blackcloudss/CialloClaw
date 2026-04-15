@@ -62,6 +62,11 @@ func (s *stubModelClient) GenerateToolCalls(_ context.Context, request model.Too
 
 func newTestExecutionService(t *testing.T, output string) (*Service, string) {
 	t.Helper()
+	return newTestExecutionServiceWithConfig(t, serviceconfig.ModelConfig{}, output)
+}
+
+func newTestExecutionServiceWithConfig(t *testing.T, cfg serviceconfig.ModelConfig, output string) (*Service, string) {
+	t.Helper()
 
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
@@ -78,7 +83,7 @@ func newTestExecutionService(t *testing.T, output string) (*Service, string) {
 		platform.NewLocalFileSystemAdapter(pathPolicy),
 		stubExecutionCapability{result: tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}},
 		sidecarclient.NewNoopPlaywrightSidecarClient(),
-		model.NewService(serviceconfig.ModelConfig{}, &stubModelClient{output: output}),
+		model.NewService(cfg, &stubModelClient{output: output}),
 		audit.NewService(),
 		checkpoint.NewService(),
 		delivery.NewService(),
@@ -287,6 +292,102 @@ func TestExecuteAgentLoopReadsFileBeforeReturningAnswer(t *testing.T) {
 	if result.ModelInvocation["request_id"] != "req_loop_2" {
 		t.Fatalf("expected final planning turn metadata, got %+v", result.ModelInvocation)
 	}
+}
+
+func TestCompactAgentLoopHistoryKeepsRecentObservations(t *testing.T) {
+	history := []string{
+		"Tool read_file succeeded. Summary: {\"path\":\"notes/1.md\",\"excerpt\":\"alpha alpha alpha alpha alpha\"}",
+		"Tool read_file succeeded. Summary: {\"path\":\"notes/2.md\",\"excerpt\":\"beta beta beta beta beta\"}",
+		"Tool page_read succeeded. Summary: {\"url\":\"https://example.com\",\"title\":\"Example\"}",
+	}
+
+	compacted := compactAgentLoopHistory(history, 120, 1)
+	if len(compacted) != 2 {
+		t.Fatalf("expected one compressed summary plus one recent item, got %+v", compacted)
+	}
+	if !strings.Contains(compacted[0], "Compressed earlier observations") {
+		t.Fatalf("expected compacted head summary, got %+v", compacted)
+	}
+	if compacted[1] != history[2] {
+		t.Fatalf("expected most recent observation to stay verbatim, got %+v", compacted)
+	}
+}
+
+func TestExecuteAgentLoopHonorsConfiguredMaxToolIterations(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{
+			{
+				RequestID: "req_loop_1",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+			},
+			{
+				RequestID: "req_loop_2",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+			},
+			{
+				RequestID: "req_loop_3",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+			},
+		},
+	}
+	cfg := serviceconfig.ModelConfig{MaxToolIterations: 2}
+	service, workspaceRoot := newTestExecutionServiceWithModelClientAndConfig(t, cfg, modelClient)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_limit",
+		RunID:        "run_loop_limit",
+		Title:        "Loop limit test",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Inspect the notes directory and keep going."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop result",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if len(result.ToolCalls) != 2 {
+		t.Fatalf("expected loop to stop after two configured iterations, got %+v", result.ToolCalls)
+	}
+	if result.ModelInvocation["request_id"] != "req_loop_2" {
+		t.Fatalf("expected last recorded invocation to come from second turn, got %+v", result.ModelInvocation)
+	}
+}
+
+func newTestExecutionServiceWithModelClientAndConfig(t *testing.T, cfg serviceconfig.ModelConfig, client model.Client) (*Service, string) {
+	t.Helper()
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
+
+	return NewService(
+		platform.NewLocalFileSystemAdapter(pathPolicy),
+		stubExecutionCapability{result: tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}},
+		sidecarclient.NewNoopPlaywrightSidecarClient(),
+		model.NewService(cfg, client),
+		audit.NewService(),
+		checkpoint.NewService(),
+		delivery.NewService(),
+		toolRegistry,
+		toolExecutor,
+		plugin.NewService(),
+	), workspaceRoot
 }
 
 func TestExecuteWriteFileBubbleConsumesArtifactCandidate(t *testing.T) {
