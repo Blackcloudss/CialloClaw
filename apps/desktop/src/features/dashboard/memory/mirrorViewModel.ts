@@ -28,10 +28,17 @@ export type MirrorConversationFilters = {
   scope: MirrorConversationScopeFilter;
   source: MirrorConversationSourceFilter;
   input_mode: MirrorConversationInputModeFilter;
-  task_id: string | "all";
+  date_key: string | "all";
 };
 
-export type MirrorConversationTaskOption = {
+export type MirrorConversationDateOption = {
+  date_key: string;
+  label: string;
+  count: number;
+  latest_at: string;
+};
+
+export type MirrorConversationTaskMoment = {
   task_id: string;
   count: number;
   latest_at: string;
@@ -240,7 +247,7 @@ export function filterMirrorConversationRecords(records: MirrorConversationRecor
       return false;
     }
 
-    if (filters.task_id !== "all" && record.task_id !== filters.task_id) {
+    if (filters.date_key !== "all" && toCalendarDate(record.updated_at) !== filters.date_key) {
       return false;
     }
 
@@ -248,8 +255,42 @@ export function filterMirrorConversationRecords(records: MirrorConversationRecor
   });
 }
 
-export function buildMirrorConversationTaskOptions(records: MirrorConversationRecord[]) {
-  const taskMap = new Map<string, MirrorConversationTaskOption>();
+export function buildMirrorConversationDateOptions(records: MirrorConversationRecord[]) {
+  const dateMap = new Map<string, MirrorConversationDateOption>();
+
+  for (const record of records) {
+    const dateKey = toCalendarDate(record.updated_at);
+    const current = dateMap.get(dateKey);
+
+    if (!current) {
+      dateMap.set(dateKey, {
+        count: 1,
+        date_key: dateKey,
+        label: toCalendarDateLabel(dateKey),
+        latest_at: record.updated_at,
+      });
+      continue;
+    }
+
+    dateMap.set(dateKey, {
+      ...current,
+      count: current.count + 1,
+      latest_at: current.latest_at.localeCompare(record.updated_at) >= 0 ? current.latest_at : record.updated_at,
+    });
+  }
+
+  return Array.from(dateMap.values()).sort((left, right) => {
+    const dateOrder = right.date_key.localeCompare(left.date_key);
+    if (dateOrder !== 0) {
+      return dateOrder;
+    }
+
+    return right.latest_at.localeCompare(left.latest_at);
+  });
+}
+
+export function buildMirrorConversationTaskMoments(records: MirrorConversationRecord[]) {
+  const taskMap = new Map<string, MirrorConversationTaskMoment>();
 
   for (const record of records) {
     if (!record.task_id) {
@@ -259,9 +300,9 @@ export function buildMirrorConversationTaskOptions(records: MirrorConversationRe
     const current = taskMap.get(record.task_id);
     if (!current) {
       taskMap.set(record.task_id, {
-        task_id: record.task_id,
         count: 1,
         latest_at: record.updated_at,
+        task_id: record.task_id,
       });
       continue;
     }
@@ -274,7 +315,7 @@ export function buildMirrorConversationTaskOptions(records: MirrorConversationRe
   }
 
   return Array.from(taskMap.values()).sort((left, right) => {
-    const latestOrder = right.latest_at.localeCompare(left.latest_at);
+    const latestOrder = left.latest_at.localeCompare(right.latest_at);
     if (latestOrder !== 0) {
       return latestOrder;
     }
@@ -292,11 +333,15 @@ export function groupMirrorConversationRecords(records: MirrorConversationRecord
     groups.set(dateKey, [...(groups.get(dateKey) ?? []), record]);
   }
 
-  return Array.from(groups.entries()).map(([dateKey, items]) => ({
-    date_key: dateKey,
-    label: toCalendarDateLabel(dateKey),
-    items,
-  } satisfies MirrorConversationDayGroup));
+  return Array.from(groups.entries())
+    .sort(([leftDate], [rightDate]) => rightDate.localeCompare(leftDate))
+    .map(([dateKey, items]) => ({
+      date_key: dateKey,
+      label: toCalendarDateLabel(dateKey),
+      // Keep each day in chronological order so the local conversation history
+      // reads like a timeline once the user narrows it down by date.
+      items: [...items].sort((left, right) => left.updated_at.localeCompare(right.updated_at)),
+    } satisfies MirrorConversationDayGroup));
 }
 
 export function buildMirrorDailyDigest(input: MirrorDailyDigestInput): MirrorDailyDigest {

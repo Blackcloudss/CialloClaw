@@ -19,7 +19,8 @@ import {
 } from "@/features/dashboard/shared/dashboardSettingsSnapshot";
 import {
   buildMirrorConversationSummary,
-  buildMirrorConversationTaskOptions,
+  buildMirrorConversationDateOptions,
+  buildMirrorConversationTaskMoments,
   filterMirrorConversationRecords,
   formatMirrorConversationRecordMoment,
   getMirrorConversationInputModeLabel,
@@ -69,18 +70,18 @@ function MirrorHistoryDetail({
   const [conversationScopeFilter, setConversationScopeFilter] = useState<MirrorConversationScopeFilter>("all");
   const [conversationSourceFilter, setConversationSourceFilter] = useState<MirrorConversationRecord["source"] | "all">("all");
   const [conversationInputModeFilter, setConversationInputModeFilter] = useState<MirrorConversationInputModeFilter>("all");
-  const [conversationTaskFilter, setConversationTaskFilter] = useState<string | "all">("all");
+  const [conversationDateFilter, setConversationDateFilter] = useState<string | "all">("all");
   const conversationFilters = useMemo(
     () =>
       ({
         scope: conversationScopeFilter,
         source: conversationSourceFilter,
         input_mode: conversationInputModeFilter,
-        task_id: conversationTaskFilter,
+        date_key: conversationDateFilter,
       } satisfies MirrorConversationFilters),
-    [conversationInputModeFilter, conversationScopeFilter, conversationSourceFilter, conversationTaskFilter],
+    [conversationDateFilter, conversationInputModeFilter, conversationScopeFilter, conversationSourceFilter],
   );
-  const conversationTaskOptions = useMemo(() => buildMirrorConversationTaskOptions(conversations), [conversations]);
+  const conversationDateOptions = useMemo(() => buildMirrorConversationDateOptions(conversations), [conversations]);
   const filteredConversations = useMemo(
     () => filterMirrorConversationRecords(conversations, conversationFilters),
     [conversationFilters, conversations],
@@ -97,10 +98,10 @@ function MirrorHistoryDetail({
   const textConversationCount = conversations.filter((record) => record.input_mode === "text").length;
 
   useEffect(() => {
-    if (conversationTaskFilter !== "all" && !conversationTaskOptions.some((option) => option.task_id === conversationTaskFilter)) {
-      setConversationTaskFilter("all");
+    if (conversationDateFilter !== "all" && !conversationDateOptions.some((option) => option.date_key === conversationDateFilter)) {
+      setConversationDateFilter("all");
     }
-  }, [conversationTaskFilter, conversationTaskOptions]);
+  }, [conversationDateFilter, conversationDateOptions]);
 
   return (
     <Tabs className="mirror-page__detail-tabs" defaultValue={conversations.length > 0 ? "conversation" : "summary"}>
@@ -160,7 +161,7 @@ function MirrorHistoryDetail({
         <div className="mirror-page__conversation-filter-shell">
           <div className="mirror-page__profile-local-note">
             <BrainCircuit className="mirror-page__profile-icon" />
-            <p className="mirror-page__summary-copy">这一栏只统计最近 100 条本地输入与前端可见回应，用来按时间和 task 回看，不等于后端历史概要真源。</p>
+            <p className="mirror-page__summary-copy">这一栏只统计最近 100 条本地输入与前端可见回应，用来先按日期回看，再按时间顺序查看关联任务与记录，不等于后端历史概要真源。</p>
           </div>
 
           <div className="mirror-page__conversation-filter-bar">
@@ -242,23 +243,23 @@ function MirrorHistoryDetail({
             </button>
           </div>
 
-          {conversationTaskOptions.length > 0 ? (
+          {conversationDateOptions.length > 0 ? (
             <div className="mirror-page__conversation-filter-bar">
               <button
                 type="button"
-                className={`mirror-page__conversation-filter${conversationTaskFilter === "all" ? " is-active" : ""}`}
-                onClick={() => setConversationTaskFilter("all")}
+                className={`mirror-page__conversation-filter${conversationDateFilter === "all" ? " is-active" : ""}`}
+                onClick={() => setConversationDateFilter("all")}
               >
-                全部 task
+                全部日期
               </button>
-              {conversationTaskOptions.map((option) => (
+              {conversationDateOptions.map((option) => (
                 <button
-                  key={option.task_id}
+                  key={option.date_key}
                   type="button"
-                  className={`mirror-page__conversation-filter${conversationTaskFilter === option.task_id ? " is-active" : ""}`}
-                  onClick={() => setConversationTaskFilter(option.task_id)}
+                  className={`mirror-page__conversation-filter${conversationDateFilter === option.date_key ? " is-active" : ""}`}
+                  onClick={() => setConversationDateFilter(option.date_key)}
                 >
-                  {option.task_id} · {option.count}
+                  {option.label} · {option.count}
                 </button>
               ))}
             </div>
@@ -271,54 +272,80 @@ function MirrorHistoryDetail({
           <ScrollArea className="mirror-page__conversation-scroll" data-testid="mirror-conversation-list">
             <div className="mirror-page__conversation-days">
               {groupedConversations.map((group) => (
-                <section key={group.date_key} className="mirror-page__conversation-day">
-                  <div className="mirror-page__conversation-day-header">
-                    <p className="mirror-page__micro-label">{group.label}</p>
-                    <StatusBadge tone="processing">{group.items.length} 条</StatusBadge>
-                  </div>
+                (() => {
+                  const orderedTasks = buildMirrorConversationTaskMoments(group.items);
 
-                  <div className="mirror-page__conversation-records">
-                    {group.items.map((record) => (
-                      <article
-                        key={record.record_id}
-                        className="mirror-page__conversation-record"
-                        data-testid={`mirror-conversation-record-${record.record_id}`}
-                      >
-                        <div className="mirror-page__conversation-meta">
-                          <div className="mirror-page__conversation-meta-copy">
-                            <p className="mirror-page__micro-label">{formatMirrorConversationRecordMoment(record)}</p>
-                            <p className="mirror-page__summary-copy">
-                              {getMirrorConversationSourceLabel(record.source)} · {getMirrorConversationInputModeLabel(record.input_mode)} · {getMirrorConversationTriggerLabel(record.trigger)}
-                              {record.task_id ? ` · ${record.task_id}` : ""}
-                            </p>
-                          </div>
-                          <StatusBadge tone={record.status === "failed" ? "red" : record.agent_bubble_type ?? "processing"}>
-                            {record.status === "failed" ? "失败" : record.agent_text ? "已回应" : "等待回应"}
-                          </StatusBadge>
-                        </div>
-                        {record.task_id ? (
-                          <div className="mirror-page__conversation-actions">
-                            <button type="button" className="mirror-page__task-link" onClick={() => onOpenTaskDetail(record.task_id!)}>
-                              查看关联任务
-                            </button>
-                          </div>
-                        ) : null}
+                  return (
+                    <section key={group.date_key} className="mirror-page__conversation-day">
+                      <div className="mirror-page__conversation-day-header">
+                        <p className="mirror-page__micro-label">{group.label}</p>
+                        <StatusBadge tone="processing">{group.items.length} 条</StatusBadge>
+                      </div>
 
-                        <div className="mirror-page__conversation-bubble mirror-page__conversation-bubble--user">
-                          <p className="mirror-page__history-label">用户输入</p>
-                          <p className="mirror-page__history-text">{record.user_text}</p>
+                      {orderedTasks.length > 0 ? (
+                        <div className="mirror-page__stage-task-list">
+                          {orderedTasks.map((task) => (
+                            <div key={`${group.date_key}-${task.task_id}`} className="mirror-page__stage-task">
+                              <div>
+                                <p className="mirror-page__history-label">{task.task_id}</p>
+                                <p className="mirror-page__summary-copy">
+                                  {new Date(task.latest_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} · {task.count} 条相关记录
+                                </p>
+                              </div>
+                              <div className="mirror-page__stage-task-actions">
+                                <button type="button" className="mirror-page__task-link" onClick={() => onOpenTaskDetail(task.task_id)}>
+                                  打开任务
+                                </button>
+                              </div>
+                            </div>
+                          ))}
                         </div>
+                      ) : null}
 
-                        <div
-                          className={`mirror-page__conversation-bubble ${record.status === "failed" ? "mirror-page__conversation-bubble--failed" : "mirror-page__conversation-bubble--agent"}`}
-                        >
-                          <p className="mirror-page__history-label">前端可见回应</p>
-                          <p className="mirror-page__history-text">{record.agent_text ?? record.error_message ?? "当前没有前端可见回应。"}</p>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                </section>
+                      <div className="mirror-page__conversation-records">
+                        {group.items.map((record) => (
+                          <article
+                            key={record.record_id}
+                            className="mirror-page__conversation-record"
+                            data-testid={`mirror-conversation-record-${record.record_id}`}
+                          >
+                            <div className="mirror-page__conversation-meta">
+                              <div className="mirror-page__conversation-meta-copy">
+                                <p className="mirror-page__micro-label">{formatMirrorConversationRecordMoment(record)}</p>
+                                <p className="mirror-page__summary-copy">
+                                  {getMirrorConversationSourceLabel(record.source)} · {getMirrorConversationInputModeLabel(record.input_mode)} · {getMirrorConversationTriggerLabel(record.trigger)}
+                                  {record.task_id ? ` · ${record.task_id}` : ""}
+                                </p>
+                              </div>
+                              <StatusBadge tone={record.status === "failed" ? "red" : record.agent_bubble_type ?? "processing"}>
+                                {record.status === "failed" ? "失败" : record.agent_text ? "已回应" : "等待回应"}
+                              </StatusBadge>
+                            </div>
+                            {record.task_id ? (
+                              <div className="mirror-page__conversation-actions">
+                                <button type="button" className="mirror-page__task-link" onClick={() => onOpenTaskDetail(record.task_id!)}>
+                                  查看关联任务
+                                </button>
+                              </div>
+                            ) : null}
+
+                            <div className="mirror-page__conversation-bubble mirror-page__conversation-bubble--user">
+                              <p className="mirror-page__history-label">用户输入</p>
+                              <p className="mirror-page__history-text">{record.user_text}</p>
+                            </div>
+
+                            <div
+                              className={`mirror-page__conversation-bubble ${record.status === "failed" ? "mirror-page__conversation-bubble--failed" : "mirror-page__conversation-bubble--agent"}`}
+                            >
+                              <p className="mirror-page__history-label">前端可见回应</p>
+                              <p className="mirror-page__history-text">{record.agent_text ?? record.error_message ?? "当前没有前端可见回应。"}</p>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </section>
+                  );
+                })()
               ))}
             </div>
           </ScrollArea>
