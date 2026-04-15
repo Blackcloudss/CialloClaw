@@ -20,7 +20,7 @@ import {
   shouldEnableDashboardTaskDetailQuery,
 } from "./taskPage.query";
 import { buildFallbackTaskDetailData, controlTaskByAction, loadTaskBucketPage, loadTaskDetailData, type TaskPageDataMode } from "./taskPage.service";
-import { loadTaskArtifactPage, openTaskArtifactForTask, openTaskDeliveryForTask, performTaskOpenExecution, resolveTaskOpenExecutionPlan } from "./taskOutput.service";
+import { describeTaskOpenResultForCurrentTask, loadTaskArtifactPage, openTaskArtifactForTask, openTaskDeliveryForTask, performTaskOpenExecution, resolveTaskOpenExecutionPlan } from "./taskOutput.service";
 import { TaskDetailPanel } from "./components/TaskDetailPanel";
 import { TaskFilesSheet } from "./components/TaskFilesSheet";
 import { TaskPreviewCard } from "./components/TaskPreviewCard";
@@ -212,12 +212,13 @@ export function TaskPage() {
 
   async function handleResolvedOpen(result: Awaited<ReturnType<typeof openTaskArtifactForTask>> | Awaited<ReturnType<typeof openTaskDeliveryForTask>>) {
     const plan = resolveTaskOpenExecutionPlan(result);
+    const openResultMessage = describeTaskOpenResultForCurrentTask(plan, selectedTaskId);
 
     if (plan.mode === "task_detail" && plan.taskId) {
       setSelectedTaskId(plan.taskId);
       setDetailOpen(true);
       setFilesSheetOpen(false);
-      showFeedback(plan.feedback);
+      showFeedback(openResultMessage ?? plan.feedback);
       return;
     }
 
@@ -489,6 +490,7 @@ export function TaskPage() {
               <TaskDetailPanel
                 artifactActionPendingId={artifactOpenMutation.isPending ? artifactOpenMutation.variables?.artifactId ?? null : null}
                 detailData={detailData}
+                artifactWarningMessage={detailData.artifactWarningMessage ?? null}
                 detailErrorMessage={detailErrorMessage}
                 detailState={detailState}
                 deliveryActionPending={deliveryOpenMutation.isPending}
@@ -509,6 +511,7 @@ export function TaskPage() {
         artifactErrorMessage={artifactListQuery.isError ? (artifactListQuery.error instanceof Error ? artifactListQuery.error.message : "成果列表请求失败") : null}
         artifactItems={artifactListQuery.data?.items ?? detailData?.detail.artifacts ?? []}
         artifactLoading={artifactListQuery.isPending}
+        artifactWarningMessage={detailData?.artifactWarningMessage ?? null}
         detailData={detailData}
         onOpenArtifact={handleOpenArtifact}
         onOpenChange={setFilesSheetOpen}

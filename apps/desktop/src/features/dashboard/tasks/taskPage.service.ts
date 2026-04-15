@@ -164,11 +164,37 @@ export function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): Age
 
 export function buildFallbackTaskDetailData(item: TaskListItem): TaskDetailData {
   return {
+    artifactWarningMessage: null,
     detail: createFallbackTaskDetail(item.task),
     experience: item.experience,
     source: "fallback",
     task: item.task,
   };
+}
+
+function recoverTaskDetailFromInvalidArtifacts(detail: AgentTaskDetailGetResult, error: unknown) {
+  if (!(error instanceof Error) || !/artifacts/i.test(error.message)) {
+    throw error;
+  }
+
+  return {
+    artifactWarningMessage: "任务成果信息暂时无法完整展示，已先隐藏格式不符合要求的产物。",
+    detail: normalizeTaskDetailResult({
+      ...detail,
+      artifacts: [],
+    }),
+  };
+}
+
+export function normalizeTaskDetailData(detail: AgentTaskDetailGetResult) {
+  try {
+    return {
+      artifactWarningMessage: null,
+      detail: normalizeTaskDetailResult(detail),
+    };
+  } catch (error) {
+    return recoverTaskDetailFromInvalidArtifacts(detail, error);
+  }
 }
 
 function getMockTaskBucketPage(group: TaskListGroup, options?: { limit?: number; offset?: number }): TaskBucketPageData {
@@ -245,7 +271,7 @@ export async function loadTaskDetailData(taskId: string, source: TaskPageDataMod
   }
 
   try {
-    const detail = normalizeTaskDetailResult(
+    const normalized = normalizeTaskDetailData(
       await withTimeout(
         getTaskDetail({
           request_meta: createRequestMeta(`task_detail_${taskId}`),
@@ -256,10 +282,11 @@ export async function loadTaskDetailData(taskId: string, source: TaskPageDataMod
     );
 
     return {
-      detail,
-      experience: getTaskExperience(taskId) ?? createFallbackExperience(detail.task),
+      artifactWarningMessage: normalized.artifactWarningMessage,
+      detail: normalized.detail,
+      experience: getTaskExperience(taskId) ?? createFallbackExperience(normalized.detail.task),
       source: "rpc",
-      task: detail.task,
+      task: normalized.detail.task,
     };
   } catch (error) {
     if (isRpcChannelUnavailable(error)) {

@@ -13,6 +13,7 @@ import { TaskProgressTimeline } from "./TaskProgressTimeline";
 
 type TaskDetailPanelProps = {
   artifactActionPendingId: string | null;
+  artifactWarningMessage: string | null;
   detailData: TaskDetailData;
   detailErrorMessage: string | null;
   detailState: "loading" | "error" | "ready";
@@ -28,6 +29,7 @@ type TaskDetailPanelProps = {
 
 export function TaskDetailPanel({
   artifactActionPendingId,
+  artifactWarningMessage,
   detailData,
   detailErrorMessage,
   detailState,
@@ -182,6 +184,7 @@ export function TaskDetailPanel({
                   </div>
                 </div>
                 <div className="task-detail-output-list">
+                  {artifactWarningMessage ? <p className="task-detail-card__hint">{artifactWarningMessage}</p> : null}
                   {detail.artifacts.length > 0 ? (
                     detail.artifacts.map((artifact) => (
                       <article key={artifact.artifact_id} className="task-detail-output-item">
@@ -287,6 +290,7 @@ export function TaskDetailPanel({
                   </button>
                 </div>
                 <div className="task-detail-output-list">
+                  {artifactWarningMessage ? <p className="task-detail-card__hint">{artifactWarningMessage}</p> : null}
                   {detail.artifacts.length > 0 ? (
                     detail.artifacts.map((artifact) => (
                       <article key={artifact.artifact_id} className="task-detail-output-item">

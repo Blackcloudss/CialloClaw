@@ -84,6 +84,7 @@ function loadTaskPageQueryModule() {
 function loadTaskOutputServiceModule() {
   return withDesktopAliasRuntime((requireFn) =>
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskOutput.service.js")) as {
+      describeTaskOpenResultForCurrentTask: (plan: { mode: string; taskId: string | null }, currentTaskId: string | null) => string | null;
       loadTaskArtifactPage: (taskId: string, source: "rpc" | "mock") => Promise<AgentTaskArtifactListResult>;
       openTaskArtifactForTask: (taskId: string, artifactId: string, source: "rpc" | "mock") => Promise<AgentTaskArtifactOpenResult>;
       openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source: "rpc" | "mock") => Promise<AgentDeliveryOpenResult>;
@@ -921,6 +922,17 @@ test("task output service exposes artifact list and open flows in mock mode", as
 
   const deliveryOpen = await outputService.openTaskDeliveryForTask("task_done_001", undefined, "mock");
   assert.equal(deliveryOpen.delivery_result.payload.task_id, "task_done_001");
+
+  assert.equal(
+    outputService.describeTaskOpenResultForCurrentTask(
+      {
+        mode: "task_detail",
+        taskId: "task_done_001",
+      },
+      "task_done_001",
+    ),
+    "当前任务没有独立可打开结果，请先查看成果区或文件舱门。",
+  );
 });
 
 test("task page adopts rpc output helpers instead of placeholder artifact copy", () => {
@@ -983,9 +995,10 @@ test("task detail normalization rejects string restore points in rpc mode and ke
   });
 });
 
-test("task detail normalization fails fast on invalid artifacts, mirror references, and timeline steps", () => {
+test("task detail normalization recovers invalid artifacts but still rejects broken mirrors and timeline steps", () => {
   withDesktopAliasRuntime((requireFn) => {
     const service = requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskPage.service.js")) as {
+      normalizeTaskDetailData: (detail: AgentTaskDetailGetResult) => { artifactWarningMessage: string | null; detail: AgentTaskDetailGetResult };
       normalizeTaskDetailResult: (detail: AgentTaskDetailGetResult) => AgentTaskDetailGetResult;
     };
 
@@ -1022,15 +1035,14 @@ test("task detail normalization fails fast on invalid artifacts, mirror referenc
       /security summary|restore point/i,
     );
 
-    assert.throws(
-      () =>
-        service.normalizeTaskDetailResult(
-          createDetail({
-            artifacts: [{ artifact_id: "artifact_1" } as never],
-          }),
-        ),
-      /artifacts/i,
+    const recovered = service.normalizeTaskDetailData(
+      createDetail({
+        artifacts: [{ artifact_id: "artifact_1" } as never],
+      }),
     );
+
+    assert.equal(recovered.detail.artifacts.length, 0);
+    assert.match(recovered.artifactWarningMessage ?? "", /成果信息暂时无法完整展示/);
 
     assert.throws(
       () =>

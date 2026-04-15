@@ -9,6 +9,7 @@ type TaskFilesSheetProps = {
   artifactErrorMessage: string | null;
   artifactItems: Artifact[];
   artifactLoading: boolean;
+  artifactWarningMessage: string | null;
   detailData: TaskDetailData | null;
   onOpenArtifact: (artifactId: string) => void;
   open: boolean;
@@ -23,6 +24,7 @@ export function TaskFilesSheet({
   artifactErrorMessage,
   artifactItems,
   artifactLoading,
+  artifactWarningMessage,
   detailData,
   onOpenArtifact,
   open,
@@ -109,8 +111,12 @@ export function TaskFilesSheet({
                     <p className="mt-3 rounded-[18px] bg-slate-50/90 px-3 py-2 font-mono text-xs text-slate-500">{artifact.path}</p>
                   </article>
                 ))
+              ) : artifactWarningMessage ? (
+                <article className="rounded-[24px] border border-amber-100 bg-amber-50/80 p-4 text-sm text-amber-700">
+                  {artifactWarningMessage}
+                </article>
               ) : (
-                <article className="rounded-[24px] border border-white/70 bg-white/72 p-4 text-sm text-slate-600">当前还没有可展示的成果。</article>
+                <article className="rounded-[24px] border border-white/70 bg-white/72 p-4 text-sm text-slate-600">当前还没有可展示的成果，可能尚未生成独立文件，或结果仍停留在任务详情内。</article>
               )}
             </section>
           </div>

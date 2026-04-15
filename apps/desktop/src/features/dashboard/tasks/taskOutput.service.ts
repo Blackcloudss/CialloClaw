@@ -150,6 +150,14 @@ export async function performTaskOpenExecution(plan: TaskOpenExecutionPlan): Pro
   return plan.feedback;
 }
 
+export function describeTaskOpenResultForCurrentTask(plan: TaskOpenExecutionPlan, currentTaskId: string | null): string | null {
+  if (plan.mode === "task_detail" && plan.taskId && plan.taskId === currentTaskId) {
+    return "当前任务没有独立可打开结果，请先查看成果区或文件舱门。";
+  }
+
+  return null;
+}
+
 export async function loadTaskArtifactPage(taskId: string, source: TaskOutputDataMode = "rpc"): Promise<AgentTaskArtifactListResult> {
   if (source === "mock") {
     return buildMockArtifactPage(taskId);
