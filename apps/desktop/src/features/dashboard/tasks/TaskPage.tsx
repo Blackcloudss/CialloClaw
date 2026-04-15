@@ -143,26 +143,19 @@ export function TaskPage() {
       return;
     }
 
-<<<<<<< dashboard/tasks
-    return subscribeTask(selectedTaskId, () => {
+    function invalidateTaskQueries() {
       for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
         void queryClient.invalidateQueries({ queryKey });
       }
-    });
-  }, [dataMode, queryClient, securityRefreshPlan, selectedTaskId]);
-=======
-    const clearDeliverySubscription = subscribeDeliveryReady((payload) => {
-      void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "bucket", dataMode] });
+    }
 
-      if (payload.task_id === selectedTaskId) {
-        void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "detail", dataMode, selectedTaskId] });
-      }
+    const clearDeliverySubscription = subscribeDeliveryReady(() => {
+      invalidateTaskQueries();
     });
 
     const clearTaskSubscription = selectedTaskId
       ? subscribeTask(selectedTaskId, () => {
-          void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "bucket", dataMode] });
-          void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "detail", dataMode, selectedTaskId] });
+          invalidateTaskQueries();
         })
       : () => {};
 
@@ -170,8 +163,7 @@ export function TaskPage() {
       clearDeliverySubscription();
       clearTaskSubscription();
     };
-  }, [dataMode, queryClient, selectedTaskId]);
->>>>>>> main
+  }, [dataMode, queryClient, securityRefreshPlan, selectedTaskId]);
 
   useEffect(() => {
     return () => {
