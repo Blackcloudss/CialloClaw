@@ -18,6 +18,25 @@ export type MirrorConversationDayGroup = {
   items: MirrorConversationRecord[];
 };
 
+export type MirrorConversationScopeFilter = "all" | "with_task" | "failed";
+
+export type MirrorConversationSourceFilter = RequestSource | "all";
+
+export type MirrorConversationInputModeFilter = MirrorConversationRecord["input_mode"] | "all";
+
+export type MirrorConversationFilters = {
+  scope: MirrorConversationScopeFilter;
+  source: MirrorConversationSourceFilter;
+  input_mode: MirrorConversationInputModeFilter;
+  task_id: string | "all";
+};
+
+export type MirrorConversationTaskOption = {
+  task_id: string;
+  count: number;
+  latest_at: string;
+};
+
 export type MirrorTaskDigest = {
   task_id: string;
   title: string;
@@ -201,6 +220,67 @@ export function buildMirrorConversationSummary(records: MirrorConversationRecord
     dominant_source: getDominantRecordValue(records.map((record) => record.source)),
     dominant_input_mode: getDominantRecordValue(records.map((record) => record.input_mode)),
   };
+}
+
+export function filterMirrorConversationRecords(records: MirrorConversationRecord[], filters: MirrorConversationFilters) {
+  return records.filter((record) => {
+    if (filters.scope === "with_task" && !record.task_id) {
+      return false;
+    }
+
+    if (filters.scope === "failed" && record.status !== "failed") {
+      return false;
+    }
+
+    if (filters.source !== "all" && record.source !== filters.source) {
+      return false;
+    }
+
+    if (filters.input_mode !== "all" && record.input_mode !== filters.input_mode) {
+      return false;
+    }
+
+    if (filters.task_id !== "all" && record.task_id !== filters.task_id) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+export function buildMirrorConversationTaskOptions(records: MirrorConversationRecord[]) {
+  const taskMap = new Map<string, MirrorConversationTaskOption>();
+
+  for (const record of records) {
+    if (!record.task_id) {
+      continue;
+    }
+
+    const current = taskMap.get(record.task_id);
+    if (!current) {
+      taskMap.set(record.task_id, {
+        task_id: record.task_id,
+        count: 1,
+        latest_at: record.updated_at,
+      });
+      continue;
+    }
+
+    taskMap.set(record.task_id, {
+      task_id: record.task_id,
+      count: current.count + 1,
+      latest_at: current.latest_at.localeCompare(record.updated_at) >= 0 ? current.latest_at : record.updated_at,
+    });
+  }
+
+  return Array.from(taskMap.values()).sort((left, right) => {
+    const latestOrder = right.latest_at.localeCompare(left.latest_at);
+    if (latestOrder !== 0) {
+      return latestOrder;
+    }
+
+    return left.task_id.localeCompare(right.task_id);
+  });
 }
 
 export function groupMirrorConversationRecords(records: MirrorConversationRecord[]) {

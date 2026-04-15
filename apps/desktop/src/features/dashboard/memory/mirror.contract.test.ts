@@ -6,6 +6,8 @@ import {
   buildMirrorDailyDigest,
   buildMirrorProfileBaseItems,
   buildMirrorProfileView,
+  buildMirrorConversationTaskOptions,
+  filterMirrorConversationRecords,
 } from "./mirrorViewModel";
 import {
   loadMirrorConversationRecords,
@@ -280,4 +282,63 @@ test("buildMirrorProfileView keeps backend fields and local recent statistics se
   assert.equal(backendItem?.source_label, "后端画像字段");
   assert.equal(localStatItem?.source_label, "最近本地统计");
   assert.match(localStatItem?.hint ?? "", /本地记录机械统计/);
+});
+
+test("filterMirrorConversationRecords combines scope, source, input mode, and task filters", () => {
+  const failedRecord = {
+    ...createConversationRecord(4),
+    status: "failed" as const,
+    task_id: "task-special",
+    source: "dashboard" as const,
+    input_mode: "text" as const,
+  };
+  const records = [
+    createConversationRecord(1),
+    createConversationRecord(2),
+    {
+      ...createConversationRecord(3),
+      task_id: null,
+      source: "tray_panel" as const,
+      input_mode: "text" as const,
+    },
+    failedRecord,
+  ];
+
+  assert.deepEqual(
+    filterMirrorConversationRecords(records, {
+      scope: "with_task",
+      source: "dashboard",
+      input_mode: "text",
+      task_id: "task-special",
+    }).map((record) => record.record_id),
+    [failedRecord.record_id],
+  );
+
+  assert.deepEqual(
+    filterMirrorConversationRecords(records, {
+      scope: "failed",
+      source: "all",
+      input_mode: "all",
+      task_id: "all",
+    }).map((record) => record.record_id),
+    [failedRecord.record_id],
+  );
+});
+
+test("buildMirrorConversationTaskOptions keeps recent task filters ordered by latest activity", () => {
+  const records = [
+    createConversationRecord(1),
+    createConversationRecord(2),
+    {
+      ...createConversationRecord(3),
+      task_id: "task-1",
+      updated_at: "2026-04-13T10:09:00+08:00",
+    },
+  ];
+
+  const taskOptions = buildMirrorConversationTaskOptions(records);
+
+  assert.deepEqual(taskOptions.map((option) => option.task_id), ["task-1", "task-2"]);
+  assert.equal(taskOptions[0]?.count, 2);
+  assert.equal(taskOptions[0]?.latest_at, "2026-04-13T10:09:00+08:00");
 });

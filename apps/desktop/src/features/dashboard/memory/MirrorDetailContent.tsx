@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { AgentMirrorOverviewGetResult } from "@cialloclaw/protocol";
 import { BookMarked, BrainCircuit, CalendarDays } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -8,11 +8,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import {
   buildMirrorConversationSummary,
+  buildMirrorConversationTaskOptions,
+  filterMirrorConversationRecords,
   formatMirrorConversationRecordMoment,
   getMirrorConversationInputModeLabel,
   getMirrorConversationSourceLabel,
   getMirrorConversationTriggerLabel,
   groupMirrorConversationRecords,
+  type MirrorConversationFilters,
+  type MirrorConversationInputModeFilter,
+  type MirrorConversationScopeFilter,
   type MirrorConversationSummary,
   type MirrorDailyDigest,
   type MirrorProfileItemView,
@@ -35,22 +40,8 @@ type MirrorDetailContentProps = {
   profileView: MirrorProfileView;
 };
 
-type MirrorConversationFilter = "all" | "with_task" | "failed";
-
 function MirrorEmptyState({ children }: { children: string }) {
   return <p className="mirror-page__empty-state">{children}</p>;
-}
-
-function filterMirrorConversationRecords(records: MirrorConversationRecord[], filter: MirrorConversationFilter) {
-  if (filter === "with_task") {
-    return records.filter((record) => record.task_id);
-  }
-
-  if (filter === "failed") {
-    return records.filter((record) => record.status === "failed");
-  }
-
-  return records;
 }
 
 function MirrorHistoryDetail({
@@ -61,16 +52,41 @@ function MirrorHistoryDetail({
 }: Pick<MirrorDetailContentProps, "overview" | "conversations" | "conversationSummary"> & {
   onOpenTaskDetail: (taskId: string) => void;
 }) {
-  const [conversationFilter, setConversationFilter] = useState<MirrorConversationFilter>("all");
+  const [conversationScopeFilter, setConversationScopeFilter] = useState<MirrorConversationScopeFilter>("all");
+  const [conversationSourceFilter, setConversationSourceFilter] = useState<MirrorConversationRecord["source"] | "all">("all");
+  const [conversationInputModeFilter, setConversationInputModeFilter] = useState<MirrorConversationInputModeFilter>("all");
+  const [conversationTaskFilter, setConversationTaskFilter] = useState<string | "all">("all");
+  const conversationFilters = useMemo(
+    () =>
+      ({
+        scope: conversationScopeFilter,
+        source: conversationSourceFilter,
+        input_mode: conversationInputModeFilter,
+        task_id: conversationTaskFilter,
+      } satisfies MirrorConversationFilters),
+    [conversationInputModeFilter, conversationScopeFilter, conversationSourceFilter, conversationTaskFilter],
+  );
+  const conversationTaskOptions = useMemo(() => buildMirrorConversationTaskOptions(conversations), [conversations]);
   const filteredConversations = useMemo(
-    () => filterMirrorConversationRecords(conversations, conversationFilter),
-    [conversationFilter, conversations],
+    () => filterMirrorConversationRecords(conversations, conversationFilters),
+    [conversationFilters, conversations],
   );
   const groupedConversations = useMemo(() => groupMirrorConversationRecords(filteredConversations), [filteredConversations]);
   const dominantSource = conversationSummary.dominant_source ? getMirrorConversationSourceLabel(conversationSummary.dominant_source) : "等待新记录";
   const dominantMode = conversationSummary.dominant_input_mode ? getMirrorConversationInputModeLabel(conversationSummary.dominant_input_mode) : "等待新记录";
   const taskLinkedConversationCount = conversations.filter((record) => record.task_id).length;
   const failedConversationCount = conversations.filter((record) => record.status === "failed").length;
+  const dashboardConversationCount = conversations.filter((record) => record.source === "dashboard").length;
+  const floatingBallConversationCount = conversations.filter((record) => record.source === "floating_ball").length;
+  const trayPanelConversationCount = conversations.filter((record) => record.source === "tray_panel").length;
+  const voiceConversationCount = conversations.filter((record) => record.input_mode === "voice").length;
+  const textConversationCount = conversations.filter((record) => record.input_mode === "text").length;
+
+  useEffect(() => {
+    if (conversationTaskFilter !== "all" && !conversationTaskOptions.some((option) => option.task_id === conversationTaskFilter)) {
+      setConversationTaskFilter("all");
+    }
+  }, [conversationTaskFilter, conversationTaskOptions]);
 
   return (
     <Tabs className="mirror-page__detail-tabs" defaultValue={conversations.length > 0 ? "conversation" : "summary"}>
@@ -127,32 +143,116 @@ function MirrorHistoryDetail({
       </TabsContent>
 
       <TabsContent className="mirror-page__detail-tab-panel" value="conversation">
-        <div className="mirror-page__conversation-filter-bar">
-          <button
-            type="button"
-            className={`mirror-page__conversation-filter${conversationFilter === "all" ? " is-active" : ""}`}
-            onClick={() => setConversationFilter("all")}
-          >
-            全部 {conversations.length}
-          </button>
-          <button
-            type="button"
-            className={`mirror-page__conversation-filter${conversationFilter === "with_task" ? " is-active" : ""}`}
-            onClick={() => setConversationFilter("with_task")}
-          >
-            已挂任务 {taskLinkedConversationCount}
-          </button>
-          <button
-            type="button"
-            className={`mirror-page__conversation-filter${conversationFilter === "failed" ? " is-active" : ""}`}
-            onClick={() => setConversationFilter("failed")}
-          >
-            失败记录 {failedConversationCount}
-          </button>
+        <div className="mirror-page__conversation-filter-shell">
+          <div className="mirror-page__profile-local-note">
+            <BrainCircuit className="mirror-page__profile-icon" />
+            <p className="mirror-page__summary-copy">这一栏只统计最近 100 条本地输入与前端可见回应，用来按时间和 task 回看，不等于后端历史概要真源。</p>
+          </div>
+
+          <div className="mirror-page__conversation-filter-bar">
+            <button
+              type="button"
+              className={`mirror-page__conversation-filter${conversationScopeFilter === "all" ? " is-active" : ""}`}
+              onClick={() => setConversationScopeFilter("all")}
+            >
+              全部 {conversations.length}
+            </button>
+            <button
+              type="button"
+              className={`mirror-page__conversation-filter${conversationScopeFilter === "with_task" ? " is-active" : ""}`}
+              onClick={() => setConversationScopeFilter("with_task")}
+            >
+              已挂任务 {taskLinkedConversationCount}
+            </button>
+            <button
+              type="button"
+              className={`mirror-page__conversation-filter${conversationScopeFilter === "failed" ? " is-active" : ""}`}
+              onClick={() => setConversationScopeFilter("failed")}
+            >
+              失败记录 {failedConversationCount}
+            </button>
+          </div>
+
+          <div className="mirror-page__conversation-filter-bar">
+            <button
+              type="button"
+              className={`mirror-page__conversation-filter${conversationSourceFilter === "all" ? " is-active" : ""}`}
+              onClick={() => setConversationSourceFilter("all")}
+            >
+              全部入口
+            </button>
+            <button
+              type="button"
+              className={`mirror-page__conversation-filter${conversationSourceFilter === "dashboard" ? " is-active" : ""}`}
+              onClick={() => setConversationSourceFilter("dashboard")}
+            >
+              仪表盘 {dashboardConversationCount}
+            </button>
+            <button
+              type="button"
+              className={`mirror-page__conversation-filter${conversationSourceFilter === "floating_ball" ? " is-active" : ""}`}
+              onClick={() => setConversationSourceFilter("floating_ball")}
+            >
+              悬浮球 {floatingBallConversationCount}
+            </button>
+            <button
+              type="button"
+              className={`mirror-page__conversation-filter${conversationSourceFilter === "tray_panel" ? " is-active" : ""}`}
+              onClick={() => setConversationSourceFilter("tray_panel")}
+            >
+              托盘面板 {trayPanelConversationCount}
+            </button>
+          </div>
+
+          <div className="mirror-page__conversation-filter-bar">
+            <button
+              type="button"
+              className={`mirror-page__conversation-filter${conversationInputModeFilter === "all" ? " is-active" : ""}`}
+              onClick={() => setConversationInputModeFilter("all")}
+            >
+              全部输入
+            </button>
+            <button
+              type="button"
+              className={`mirror-page__conversation-filter${conversationInputModeFilter === "voice" ? " is-active" : ""}`}
+              onClick={() => setConversationInputModeFilter("voice")}
+            >
+              语音 {voiceConversationCount}
+            </button>
+            <button
+              type="button"
+              className={`mirror-page__conversation-filter${conversationInputModeFilter === "text" ? " is-active" : ""}`}
+              onClick={() => setConversationInputModeFilter("text")}
+            >
+              文本 {textConversationCount}
+            </button>
+          </div>
+
+          {conversationTaskOptions.length > 0 ? (
+            <div className="mirror-page__conversation-filter-bar">
+              <button
+                type="button"
+                className={`mirror-page__conversation-filter${conversationTaskFilter === "all" ? " is-active" : ""}`}
+                onClick={() => setConversationTaskFilter("all")}
+              >
+                全部 task
+              </button>
+              {conversationTaskOptions.map((option) => (
+                <button
+                  key={option.task_id}
+                  type="button"
+                  className={`mirror-page__conversation-filter${conversationTaskFilter === option.task_id ? " is-active" : ""}`}
+                  onClick={() => setConversationTaskFilter(option.task_id)}
+                >
+                  {option.task_id} · {option.count}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         {groupedConversations.length === 0 ? (
-          <MirrorEmptyState>{conversationFilter === "all" ? "最近 100 条本地对话还没有记录。" : "当前筛选条件下没有命中的本地记录。"}</MirrorEmptyState>
+          <MirrorEmptyState>{conversationScopeFilter === "all" ? "最近 100 条本地对话还没有记录。" : "当前筛选条件下没有命中的本地记录。"}</MirrorEmptyState>
         ) : (
           <ScrollArea className="mirror-page__conversation-scroll" data-testid="mirror-conversation-list">
             <div className="mirror-page__conversation-days">
@@ -395,7 +495,18 @@ function MirrorMemoryDetail({
   onOpenTaskDetail: (taskId: string) => void;
 }) {
   const conversationSummary = buildMirrorConversationSummary(conversations);
-  const latestTaskLinkedConversation = conversations.find((record) => record.task_id) ?? null;
+  const recentTaskLinkedConversations = useMemo(() => {
+    const seenTaskIds = new Set<string>();
+
+    return conversations.filter((record) => {
+      if (!record.task_id || seenTaskIds.has(record.task_id)) {
+        return false;
+      }
+
+      seenTaskIds.add(record.task_id);
+      return true;
+    });
+  }, [conversations]);
   const highlightedMemoryId = useMemo(() => {
     if (focusMemoryId && overview.memory_references.some((reference) => reference.memory_id === focusMemoryId)) {
       return focusMemoryId;
@@ -420,6 +531,11 @@ function MirrorMemoryDetail({
           <MirrorEmptyState>暂无近期记忆引用。</MirrorEmptyState>
         ) : (
           <div className="mirror-page__memory-list mirror-page__memory-list--expanded">
+            <div className="mirror-page__profile-local-note">
+              <BookMarked className="mirror-page__memory-icon" />
+              <p className="mirror-page__summary-copy">当前协议只返回 `memory_id / reason / summary`，还没有时间、来源 task 或命中场景明细，所以这里不会伪造引用来源。</p>
+            </div>
+
             {overview.memory_references.map((reference, index) => (
               <article key={reference.memory_id} className={`mirror-page__memory-card${reference.memory_id === highlightedMemoryId ? " is-active" : ""}`}>
                 <div className="mirror-page__memory-header">
@@ -478,20 +594,22 @@ function MirrorMemoryDetail({
             <p className="mirror-page__summary-copy">{rpcContext.warnings.length > 0 ? rpcContext.warnings.join("；") : "当前没有额外 RPC warnings。"}</p>
           </article>
 
-          {latestTaskLinkedConversation?.task_id ? (
+          {recentTaskLinkedConversations.length > 0 ? (
             <article className="mirror-page__risk-card">
               <div className="mirror-page__stage-card-top">
                 <div>
-                  <p className="mirror-page__micro-label">最近可回跳任务</p>
-                  <p className="mirror-page__stage-headline">{latestTaskLinkedConversation.task_id}</p>
+                  <p className="mirror-page__micro-label">近期可回跳任务</p>
+                  <p className="mirror-page__stage-headline">{recentTaskLinkedConversations.length} 条 task 入口</p>
                 </div>
                 <StatusBadge tone="processing">task</StatusBadge>
               </div>
-              <p className="mirror-page__summary-copy">镜子里的本地连续记录会优先回跳到相关任务详情，而不是在镜子页内继续堆叠过程。</p>
+              <p className="mirror-page__summary-copy">这些 task 来自本地连续记录，可用于回跳任务详情；它们不代表后端记忆引用的正式来源字段。</p>
               <div className="mirror-page__conversation-actions">
-                <button type="button" className="mirror-page__task-link" onClick={() => onOpenTaskDetail(latestTaskLinkedConversation.task_id!)}>
-                  查看关联任务
-                </button>
+                {recentTaskLinkedConversations.map((record) => (
+                  <button key={record.task_id} type="button" className="mirror-page__task-link" onClick={() => onOpenTaskDetail(record.task_id!)}>
+                    {record.task_id}
+                  </button>
+                ))}
               </div>
             </article>
           ) : null}
