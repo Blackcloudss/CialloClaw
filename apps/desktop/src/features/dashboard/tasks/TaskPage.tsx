@@ -143,26 +143,21 @@ export function TaskPage() {
       return;
     }
 
-<<<<<<< dashboard/tasks
-    return subscribeTask(selectedTaskId, () => {
+    const clearDeliverySubscription = subscribeDeliveryReady((payload) => {
       for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
         void queryClient.invalidateQueries({ queryKey });
       }
-    });
-  }, [dataMode, queryClient, securityRefreshPlan, selectedTaskId]);
-=======
-    const clearDeliverySubscription = subscribeDeliveryReady((payload) => {
-      void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "bucket", dataMode] });
 
-      if (payload.task_id === selectedTaskId) {
-        void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "detail", dataMode, selectedTaskId] });
+      if (selectedTaskId && payload.task_id === selectedTaskId) {
+        void queryClient.invalidateQueries({ queryKey: buildDashboardTaskDetailQueryKey(dataMode, selectedTaskId) });
       }
     });
 
     const clearTaskSubscription = selectedTaskId
       ? subscribeTask(selectedTaskId, () => {
-          void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "bucket", dataMode] });
-          void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "detail", dataMode, selectedTaskId] });
+          for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
+            void queryClient.invalidateQueries({ queryKey });
+          }
         })
       : () => {};
 
@@ -170,8 +165,7 @@ export function TaskPage() {
       clearDeliverySubscription();
       clearTaskSubscription();
     };
-  }, [dataMode, queryClient, selectedTaskId]);
->>>>>>> main
+  }, [dataMode, queryClient, securityRefreshPlan, selectedTaskId]);
 
   useEffect(() => {
     return () => {
@@ -230,12 +224,8 @@ export function TaskPage() {
     navigate(resolveDashboardRoutePath("safety"), { state: buildDashboardSafetyNavigationState(resolvedDetailData.detail) });
   }
 
-  function handlePrimaryAction(action: "pause" | "resume" | "cancel" | "restart" | "edit" | "open-safety") {
+  function handlePrimaryAction(action: "pause" | "resume" | "cancel" | "restart" | "open-safety") {
     if (!detailData) {
-      return;
-    }
-
-    if (action === "edit") {
       return;
     }
 

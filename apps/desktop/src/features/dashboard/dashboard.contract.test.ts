@@ -89,6 +89,10 @@ function withDesktopAliasRuntime<T>(callback: (requireFn: NodeRequire) => T): T 
   const protocolRoot = resolve(desktopRoot, "..", "..", "packages", "protocol");
 
   NodeModule._resolveFilename = function resolveDesktopAlias(request: string, parent: unknown, isMain: boolean, options?: unknown) {
+    if (request === "@/rpc/fallback") {
+      return resolve(desktopRoot, ".cache/dashboard-tests/features/shell-ball/test-stubs/rpcFallback.js");
+    }
+
     if (request.startsWith("@/")) {
       const modulePath = request.slice(2);
       const emittedBasePath = resolve(desktopRoot, ".cache/dashboard-tests", modulePath);
@@ -465,11 +469,14 @@ test("task page query helpers expose stable prefixes and keys", () => {
   });
 });
 
-test("task page edit CTA copy sends users back to the shell-ball", () => {
+test("task page no longer exposes edit guidance and uses 安全总览 without anchors", () => {
   const mapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mapper.ts"), "utf8");
+  const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
 
-  assert.match(mapperSource, /label: "去悬浮球继续"/);
-  assert.match(mapperSource, /tooltip: "如需修改这条任务，请回到悬浮球继续补充或修正。"/);
+  assert.doesNotMatch(mapperSource, /action: "edit"/);
+  assert.doesNotMatch(mapperSource, /去悬浮球继续/);
+  assert.match(mapperSource, /label: hasAnchor \? "安全详情" : "安全总览"/);
+  assert.doesNotMatch(taskPageSource, /action === "edit"/);
 });
 
 test("SecurityApp route resolution reacts to each new route state and exposes task refresh targets", () => {
