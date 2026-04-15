@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentMirrorOverviewGetResult } from "@cialloclaw/protocol";
 import { BookMarked, BrainCircuit, CalendarDays } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { StatusBadge } from "@cialloclaw/ui";
-import { Button } from "@radix-ui/themes";
+import { Button, SegmentedControl, Switch } from "@radix-ui/themes";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
+import type { DashboardSettingsPatch } from "@/features/dashboard/shared/dashboardSettingsMutation";
 import {
   formatDashboardMemoryLifecycle,
   formatDashboardTimeInterval,
@@ -47,6 +48,7 @@ import {
 type MirrorDetailContentProps = {
   activeDetailKey: MirrorDirectionKey;
   overview: AgentMirrorOverviewGetResult;
+  onUpdateSettings: (subject: string, patch: DashboardSettingsPatch) => Promise<string>;
   settingsSnapshot: DashboardSettingsSnapshotData;
   rpcContext: {
     serverTime: string | null;
@@ -626,6 +628,7 @@ function MirrorProfileDetail({
 
 function MirrorMemoryDetail({
   overview,
+  onUpdateSettings,
   settingsSnapshot,
   rpcContext,
   conversations,
@@ -635,7 +638,7 @@ function MirrorMemoryDetail({
   onHideReference,
   onRestoreReference,
   onOpenTaskDetail,
-}: Pick<MirrorDetailContentProps, "overview" | "settingsSnapshot" | "rpcContext" | "conversations" | "focusMemoryId"> & {
+}: Pick<MirrorDetailContentProps, "overview" | "onUpdateSettings" | "settingsSnapshot" | "rpcContext" | "conversations" | "focusMemoryId"> & {
   visibleReferences: MirrorGovernedMemoryReference[];
   hiddenReferences: MirrorGovernedMemoryReference[];
   onHideReference: (memoryId: string) => void;
@@ -644,6 +647,8 @@ function MirrorMemoryDetail({
 }) {
   const conversationSummary = buildMirrorConversationSummary(conversations);
   const memorySettings = settingsSnapshot.settings.memory;
+  const [settingsActionKey, setSettingsActionKey] = useState<string | null>(null);
+  const [settingsFeedback, setSettingsFeedback] = useState<string | null>(null);
   // Current mirror references do not carry task identifiers, so local conversation
   // history is the only honest source for task back-links inside this detail view.
   const recentTaskLinkedConversations = useMemo(() => {
@@ -666,6 +671,23 @@ function MirrorMemoryDetail({
     return visibleReferences[0]?.memory_id ?? hiddenReferences[0]?.memory_id ?? null;
   }, [focusMemoryId, hiddenReferences, overview.memory_references, visibleReferences]);
   const defaultTab = visibleReferences.length > 0 ? "references" : "policy";
+  const runSettingsUpdate = useCallback(
+    async (actionKey: string, subject: string, patch: DashboardSettingsPatch) => {
+      // Only stable settings keys are written through here; planned memory
+      // governance actions still stay in local drafts until the RPC is formalized.
+      setSettingsActionKey(actionKey);
+
+      try {
+        const nextFeedback = await onUpdateSettings(subject, patch);
+        setSettingsFeedback(nextFeedback);
+      } catch (error) {
+        setSettingsFeedback(error instanceof Error ? error.message : "镜子设置更新失败。");
+      } finally {
+        setSettingsActionKey(null);
+      }
+    },
+    [onUpdateSettings],
+  );
 
   return (
     <Tabs className="mirror-page__detail-tabs" defaultValue={defaultTab}>
@@ -794,9 +816,10 @@ function MirrorMemoryDetail({
         <div className="mirror-page__profile-local-note">
           <BookMarked className="mirror-page__memory-icon" />
           <p className="mirror-page__summary-copy">
-            这里展示 `agent.settings.get` 或本地设置回退快照中的镜子记忆策略，只用于可视化，不会在镜子页直接修改正式设置。
+            这里展示 `agent.settings.get` 或本地设置回退快照中的镜子记忆策略；已登记到真源的开关会直接写回 `agent.settings.update`，planned 的记忆治理动作仍只保留本地草稿。
           </p>
         </div>
+        {settingsFeedback ? <div className="mirror-page__profile-local-note mirror-page__settings-feedback">{settingsFeedback}</div> : null}
 
         <div className="mirror-page__risk-list">
           <article className="mirror-page__risk-card">
@@ -808,6 +831,20 @@ function MirrorMemoryDetail({
               <StatusBadge tone={memorySettings.enabled ? "green" : "yellow"}>{memorySettings.enabled ? "enabled" : "disabled"}</StatusBadge>
             </div>
             <p className="mirror-page__summary-copy">当前卡片只负责说明 `settings.memory.enabled` 的状态，用来解释镜子是否应继续沉淀长期记忆。</p>
+            <div className="mirror-page__settings-controls">
+              <Switch
+                checked={memorySettings.enabled}
+                disabled={settingsActionKey !== null}
+                onCheckedChange={(checked) => {
+                  void runSettingsUpdate("memory-enabled", "记忆开关", {
+                    memory: {
+                      enabled: checked,
+                    },
+                  });
+                }}
+              />
+              <span className="mirror-page__summary-copy">{settingsActionKey === "memory-enabled" ? "正在写入 settings.update…" : "直接写入记忆启停设置。"}</span>
+            </div>
           </article>
 
           <article className="mirror-page__risk-card">
@@ -819,6 +856,29 @@ function MirrorMemoryDetail({
               <StatusBadge tone="processing">lifecycle</StatusBadge>
             </div>
             <p className="mirror-page__summary-copy">这里直接读取 `settings.memory.lifecycle`，用于说明镜子记忆当前按什么周期保留。</p>
+            <div className="mirror-page__settings-controls">
+              <SegmentedControl.Root
+                className="mirror-page__settings-segmented"
+                value={memorySettings.lifecycle}
+                onValueChange={(value) => {
+                  if (!value || value === memorySettings.lifecycle) {
+                    return;
+                  }
+
+                  void runSettingsUpdate("memory-lifecycle", "记忆生命周期", {
+                    memory: {
+                      lifecycle: value,
+                    },
+                  });
+                }}
+                disabled={settingsActionKey !== null}
+              >
+                <SegmentedControl.Item value="session">仅本轮</SegmentedControl.Item>
+                <SegmentedControl.Item value="7d">7 天</SegmentedControl.Item>
+                <SegmentedControl.Item value="30d">30 天</SegmentedControl.Item>
+                <SegmentedControl.Item value="long_term">长期</SegmentedControl.Item>
+              </SegmentedControl.Root>
+            </div>
           </article>
 
           <article className="mirror-page__risk-card">
@@ -1056,6 +1116,7 @@ export function MirrorDetailContent(props: MirrorDetailContentProps) {
       hiddenReferences={governedMemoryReferences.hidden_references}
       onHideReference={hideMemoryReference}
       onOpenTaskDetail={openTaskDetail}
+      onUpdateSettings={props.onUpdateSettings}
       onRestoreReference={restoreMemoryReference}
       overview={props.overview}
       rpcContext={props.rpcContext}

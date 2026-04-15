@@ -556,6 +556,13 @@
   padding-left: 1rem;
 }
 
+.security-page__detail-setting-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
 .security-page__detail-callout {
   background: rgba(255, 247, 232, 0.72);
   border-radius: var(--security-radius-sm);

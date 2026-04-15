@@ -89,8 +89,53 @@ function loadTaskPageMapperModule() {
 function loadSettingsServiceModule() {
   return withDesktopAliasRuntime((requireFn) =>
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js")) as {
-      loadSettings: () => { settings: { data_log: { provider_api_key_configured: boolean } } };
+      loadSettings: () => {
+        settings: {
+          data_log: {
+            budget_auto_downgrade: boolean;
+            provider_api_key_configured: boolean;
+          };
+          general: {
+            download: {
+              ask_before_save_each_file: boolean;
+            };
+          };
+          memory: {
+            enabled: boolean;
+            lifecycle: string;
+          };
+        };
+      };
       saveSettings: (settings: unknown) => void;
+    },
+  );
+}
+
+function loadDashboardSettingsMutationModule() {
+  return withDesktopAliasRuntime((requireFn) =>
+    requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsMutation.js")) as {
+      updateDashboardSettings: (patch: Record<string, unknown>, source?: "rpc" | "mock") => Promise<{
+        applyMode: string;
+        needRestart: boolean;
+        source: string;
+        updatedKeys: string[];
+        snapshot: {
+          settings: {
+            data_log: {
+              budget_auto_downgrade: boolean;
+            };
+            general: {
+              download: {
+                ask_before_save_each_file: boolean;
+              };
+            };
+            memory: {
+              enabled: boolean;
+              lifecycle: string;
+            };
+          };
+        };
+      }>;
     },
   );
 }
@@ -628,6 +673,72 @@ test("settings service normalizes legacy stored snapshots before returning and s
     saveSettings(loaded as never);
 
     assert.equal(JSON.parse(localStorage.getItem("cialloclaw.settings") ?? "{}").settings.data_log.provider_api_key_configured, false);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("dashboard settings mutation updates the local snapshot in mock mode", async () => {
+  const { loadSettings } = loadSettingsServiceModule();
+  const { updateDashboardSettings } = loadDashboardSettingsMutationModule();
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    const result = await updateDashboardSettings(
+      {
+        data_log: {
+          budget_auto_downgrade: false,
+        },
+        general: {
+          download: {
+            ask_before_save_each_file: false,
+          },
+        },
+        memory: {
+          enabled: false,
+          lifecycle: "session",
+        },
+      },
+      "mock",
+    );
+
+    assert.equal(result.source, "mock");
+    assert.equal(result.applyMode, "immediate");
+    assert.equal(result.needRestart, false);
+    assert.deepEqual(result.updatedKeys.sort(), ["data_log", "general", "memory"]);
+    assert.equal(result.snapshot.settings.memory.enabled, false);
+    assert.equal(result.snapshot.settings.memory.lifecycle, "session");
+    assert.equal(result.snapshot.settings.general.download.ask_before_save_each_file, false);
+    assert.equal(result.snapshot.settings.data_log.budget_auto_downgrade, false);
+
+    const persisted = loadSettings();
+
+    assert.equal(persisted.settings.memory.enabled, false);
+    assert.equal(persisted.settings.memory.lifecycle, "session");
+    assert.equal(persisted.settings.general.download.ask_before_save_each_file, false);
+    assert.equal(persisted.settings.data_log.budget_auto_downgrade, false);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");

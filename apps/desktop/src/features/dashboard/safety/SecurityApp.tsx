@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from "react";
-import { Badge, Box, Button, Flex, Heading, Text } from "@radix-ui/themes";
+import { Badge, Box, Button, Flex, Heading, Switch, Text } from "@radix-ui/themes";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
@@ -46,6 +46,11 @@ import {
   getInitialDashboardSettingsSnapshot,
   loadDashboardSettingsSnapshot,
 } from "@/features/dashboard/shared/dashboardSettingsSnapshot";
+import {
+  formatDashboardSettingsMutationFeedback,
+  updateDashboardSettings,
+  type DashboardSettingsPatch,
+} from "@/features/dashboard/shared/dashboardSettingsMutation";
 import {
   getInitialSecurityModuleData,
   loadSecurityPendingApprovals,
@@ -641,6 +646,7 @@ export function SecurityApp() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeApprovalId, setActiveApprovalId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [settingsActionKey, setSettingsActionKey] = useState<string | null>(null);
   const [approvalSnapshot, setApprovalSnapshot] = useState<ApprovalRequest | null>(null);
   const [restorePointSnapshot, setRestorePointSnapshot] = useState<RecoveryPoint | null>(null);
   const [routeDrivenDetailKey, setRouteDrivenDetailKey] = useState<SecurityCardKey | null>(null);
@@ -785,6 +791,29 @@ export function SecurityApp() {
   useEffect(() => {
     saveDashboardDataMode("safety", dataMode);
   }, [dataMode]);
+
+  const handleSettingsUpdate = useCallback(
+    async (actionKey: string, subject: string, patch: DashboardSettingsPatch) => {
+      // Safety detail controls only write through stable settings keys and then
+      // reload the board so summary cards stay aligned with the latest snapshot.
+      setSettingsActionKey(actionKey);
+
+      try {
+        const result = await updateDashboardSettings(patch, dataMode);
+        const nextModuleData = await loadSecurityModuleData(dataMode);
+
+        setSettingsSnapshot(result.snapshot);
+        setModuleData(nextModuleData);
+        setLoadError(null);
+        setFeedback(formatDashboardSettingsMutationFeedback(result, subject));
+      } catch (error) {
+        setFeedback(error instanceof Error ? error.message : `${subject}更新失败。`);
+      } finally {
+        setSettingsActionKey(null);
+      }
+    },
+    [dataMode],
+  );
 
   useEffect(() => {
     // The safety board needs a stable settings snapshot even before the detailed
@@ -1702,6 +1731,7 @@ export function SecurityApp() {
 
   const renderBudgetDetail = () => {
     const tokenCost = moduleData.summary.token_cost_summary;
+    const budgetAutoDowngradeEnabled = settingsSnapshot.settings.data_log.budget_auto_downgrade;
 
     return (
       <div className="security-page__detail-stack">
@@ -1724,7 +1754,28 @@ export function SecurityApp() {
           <article className="security-page__detail-card">
             <p className="security-page__detail-label">当日上限</p>
             <p className="security-page__detail-value">{formatTokenCount(tokenCost.daily_limit)} tokens</p>
-            <p className="security-page__detail-copy">自动降级：{tokenCost.budget_auto_downgrade ? "开启" : "关闭"}</p>
+            <p className="security-page__detail-copy">自动降级：{budgetAutoDowngradeEnabled ? "开启" : "关闭"}</p>
+          </article>
+          <article className="security-page__detail-card">
+            <p className="security-page__detail-label">预算自动降级</p>
+            <p className="security-page__detail-value">{formatBooleanLabel(budgetAutoDowngradeEnabled)}</p>
+            <p className="security-page__detail-copy">该开关写回 `settings.data_log.budget_auto_downgrade`，用于承接正式预算熔断策略。</p>
+            <div className="security-page__detail-setting-row">
+              <Switch
+                checked={budgetAutoDowngradeEnabled}
+                disabled={settingsActionKey !== null}
+                onCheckedChange={(checked) => {
+                  void handleSettingsUpdate("budget-auto-downgrade", "预算自动降级", {
+                    data_log: {
+                      budget_auto_downgrade: checked,
+                    },
+                  });
+                }}
+              />
+              <span className="security-page__detail-copy">
+                {settingsActionKey === "budget-auto-downgrade" ? "正在写入 settings.update…" : "直接更新预算降级策略。"}
+              </span>
+            </div>
           </article>
         </div>
       </div>
@@ -1768,6 +1819,25 @@ export function SecurityApp() {
             <p className="security-page__detail-label">逐文件保存确认</p>
             <p className="security-page__detail-value">{formatBooleanLabel(downloadSettings.ask_before_save_each_file)}</p>
             <p className="security-page__detail-copy">该开关来自 `settings.general.download.ask_before_save_each_file`，用于说明保存文件前是否逐个确认。</p>
+            <div className="security-page__detail-setting-row">
+              <Switch
+                checked={downloadSettings.ask_before_save_each_file}
+                disabled={settingsActionKey !== null}
+                onCheckedChange={(checked) => {
+                  void handleSettingsUpdate("download-ask-before-save", "逐文件保存确认", {
+                    general: {
+                      download: {
+                        workspace_path: downloadSettings.workspace_path,
+                        ask_before_save_each_file: checked,
+                      },
+                    },
+                  });
+                }}
+              />
+              <span className="security-page__detail-copy">
+                {settingsActionKey === "download-ask-before-save" ? "正在写入 settings.update…" : "直接更新保存前逐文件确认设置。"}
+              </span>
+            </div>
           </article>
           <article className="security-page__detail-card">
             <p className="security-page__detail-label">数据日志提供商</p>

@@ -14,6 +14,11 @@ import { PanelSurface, StatusBadge } from "@cialloclaw/ui";
 import { subscribeMirrorOverviewUpdated } from "@/rpc/subscriptions";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
+import {
+  formatDashboardSettingsMutationFeedback,
+  updateDashboardSettings,
+  type DashboardSettingsPatch,
+} from "@/features/dashboard/shared/dashboardSettingsMutation";
 import { loadMirrorOverviewData, type MirrorOverviewData, type MirrorOverviewSource } from "./mirrorService";
 import { MirrorDetailContent } from "./MirrorDetailContent";
 import { loadMirrorFloatingPositions, saveMirrorFloatingPositions } from "./mirrorLayoutStorage";
@@ -825,6 +830,20 @@ export function MirrorApp() {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [activeDetailKey, closeDetail]);
+  const handleSettingsUpdate = useCallback(
+    async (subject: string, patch: DashboardSettingsPatch) => {
+      const result = await updateDashboardSettings(patch, dataMode);
+      const nextData = await loadMirrorOverviewData(dataMode);
+
+      if (isMountedRef.current) {
+        setLoadError(null);
+        setMirrorData(nextData);
+      }
+
+      return formatDashboardSettingsMutationFeedback(result, subject);
+    },
+    [dataMode],
+  );
 
   if (!mirrorData) {
     return (
@@ -1033,6 +1052,7 @@ export function MirrorApp() {
                 dailyDigest={mirrorData.dailyDigest}
                 focusMemoryId={focusedMemoryId}
                 overview={overview}
+                onUpdateSettings={handleSettingsUpdate}
                 profileView={profileView}
                 rpcContext={mirrorData.rpcContext}
                 settingsSnapshot={mirrorData.settingsSnapshot}
