@@ -164,7 +164,7 @@ export function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): Age
 
 export function buildFallbackTaskDetailData(item: TaskListItem): TaskDetailData {
   return {
-    artifactWarningMessage: null,
+    detailWarningMessage: null,
     detail: createFallbackTaskDetail(item.task),
     experience: item.experience,
     source: "fallback",
@@ -172,28 +172,62 @@ export function buildFallbackTaskDetailData(item: TaskListItem): TaskDetailData 
   };
 }
 
-function recoverTaskDetailFromInvalidArtifacts(detail: AgentTaskDetailGetResult, error: unknown) {
-  if (!(error instanceof Error) || !/artifacts/i.test(error.message)) {
+function recoverTaskDetailFromInvalidCollections(detail: AgentTaskDetailGetResult, error: unknown) {
+  if (!(error instanceof Error)) {
     throw error;
   }
 
-  return {
-    artifactWarningMessage: "任务成果信息暂时无法完整展示，已先隐藏格式不符合要求的产物。",
-    detail: normalizeTaskDetailResult({
-      ...detail,
-      artifacts: [],
-    }),
-  };
+  const warnings: string[] = [];
+  let candidate = detail;
+  let currentError: unknown = error;
+
+  for (;;) {
+    if (!(currentError instanceof Error)) {
+      throw currentError;
+    }
+
+    if (/artifacts/i.test(currentError.message)) {
+      warnings.push("任务成果信息暂时无法完整展示，已先隐藏格式不符合要求的产物。");
+      candidate = {
+        ...candidate,
+        artifacts: [],
+      };
+    } else if (/mirror/i.test(currentError.message)) {
+      warnings.push("镜子命中信息暂时无法完整展示，已先隐藏格式不符合要求的上下文引用。");
+      candidate = {
+        ...candidate,
+        mirror_references: [],
+      };
+    } else {
+      throw currentError;
+    }
+
+    try {
+      return {
+        detail: normalizeTaskDetailResult(candidate),
+        detailWarningMessage: warnings.join(" "),
+      };
+    } catch (nextError) {
+      if (
+        nextError instanceof Error &&
+        ((/artifacts/i.test(nextError.message) && candidate.artifacts.length === 0) || (/mirror/i.test(nextError.message) && candidate.mirror_references.length === 0))
+      ) {
+        throw nextError;
+      }
+
+      currentError = nextError;
+    }
+  }
 }
 
 export function normalizeTaskDetailData(detail: AgentTaskDetailGetResult) {
   try {
     return {
-      artifactWarningMessage: null,
+      detailWarningMessage: null,
       detail: normalizeTaskDetailResult(detail),
     };
   } catch (error) {
-    return recoverTaskDetailFromInvalidArtifacts(detail, error);
+    return recoverTaskDetailFromInvalidCollections(detail, error);
   }
 }
 
@@ -282,7 +316,7 @@ export async function loadTaskDetailData(taskId: string, source: TaskPageDataMod
     );
 
     return {
-      artifactWarningMessage: normalized.artifactWarningMessage,
+      detailWarningMessage: normalized.detailWarningMessage,
       detail: normalized.detail,
       experience: getTaskExperience(taskId) ?? createFallbackExperience(normalized.detail.task),
       source: "rpc",

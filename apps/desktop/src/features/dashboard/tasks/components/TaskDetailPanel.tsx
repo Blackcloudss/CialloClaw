@@ -16,7 +16,7 @@ type TaskDetailPanelProps = {
   artifactErrorMessage: string | null;
   artifactItems: TaskDetailData["detail"]["artifacts"];
   artifactLoading: boolean;
-  artifactWarningMessage: string | null;
+  detailWarningMessage: string | null;
   detailData: TaskDetailData;
   detailErrorMessage: string | null;
   detailState: "loading" | "error" | "ready";
@@ -34,7 +34,7 @@ export function TaskDetailPanel({
   artifactErrorMessage,
   artifactItems,
   artifactLoading,
-  artifactWarningMessage,
+  detailWarningMessage,
   detailData,
   detailErrorMessage,
   detailState,
@@ -125,6 +125,16 @@ export function TaskDetailPanel({
             </section>
           ) : null}
 
+          {detailWarningMessage ? (
+            <section className="task-detail-card task-detail-card--notice">
+              <div className="task-detail-card__header">
+                <p className="task-detail-card__eyebrow">详情提示</p>
+                <h3 className="task-detail-card__title">部分信息已降级展示</h3>
+              </div>
+              <p className="task-detail-ended-copy">{detailWarningMessage}</p>
+            </section>
+          ) : null}
+
           {!ended ? (
             <>
               {waitingCopy ? (
@@ -182,7 +192,6 @@ export function TaskDetailPanel({
                   </button>
                 </div>
                 <div className="task-detail-output-list">
-                  {artifactWarningMessage ? <p className="task-detail-card__hint">{artifactWarningMessage}</p> : null}
                   {artifactErrorMessage ? <p className="task-detail-card__hint">{artifactErrorMessage}</p> : null}
                   {artifactLoading && artifactItems.length === 0 ? <p className="task-detail-card__empty">正在同步成果列表...</p> : null}
                   {artifactItems.length > 0 ? (
@@ -290,7 +299,6 @@ export function TaskDetailPanel({
                   </button>
                 </div>
                 <div className="task-detail-output-list">
-                  {artifactWarningMessage ? <p className="task-detail-card__hint">{artifactWarningMessage}</p> : null}
                   {artifactErrorMessage ? <p className="task-detail-card__hint">{artifactErrorMessage}</p> : null}
                   {artifactLoading && artifactItems.length === 0 ? <p className="task-detail-card__empty">正在同步成果列表...</p> : null}
                   {artifactItems.length > 0 ? (

@@ -486,7 +486,7 @@ export function TaskPage() {
                 artifactItems={artifactListQuery.data?.items ?? detailData?.detail.artifacts ?? []}
                 artifactLoading={artifactListQuery.isPending}
                 detailData={detailData}
-                artifactWarningMessage={detailData.artifactWarningMessage ?? null}
+                detailWarningMessage={detailData.detailWarningMessage ?? null}
                 detailErrorMessage={detailErrorMessage}
                 detailState={detailState}
                 deliveryActionPending={deliveryOpenMutation.isPending}

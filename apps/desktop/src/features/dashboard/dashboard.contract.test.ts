@@ -996,7 +996,7 @@ test("task detail normalization rejects string restore points in rpc mode and ke
 test("task detail normalization recovers invalid artifacts but still rejects broken mirrors and timeline steps", () => {
   withDesktopAliasRuntime((requireFn) => {
     const service = requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskPage.service.js")) as {
-      normalizeTaskDetailData: (detail: AgentTaskDetailGetResult) => { artifactWarningMessage: string | null; detail: AgentTaskDetailGetResult };
+      normalizeTaskDetailData: (detail: AgentTaskDetailGetResult) => { detailWarningMessage: string | null; detail: AgentTaskDetailGetResult };
       normalizeTaskDetailResult: (detail: AgentTaskDetailGetResult) => AgentTaskDetailGetResult;
     };
 
@@ -1040,17 +1040,16 @@ test("task detail normalization recovers invalid artifacts but still rejects bro
     );
 
     assert.equal(recovered.detail.artifacts.length, 0);
-    assert.match(recovered.artifactWarningMessage ?? "", /成果信息暂时无法完整展示/);
+    assert.match(recovered.detailWarningMessage ?? "", /成果信息暂时无法完整展示/);
 
-    assert.throws(
-      () =>
-        service.normalizeTaskDetailResult(
-          createDetail({
-            mirror_references: [{ memory_id: "memory_1" } as never],
-          }),
-        ),
-      /mirror/i,
+    const recoveredMirror = service.normalizeTaskDetailData(
+      createDetail({
+        mirror_references: [{ memory_id: "memory_1" } as never],
+      }),
     );
+
+    assert.equal(recoveredMirror.detail.mirror_references.length, 0);
+    assert.match(recoveredMirror.detailWarningMessage ?? "", /镜子命中信息暂时无法完整展示/);
 
     assert.throws(
       () =>

@@ -82,7 +82,7 @@ export type TaskBucketsData = {
 };
 
 export type TaskDetailData = {
-  artifactWarningMessage?: string | null;
+  detailWarningMessage?: string | null;
   task: Task;
   detail: AgentTaskDetailGetResult;
   experience: TaskExperience;
