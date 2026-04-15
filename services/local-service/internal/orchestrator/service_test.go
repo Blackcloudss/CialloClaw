@@ -3620,6 +3620,69 @@ func TestServiceTaskControlRejectsInvalidStatusTransition(t *testing.T) {
 	}
 }
 
+func TestSettingsGetIncludesSecretConfigurationAvailability(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings secret availability")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	result, err := service.SettingsGet(map[string]any{"scope": "all"})
+	if err != nil {
+		t.Fatalf("settings get failed: %v", err)
+	}
+	dataLog := result["settings"].(map[string]any)["data_log"].(map[string]any)
+	if dataLog["provider_api_key_configured"] != false {
+		t.Fatalf("expected unset provider key flag, got %+v", dataLog)
+	}
+	if err := service.storage.SecretStore().PutSecret(context.Background(), storage.SecretRecord{
+		Namespace: "model",
+		Key:       service.model.Provider() + "_api_key",
+		Value:     "secret-key",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed secret store failed: %v", err)
+	}
+	result, err = service.SettingsGet(map[string]any{"scope": "all"})
+	if err != nil {
+		t.Fatalf("settings get with secret failed: %v", err)
+	}
+	dataLog = result["settings"].(map[string]any)["data_log"].(map[string]any)
+	if dataLog["provider_api_key_configured"] != true {
+		t.Fatalf("expected configured provider key flag, got %+v", dataLog)
+	}
+}
+
+func TestSettingsUpdatePersistsSecretOutsideRegularSettings(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings secret persist")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	result, err := service.SettingsUpdate(map[string]any{
+		"data_log": map[string]any{
+			"provider":              "openai",
+			"budget_auto_downgrade": false,
+			"api_key":               "persisted-secret-key",
+		},
+	})
+	if err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+	stored, err := service.storage.SecretStore().GetSecret(context.Background(), "model", service.model.Provider()+"_api_key")
+	if err != nil {
+		t.Fatalf("expected stored secret, got %v", err)
+	}
+	if stored.Value != "persisted-secret-key" {
+		t.Fatalf("unexpected stored secret: %+v", stored)
+	}
+	effectiveSettings := result["effective_settings"].(map[string]any)
+	dataLog := effectiveSettings["data_log"].(map[string]any)
+	if _, exists := dataLog["api_key"]; exists {
+		t.Fatalf("expected api_key to stay out of regular settings path, got %+v", dataLog)
+	}
+	if dataLog["provider_api_key_configured"] != true {
+		t.Fatalf("expected configured flag in settings response, got %+v", dataLog)
+	}
+}
+
 func TestServiceTaskControlRequiresTaskID(t *testing.T) {
 	service := newTestService()
 

@@ -70,7 +70,8 @@ func New(cfg config.Config) (*App, error) {
 	)
 
 	modelService, err := model.NewServiceFromConfig(model.ServiceConfig{
-		ModelConfig: cfg.Model,
+		ModelConfig:  cfg.Model,
+		SecretSource: model.NewStaticSecretSource(storageService),
 	})
 	if err != nil {
 		_ = storageService.Close()

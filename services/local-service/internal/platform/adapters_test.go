@@ -134,3 +134,10 @@ func TestLocalOSCapabilityAdapterNamedPipeState(t *testing.T) {
 		t.Fatal("expected pipe to be removed")
 	}
 }
+
+func TestLocalStorageAdapterBuildsDedicatedStrongholdPath(t *testing.T) {
+	adapter := NewLocalStorageAdapter(filepath.Join("data", "cialloclaw.db"))
+	if adapter.SecretStorePath() != filepath.Join("data", "cialloclaw.stronghold.db") {
+		t.Fatalf("unexpected stronghold path: %q", adapter.SecretStorePath())
+	}
+}

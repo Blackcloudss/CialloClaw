@@ -1,12 +1,16 @@
 package bootstrap
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
 
 func TestNewWiresStorageBackedMemoryService(t *testing.T) {
@@ -22,12 +26,21 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 			Provider:            "openai_responses",
 			ModelID:             "gpt-5.4",
 			Endpoint:            "https://api.openai.com/v1/responses",
-			APIKey:              "test-key",
 			SingleTaskLimit:     10.0,
 			DailyLimit:          50.0,
 			BudgetAutoDowngrade: true,
 		},
 	}
+	seed := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
+	if err := seed.SecretStore().PutSecret(context.Background(), storage.SecretRecord{
+		Namespace: "model",
+		Key:       "openai_responses_api_key",
+		Value:     "test-key",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed secret store: %v", err)
+	}
+	_ = seed.Close()
 
 	app, err := New(cfg)
 	if err != nil {
@@ -53,6 +66,9 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	}
 	if !capabilities.SupportsArtifactStore {
 		t.Fatalf("expected artifact store capability to be exposed: %+v", capabilities)
+	}
+	if !capabilities.SupportsSecretStore {
+		t.Fatalf("expected secret store capability to be exposed: %+v", capabilities)
 	}
 	if capabilities.MemoryRetrievalBackend != "sqlite_fts5+sqlite_vec" {
 		t.Fatalf("expected retrieval backend to be aligned, got %+v", capabilities)
@@ -112,7 +128,7 @@ func TestNewFailsFastWhenModelServiceCannotBeConfigured(t *testing.T) {
 	}
 
 	_, err := New(cfg)
-	if !errors.Is(err, model.ErrOpenAIAPIKeyRequired) {
-		t.Fatalf("expected ErrOpenAIAPIKeyRequired, got %v", err)
+	if !errors.Is(err, model.ErrSecretSourceFailed) {
+		t.Fatalf("expected ErrSecretSourceFailed, got %v", err)
 	}
 }
