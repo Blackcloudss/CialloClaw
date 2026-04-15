@@ -1,14 +1,14 @@
-// 该文件封装前端设置读写服务。 
+// settingsService centralizes desktop settings persistence.
 import type { SettingsSnapshot } from "@cialloclaw/protocol";
 import { loadStoredValue, saveStoredValue } from "../platform/storage";
 
-// SETTINGS_KEY 定义共享常量。
+// SETTINGS_KEY is the single storage key for the desktop snapshot.
 const SETTINGS_KEY = "cialloclaw.settings";
 
-// DesktopSettings 定义当前模块的数据结构。
+// DesktopSettings keeps the local alias aligned with the protocol snapshot.
 export type DesktopSettings = SettingsSnapshot;
 
-// loadSettings 处理当前模块的相关逻辑。
+// loadSettings returns the stored snapshot or a complete default snapshot.
 export function loadSettings(): DesktopSettings {
   return (
     loadStoredValue<DesktopSettings>(SETTINGS_KEY) ?? {
@@ -56,13 +56,14 @@ export function loadSettings(): DesktopSettings {
         data_log: {
           provider: "openai",
           budget_auto_downgrade: true,
+          provider_api_key_configured: false,
         },
       },
     }
   );
 }
 
-// saveSettings 处理当前模块的相关逻辑。
+// saveSettings persists the latest desktop settings snapshot.
 export function saveSettings(settings: DesktopSettings) {
   saveStoredValue(SETTINGS_KEY, settings);
 }
