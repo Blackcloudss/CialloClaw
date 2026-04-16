@@ -1405,13 +1405,19 @@ func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 	case "page_read", "page_search", "page_interact", "structured_dom":
 		return stringValue(toolInput, "url", "")
 	default:
-		return stringValue(toolInput, "path", "")
+		for _, key := range governedTargetKeys(toolName) {
+			if value := stringValue(toolInput, key, ""); value != "" {
+				return value
+			}
+		}
+		return ""
 	}
 }
 
 func approvedTargetObject(intent map[string]any, workspacePath string) string {
+	intentName := stringValue(intent, "name", "")
 	arguments := mapValue(intent, "arguments")
-	for _, key := range []string{"target_path", "path", "working_dir"} {
+	for _, key := range approvedTargetKeys(intentName) {
 		if value := strings.TrimSpace(stringValue(arguments, key, "")); value != "" {
 			normalized := strings.ReplaceAll(value, "\\", "/")
 			if key != "working_dir" {
@@ -1426,13 +1432,35 @@ func approvedTargetObject(intent map[string]any, workspacePath string) string {
 			return normalized
 		}
 	}
-	if stringValue(intent, "name", "") == "exec_command" {
+	if intentName == "exec_command" {
 		return workspacePath
 	}
 	if url := strings.TrimSpace(stringValue(arguments, "url", "")); url != "" {
 		return url
 	}
 	return ""
+}
+
+func governedTargetKeys(toolName string) []string {
+	switch strings.TrimSpace(toolName) {
+	case "transcode_media", "normalize_recording":
+		return []string{"output_path", "path"}
+	case "extract_frames":
+		return []string{"output_dir", "path"}
+	default:
+		return []string{"path", "target_path", "file_path"}
+	}
+}
+
+func approvedTargetKeys(intentName string) []string {
+	switch strings.TrimSpace(intentName) {
+	case "transcode_media", "normalize_recording":
+		return []string{"output_path", "target_path", "path", "working_dir"}
+	case "extract_frames":
+		return []string{"output_dir", "target_path", "path", "working_dir"}
+	default:
+		return []string{"target_path", "path", "working_dir"}
+	}
 }
 
 func requireAuthorizationFlag(intent map[string]any) bool {

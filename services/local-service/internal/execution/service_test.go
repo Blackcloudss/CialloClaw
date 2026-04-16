@@ -948,8 +948,17 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 	if governanceTargetObject("extract_text", map[string]any{"path": "notes/demo.txt"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "notes/demo.txt" {
 		t.Fatalf("expected file-based governance target path")
 	}
+	if governanceTargetObject("transcode_media", map[string]any{"path": "clips/demo.mov", "output_path": "exports/demo.mp4"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "exports/demo.mp4" {
+		t.Fatalf("expected media governance target to follow output_path")
+	}
+	if governanceTargetObject("extract_frames", map[string]any{"path": "clips/demo.mov", "output_dir": "exports/frames"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "exports/frames" {
+		t.Fatalf("expected frame extraction governance target to follow output_dir")
+	}
 	if approvedTargetObject(map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com"}}, "/workspace") != "https://example.com" {
 		t.Fatalf("expected webpage intent to preserve approved url target")
+	}
+	if approvedTargetObject(map[string]any{"name": "transcode_media", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "exports/demo.mp4"}}, "/workspace") != "/workspace/exports/demo.mp4" {
+		t.Fatalf("expected media intent approval target to follow output_path")
 	}
 }
 

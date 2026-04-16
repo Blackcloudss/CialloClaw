@@ -151,7 +151,7 @@ func EnsureArtifactIdentifiers(taskID string, artifacts []map[string]any) []map[
 	}
 
 	result := make([]map[string]any, 0, len(artifacts))
-	for index, artifact := range artifacts {
+	for _, artifact := range artifacts {
 		if len(artifact) == 0 {
 			continue
 		}
@@ -161,7 +161,7 @@ func EnsureArtifactIdentifiers(taskID string, artifacts []map[string]any) []map[
 			cloned["task_id"] = resolvedTaskID
 		}
 		if artifactStringValue(cloned, "artifact_id") == "" {
-			cloned["artifact_id"] = runtimeArtifactID(resolvedTaskID, cloned, index)
+			cloned["artifact_id"] = runtimeArtifactID(resolvedTaskID, cloned)
 		}
 		result = append(result, cloned)
 	}
@@ -259,7 +259,7 @@ func cloneArtifactMap(values map[string]any) map[string]any {
 	return result
 }
 
-func runtimeArtifactID(taskID string, artifact map[string]any, index int) string {
+func runtimeArtifactID(taskID string, artifact map[string]any) string {
 	resolvedTaskID := firstNonEmptyString(taskID, artifactStringValue(artifact, "task_id"), "runtime")
 	hasher := fnv.New32a()
 	artifactPath := strings.TrimSpace(strings.ReplaceAll(artifactStringValue(artifact, "path"), "\\", "/"))
@@ -274,7 +274,7 @@ func runtimeArtifactID(taskID string, artifact map[string]any, index int) string
 	_, _ = hasher.Write([]byte("|"))
 	_, _ = hasher.Write([]byte(artifactPath))
 	_, _ = hasher.Write([]byte("|"))
-	_, _ = hasher.Write([]byte(fmt.Sprintf("%d", index)))
+	_, _ = hasher.Write([]byte(artifactStringValue(artifact, "mime_type")))
 	return fmt.Sprintf("art_%s_%08x", resolvedTaskID, hasher.Sum32())
 }
 

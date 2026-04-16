@@ -93,6 +93,36 @@ func TestBuildArtifactPersistPlansAssignsIdentifiersWhenMissing(t *testing.T) {
 	}
 }
 
+func TestEnsureArtifactIdentifiersStayStableAcrossOrdering(t *testing.T) {
+	artifacts := []map[string]any{
+		{
+			"artifact_type": "generated_file",
+			"title":         "result.txt",
+			"path":          "workspace/result.txt",
+			"mime_type":     "text/plain",
+		},
+		{
+			"artifact_type": "generated_file",
+			"title":         "other.txt",
+			"path":          "workspace/other.txt",
+			"mime_type":     "text/plain",
+		},
+	}
+
+	forward := EnsureArtifactIdentifiers("task_001", artifacts)
+	reversed := EnsureArtifactIdentifiers("task_001", []map[string]any{artifacts[1], artifacts[0]})
+
+	if forward[0]["artifact_id"] == "" || forward[1]["artifact_id"] == "" {
+		t.Fatalf("expected runtime artifact identifiers to be backfilled, got %+v", forward)
+	}
+	if forward[0]["artifact_id"] != reversed[1]["artifact_id"] {
+		t.Fatalf("expected first artifact id to stay stable across ordering, got forward=%+v reversed=%+v", forward, reversed)
+	}
+	if forward[1]["artifact_id"] != reversed[0]["artifact_id"] {
+		t.Fatalf("expected second artifact id to stay stable across ordering, got forward=%+v reversed=%+v", forward, reversed)
+	}
+}
+
 func TestBuildArtifactReturnsNilWithoutUsablePayload(t *testing.T) {
 	service := NewService()
 	if artifacts := service.BuildArtifact("task_001", "title", map[string]any{"payload": "invalid"}); artifacts != nil {
