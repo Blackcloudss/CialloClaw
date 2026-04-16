@@ -9,6 +9,7 @@ type ShellBallSurfaceProps = {
   dashboardTransitionPhase?: "idle" | "opening" | "hidden" | "closing";
   fileDropActive?: boolean;
   textDropActive?: boolean;
+  selectionIndicatorVisible?: boolean;
   visualState: ShellBallVisualState;
   voicePreview: ShellBallVoicePreview;
   voiceHoldProgress?: number;
@@ -70,6 +71,7 @@ export function ShellBallSurface({
   dashboardTransitionPhase = "idle",
   fileDropActive = false,
   textDropActive = false,
+  selectionIndicatorVisible = false,
   visualState,
   voicePreview,
   voiceHoldProgress = 0,
@@ -156,6 +158,7 @@ export function ShellBallSurface({
                   <ShellBallMascot
                     visualState={visualState}
                     voicePreview={voicePreview}
+                    selectionIndicatorVisible={selectionIndicatorVisible}
                     voiceHoldProgress={voiceHoldProgress}
                     motionConfig={motionConfig}
                     onPrimaryClick={onPrimaryClick}
