@@ -8,6 +8,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
+	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -141,6 +142,7 @@ type TaskRunRecord struct {
 	Artifacts         []map[string]any
 	AuditRecords      []map[string]any
 	MirrorReferences  []map[string]any
+	Snapshot          contextsvc.TaskContextSnapshot
 	SecuritySummary   map[string]any
 	ApprovalRequest   map[string]any
 	PendingExecution  map[string]any

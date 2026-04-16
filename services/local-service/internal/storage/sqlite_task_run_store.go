@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	_ "modernc.org/sqlite"
 )
 
@@ -302,6 +303,7 @@ func cloneTaskRunRecord(record TaskRunRecord) TaskRunRecord {
 	clone.Artifacts = cloneMapSlice(record.Artifacts)
 	clone.AuditRecords = cloneMapSlice(record.AuditRecords)
 	clone.MirrorReferences = cloneMapSlice(record.MirrorReferences)
+	clone.Snapshot = cloneContextSnapshot(record.Snapshot)
 	clone.SecuritySummary = cloneMap(record.SecuritySummary)
 	clone.ApprovalRequest = cloneMap(record.ApprovalRequest)
 	clone.PendingExecution = cloneMap(record.PendingExecution)
@@ -347,6 +349,14 @@ func cloneNotificationSnapshots(values []NotificationSnapshot) []NotificationSna
 	}
 
 	return result
+}
+
+func cloneContextSnapshot(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+	cloned := snapshot
+	if len(snapshot.Files) > 0 {
+		cloned.Files = append([]string(nil), snapshot.Files...)
+	}
+	return cloned
 }
 
 func cloneMap(values map[string]any) map[string]any {

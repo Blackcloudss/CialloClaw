@@ -7,7 +7,7 @@
     "outDir": "./.cache/shell-ball-tests",
     "rootDir": "./src",
     "strict": false,
-    "noImplicitAny": false,
+    "noImplicitAny": true,
     "paths": {
       "@/*": ["./src/*"],
       "@/features/dashboard/tasks/TasksPage": ["./src/features/shell-ball/test-stubs/dashboardTasksPage.tsx"],

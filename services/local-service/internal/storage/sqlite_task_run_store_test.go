@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 )
 
 func TestInMemoryTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
@@ -154,6 +156,18 @@ func sampleTaskRunRecord() TaskRunRecord {
 		BubbleMessage:  map[string]any{"task_id": "task_001", "type": "result", "text": "completed"},
 		DeliveryResult: map[string]any{"type": "workspace_document", "payload": map[string]any{"path": "workspace/result.md"}},
 		Artifacts:      []map[string]any{{"artifact_id": "art_001", "task_id": "task_001"}},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Source:        "floating_ball",
+			Trigger:       "hover_text_input",
+			InputType:     "text",
+			InputMode:     "text",
+			Text:          "sample input",
+			SelectionText: "selected text",
+			Files:         []string{"workspace/input.md"},
+			PageTitle:     "Sample Page",
+			PageURL:       "https://example.com",
+			AppName:       "browser",
+		},
 		MirrorReferences: []map[string]any{{
 			"memory_id": "mem_001",
 		}},

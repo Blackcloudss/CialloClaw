@@ -150,9 +150,12 @@ func (s *Service) Snapshot() map[string]any {
 func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	options := mapValue(params, "options")
-	confirmRequired := boolValue(options, "confirm_required", true)
-	preferredDelivery, fallbackDelivery := deliveryPreferenceFromSubmit(params)
+	confirmRequired := boolValue(options, "confirm_required", false)
 	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
+	preferredDelivery, fallbackDelivery := deliveryPreferenceFromSubmit(params)
+	if !suggestion.RequiresConfirm {
+		preferredDelivery, fallbackDelivery = mergeSuggestedDeliveryPreference(preferredDelivery, fallbackDelivery, suggestion.DirectDeliveryType)
+	}
 	if s.intent.AnalyzeSnapshot(snapshot) == "waiting_input" {
 		task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 			SessionID:         stringValue(params, "session_id", ""),
@@ -165,6 +168,7 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 			CurrentStep:       "collect_input",
 			RiskLevel:         s.risk.DefaultLevel(),
 			Timeline:          initialTimeline("waiting_input", "collect_input"),
+			Snapshot:          snapshot,
 		})
 
 		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "请先告诉我你希望我处理什么内容。", task.StartedAt.Format(dateTimeLayout))
@@ -173,8 +177,9 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 		}
 
 		return map[string]any{
-			"task":           taskMap(task),
-			"bubble_message": bubble,
+			"task":            taskMap(task),
+			"bubble_message":  bubble,
+			"delivery_result": nil,
 		}, nil
 	}
 
@@ -186,15 +191,22 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 		Intent:            suggestion.Intent,
 		PreferredDelivery: preferredDelivery,
 		FallbackDelivery:  fallbackDelivery,
-		CurrentStep:       currentStepForSuggestion(suggestion.RequiresConfirm),
+		CurrentStep:       currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent),
 		RiskLevel:         s.risk.DefaultLevel(),
-		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm)),
+		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)),
+		Snapshot:          snapshot,
 	})
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), task.StartedAt.Format(dateTimeLayout))
 	deliveryResult := map[string]any(nil)
 	if !suggestion.RequiresConfirm {
+		if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {
+			return nil, queueErr
+		} else if queued {
+			task = queuedTask
+			bubble = queueBubble
+		} else {
 		governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, suggestion.Intent)
 		if governanceErr != nil {
 			return nil, governanceErr
@@ -208,6 +220,7 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 		if execErr != nil {
 			return nil, execErr
 		}
+		}
 	} else {
 		if _, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
 			task, _ = s.runEngine.GetTask(task.TaskID)
@@ -217,6 +230,7 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	response := map[string]any{
 		"task":           taskMap(task),
 		"bubble_message": bubble,
+		"delivery_result": nil,
 	}
 	if deliveryResult != nil {
 		response["delivery_result"] = deliveryResult
@@ -232,8 +246,11 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	explicitIntent := mapValue(params, "intent")
-	preferredDelivery, fallbackDelivery := deliveryPreferenceFromStart(params)
 	suggestion := s.intent.Suggest(snapshot, explicitIntent, len(explicitIntent) == 0)
+	preferredDelivery, fallbackDelivery := deliveryPreferenceFromStart(params)
+	if len(explicitIntent) == 0 && !suggestion.RequiresConfirm {
+		preferredDelivery, fallbackDelivery = mergeSuggestedDeliveryPreference(preferredDelivery, fallbackDelivery, suggestion.DirectDeliveryType)
+	}
 
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 		SessionID:         stringValue(params, "session_id", ""),
@@ -243,9 +260,10 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		Intent:            suggestion.Intent,
 		PreferredDelivery: preferredDelivery,
 		FallbackDelivery:  fallbackDelivery,
-		CurrentStep:       currentStepForSuggestion(suggestion.RequiresConfirm),
+		CurrentStep:       currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent),
 		RiskLevel:         s.risk.DefaultLevel(),
-		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm)),
+		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)),
+		Snapshot:          snapshot,
 	})
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 
@@ -261,6 +279,14 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 			task, _ = s.runEngine.GetTask(task.TaskID)
 			response["task"] = taskMap(task)
 		}
+		return response, nil
+	}
+
+	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {
+		return nil, queueErr
+	} else if queued {
+		response["task"] = taskMap(queuedTask)
+		response["bubble_message"] = queueBubble
 		return response, nil
 	}
 
@@ -340,6 +366,15 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		return nil, ErrTaskNotFound
 	}
 	s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshotFromTask(updatedTask), intentValue)
+	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(updatedTask); queueErr != nil {
+		return nil, queueErr
+	} else if queued {
+		return map[string]any{
+			"task":            taskMap(queuedTask),
+			"bubble_message":  queueBubble,
+			"delivery_result": nil,
+		}, nil
+	}
 	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(updatedTask, intentValue)
 	if governanceErr != nil {
 		return nil, governanceErr
@@ -693,6 +728,11 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 			return nil, ErrTaskAlreadyFinished
 		default:
 			return nil, err
+		}
+	}
+	if taskIsTerminal(updatedTask.Status) {
+		if queueErr := s.drainSessionQueue(updatedTask.SessionID); queueErr != nil {
+			return nil, queueErr
 		}
 	}
 
@@ -1293,6 +1333,9 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 			return nil, ErrTaskNotFound
 		}
 		updatedTask = s.appendAuditData(updatedTask, compactAuditRecords(s.audit.BuildAuthorizationAudit(updatedTask.TaskID, updatedTask.RunID, decision, impactScope)), nil)
+		if queueErr := s.drainSessionQueue(updatedTask.SessionID); queueErr != nil {
+			return nil, queueErr
+		}
 		return map[string]any{
 			"authorization_record": authorizationRecord,
 			"task":                 taskMap(updatedTask),
@@ -1345,6 +1388,11 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 	}
 	if updatedTask.Status == "failed" {
 		deliveryResult = nil
+	}
+	if taskIsTerminal(updatedTask.Status) {
+		if queueErr := s.drainSessionQueue(updatedTask.SessionID); queueErr != nil {
+			return nil, queueErr
+		}
 	}
 
 	response := map[string]any{
@@ -1432,6 +1480,76 @@ func taskMap(record runengine.TaskRecord) map[string]any {
 		result["finished_at"] = record.FinishedAt.Format(dateTimeLayout)
 	}
 	return result
+}
+
+func (s *Service) queueTaskIfSessionBusy(task runengine.TaskRecord) (runengine.TaskRecord, map[string]any, bool, error) {
+	activeTask, ok := s.runEngine.ActiveSessionTask(task.SessionID, task.TaskID)
+	if !ok {
+		return runengine.TaskRecord{}, nil, false, nil
+	}
+
+	bubble := s.delivery.BuildBubbleMessage(
+		task.TaskID,
+		"status",
+		fmt.Sprintf("当前会话已有任务 %s 正在执行，本任务已排队等待。", truncateText(activeTask.Title, 24)),
+		task.UpdatedAt.Format(dateTimeLayout),
+	)
+	queuedTask, changed := s.runEngine.QueueTaskForSession(task.TaskID, activeTask.TaskID, bubble)
+	if !changed {
+		return runengine.TaskRecord{}, nil, false, ErrTaskNotFound
+	}
+	return queuedTask, bubble, true, nil
+}
+
+func (s *Service) drainSessionQueue(sessionID string) error {
+	for {
+		nextTask, ok := s.runEngine.NextQueuedTaskForSession(sessionID)
+		if !ok {
+			return nil
+		}
+		if activeTask, busy := s.runEngine.ActiveSessionTask(sessionID, nextTask.TaskID); busy && activeTask.TaskID != "" {
+			return nil
+		}
+
+		bubble := s.delivery.BuildBubbleMessage(
+			nextTask.TaskID,
+			"status",
+			"前序任务已完成，当前会话中的下一个任务开始执行。",
+			nextTask.UpdatedAt.Format(dateTimeLayout),
+		)
+		resumedTask, changed := s.runEngine.ResumeQueuedTask(nextTask.TaskID, executionStepName(nextTask.Intent), bubble)
+		if !changed {
+			return ErrTaskNotFound
+		}
+
+		governedTask, _, handled, governanceErr := s.handleTaskGovernanceDecision(resumedTask, resumedTask.Intent)
+		if governanceErr != nil {
+			return governanceErr
+		}
+		if handled {
+			if taskIsTerminal(governedTask.Status) {
+				continue
+			}
+			return nil
+		}
+
+		updatedTask, _, _, _, err := s.executeTask(governedTask, snapshotFromTask(governedTask), governedTask.Intent)
+		if err != nil {
+			return err
+		}
+		if !taskIsTerminal(updatedTask.Status) {
+			return nil
+		}
+	}
+}
+
+func taskIsTerminal(status string) bool {
+	switch status {
+	case "completed", "cancelled", "ended_unfinished", "failed":
+		return true
+	default:
+		return false
+	}
 }
 
 // timelineMap 处理当前模块的相关逻辑。
@@ -1790,9 +1908,12 @@ func taskStatusForSuggestion(requiresConfirm bool) string {
 }
 
 // currentStepForSuggestion 处理当前模块的相关逻辑。
-func currentStepForSuggestion(requiresConfirm bool) string {
+func currentStepForSuggestion(requiresConfirm bool, taskIntent map[string]any) string {
 	if requiresConfirm {
 		return "intent_confirmation"
+	}
+	if stringValue(taskIntent, "name", "") == "agent_loop" {
+		return "agent_loop"
 	}
 	return "generate_output"
 }
@@ -3031,11 +3152,36 @@ func (s *Service) buildImpactScope(task runengine.TaskRecord, pendingExecution m
 
 // snapshotFromTask 从任务记录反推一个最小上下文快照，用于授权恢复等场景。
 func snapshotFromTask(task runengine.TaskRecord) contextsvc.TaskContextSnapshot {
+	if !isEmptySnapshot(task.Snapshot) {
+		return cloneTaskSnapshot(task.Snapshot)
+	}
 	return contextsvc.TaskContextSnapshot{
 		Trigger:   task.SourceType,
 		InputType: "text",
 		Text:      originalTextFromTaskTitle(task.Title),
 	}
+}
+
+func cloneTaskSnapshot(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+	cloned := snapshot
+	if len(snapshot.Files) > 0 {
+		cloned.Files = append([]string(nil), snapshot.Files...)
+	}
+	return cloned
+}
+
+func isEmptySnapshot(snapshot contextsvc.TaskContextSnapshot) bool {
+	return strings.TrimSpace(snapshot.Source) == "" &&
+		strings.TrimSpace(snapshot.Trigger) == "" &&
+		strings.TrimSpace(snapshot.InputType) == "" &&
+		strings.TrimSpace(snapshot.InputMode) == "" &&
+		strings.TrimSpace(snapshot.Text) == "" &&
+		strings.TrimSpace(snapshot.SelectionText) == "" &&
+		strings.TrimSpace(snapshot.ErrorText) == "" &&
+		len(snapshot.Files) == 0 &&
+		strings.TrimSpace(snapshot.PageTitle) == "" &&
+		strings.TrimSpace(snapshot.PageURL) == "" &&
+		strings.TrimSpace(snapshot.AppName) == ""
 }
 
 func originalTextFromTaskTitle(title string) string {
@@ -3084,6 +3230,8 @@ func buildMemorySummary(snapshot contextsvc.TaskContextSnapshot, taskIntent map[
 // resultSpecFromIntent 根据 intent 返回默认结果标题、预览文案和结果气泡文案。
 func resultSpecFromIntent(taskIntent map[string]any) (string, string, string) {
 	switch stringValue(taskIntent, "name", "summarize") {
+	case "agent_loop":
+		return "处理结果", "结果已通过气泡返回", "结果已经生成，可直接查看。"
 	case "rewrite":
 		return "改写结果", "已为你写入文档并打开", "内容已经按要求改写完成，可直接查看。"
 	case "translate":
@@ -3106,7 +3254,7 @@ func resultSpecFromIntent(taskIntent map[string]any) (string, string, string) {
 // deliveryTypeFromIntent 根据意图类型返回默认交付方式。
 func deliveryTypeFromIntent(taskIntent map[string]any) string {
 	switch stringValue(taskIntent, "name", "summarize") {
-	case "translate", "explain", "page_read", "page_search":
+	case "agent_loop", "translate", "explain", "page_read", "page_search":
 		return "bubble"
 	default:
 		return "workspace_document"
@@ -3122,6 +3270,16 @@ func deliveryPreferenceFromSubmit(params map[string]any) (string, string) {
 func deliveryPreferenceFromStart(params map[string]any) (string, string) {
 	deliveryOptions := mapValue(params, "delivery")
 	return stringValue(deliveryOptions, "preferred", ""), stringValue(deliveryOptions, "fallback", "")
+}
+
+// mergeSuggestedDeliveryPreference preserves explicit caller preferences and only
+// falls back to the intent layer's suggested delivery when the caller left the
+// preferred delivery unset.
+func mergeSuggestedDeliveryPreference(preferredDelivery, fallbackDelivery, suggestedDelivery string) (string, string) {
+	if strings.TrimSpace(preferredDelivery) == "" && strings.TrimSpace(suggestedDelivery) != "" {
+		preferredDelivery = suggestedDelivery
+	}
+	return preferredDelivery, fallbackDelivery
 }
 
 // buildPendingExecution 生成等待授权任务在恢复执行时需要的交付计划。
@@ -3701,7 +3859,7 @@ func truncateText(value string, maxLength int) string {
 
 // dateTimeLayout 定义当前模块的基础变量。
 func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
-	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, "generate_output", "开始生成正式结果")
+	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, executionStepName(taskIntent), "开始生成正式结果")
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 	}
@@ -3786,6 +3944,13 @@ func (s *Service) recordExecutionToolCalls(task runengine.TaskRecord, toolCalls 
 		}
 	}
 	return task
+}
+
+func executionStepName(taskIntent map[string]any) string {
+	if stringValue(taskIntent, "name", "") == "agent_loop" {
+		return "agent_loop"
+	}
+	return "generate_output"
 }
 
 func approvedExecutionFromTask(task runengine.TaskRecord) (string, string) {
