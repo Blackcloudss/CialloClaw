@@ -15,7 +15,7 @@ import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/fe
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
 import { buildNoteSummary, describeNotePreview, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
-import { convertNoteToTask, loadNoteBucket, type NotePageDataMode } from "./notePage.service";
+import { convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, type NotePageDataMode } from "./notePage.service";
 import type { NoteDetailAction, NoteListItem } from "./notePage.types";
 import { NoteDetailPanel } from "./components/NoteDetailPanel";
 import { NotePreviewCard } from "./components/NotePreviewCard";
@@ -139,6 +139,16 @@ export function NotePage() {
       return;
     }
 
+    if (action === "open-resource") {
+      const firstResource = selectedItem.experience.relatedResources[0];
+      if (!firstResource) {
+        showFeedback("当前没有可打开的相关资料。");
+        return;
+      }
+      void handleResourceOpen(firstResource.id);
+      return;
+    }
+
     const placeholders: Record<Exclude<NoteDetailAction, "convert-to-task">, string> = {
       cancel: "取消本次事项的真实动作稍后接入。",
       "cancel-recurring": "取消整个重复事项的真实动作稍后接入。",
@@ -146,13 +156,34 @@ export function NotePage() {
       delete: "删除记录的真实动作稍后接入。",
       edit: "编辑能力稍后接入。",
       "move-upcoming": "提前到近期要做的真实动作稍后接入。",
-      "open-resource": "当前先展示相关资料入口，后续再接稳定的打开能力。",
+      "open-resource": "相关资料打开失败，请稍后再试。",
       restore: "恢复为未完成的真实动作稍后接入。",
       "skip-once": "跳过本次的真实动作稍后接入。",
       "toggle-recurring": "重复规则开关的真实动作稍后接入。",
     };
 
     showFeedback(placeholders[action]);
+  }
+
+  async function handleResourceOpen(resourceId: string) {
+    if (!selectedItem) {
+      return;
+    }
+
+    const resource = selectedItem.experience.relatedResources.find((item) => item.id === resourceId);
+    if (!resource) {
+      showFeedback("未找到对应的相关资料。");
+      return;
+    }
+
+    const plan = resolveNoteResourceOpenExecutionPlan(resource);
+    if (plan.mode === "task_detail" && plan.taskId) {
+      navigate(resolveDashboardModuleRoutePath("tasks"), { state: { focusTaskId: plan.taskId, openDetail: true } });
+      showFeedback(plan.feedback);
+      return;
+    }
+
+    showFeedback(await performNoteResourceOpenExecution(plan));
   }
 
   useEffect(() => {
@@ -344,7 +375,7 @@ export function NotePage() {
                   initial={{ opacity: 0, scale: 0.98, y: 16 }}
                   transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
                 >
-                  <NoteDetailPanel feedback={feedback} item={selectedItem} onAction={handleDetailAction} onClose={() => setDetailOpen(false)} />
+                  <NoteDetailPanel feedback={feedback} item={selectedItem} onAction={handleDetailAction} onClose={() => setDetailOpen(false)} onResourceOpen={handleResourceOpen} />
                 </motion.div>
               </>
             ) : null}

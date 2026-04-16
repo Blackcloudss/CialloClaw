@@ -1,6 +1,8 @@
 import type {
   AgentNotepadConvertToTaskParams,
   AgentNotepadListParams,
+  DeliveryPayload,
+  DeliveryType,
   RequestMeta,
   TodoBucket,
   TodoItem,
@@ -12,6 +14,14 @@ import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResour
 
 const NOTEPAD_RPC_TIMEOUT_MS = 2_500;
 export type NotePageDataMode = "rpc" | "mock";
+
+export type NoteResourceOpenExecutionPlan = {
+  mode: "task_detail" | "open_url" | "copy_path";
+  feedback: string;
+  path: string | null;
+  taskId: string | null;
+  url: string | null;
+};
 
 function createRequestMeta(scope: string): RequestMeta {
   return {
@@ -44,6 +54,26 @@ function formatRelativeTime(value: string) {
   }
 
   return diffMs >= 0 ? `还剩 ${absDays} 天` : `逾期 ${absDays} 天`;
+}
+
+function isAllowedNoteOpenUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function resolveResourceOpenPayload(resource: NonNullable<TodoItem["related_resources"]>[number]): DeliveryPayload | null {
+  if (!resource?.open_payload) {
+    return null;
+  }
+  return {
+    path: resource.open_payload.path ?? null,
+    task_id: resource.open_payload.task_id ?? null,
+    url: resource.open_payload.url ?? null,
+  };
 }
 
 function getPreviewStatus(item: TodoItem) {
@@ -142,8 +172,11 @@ function createResourceHints(item: TodoItem) {
     return item.related_resources.map<NoteResource>((resource) => ({
       id: resource.resource_id,
       label: resource.label,
+      openAction: normalizeResourceOpenAction(resource.open_action ?? null, resolveResourceOpenPayload(resource)),
       path: resource.path,
+      taskId: resolveResourceOpenPayload(resource)?.task_id ?? null,
       type: resource.resource_type,
+      url: resolveResourceOpenPayload(resource)?.url ?? null,
     }));
   }
 
@@ -178,6 +211,16 @@ function createResourceHints(item: TodoItem) {
   }
 
   return resources;
+}
+
+function normalizeResourceOpenAction(action: DeliveryType | null, payload: DeliveryPayload | null): NoteResource["openAction"] {
+  if (action === "task_detail") {
+    return "task_detail";
+  }
+  if (payload?.url) {
+    return "open_url";
+  }
+  return "copy_path";
 }
 
 function createFallbackExperience(item: TodoItem): NoteDetailExperience {
@@ -297,4 +340,56 @@ export async function convertNoteToTask(itemId: string, source: NotePageDataMode
 
     throw error;
   }
+}
+
+export function resolveNoteResourceOpenExecutionPlan(resource: NoteResource): NoteResourceOpenExecutionPlan {
+  if (resource.openAction === "task_detail" && resource.taskId) {
+    return {
+      feedback: `已定位到任务 ${resource.label}。`,
+      mode: "task_detail",
+      path: resource.path,
+      taskId: resource.taskId,
+      url: resource.url ?? null,
+    };
+  }
+
+  if (resource.url) {
+    return {
+      feedback: `已打开 ${resource.label}。`,
+      mode: "open_url",
+      path: resource.path,
+      taskId: resource.taskId ?? null,
+      url: resource.url,
+    };
+  }
+
+  return {
+    feedback: resource.path ? `当前环境暂不支持直接打开，已准备 ${resource.label} 的路径。` : `当前资源 ${resource.label} 缺少可打开地址。`,
+    mode: "copy_path",
+    path: resource.path,
+    taskId: resource.taskId ?? null,
+    url: resource.url ?? null,
+  };
+}
+
+export async function performNoteResourceOpenExecution(plan: NoteResourceOpenExecutionPlan): Promise<string> {
+  if (plan.mode === "open_url" && plan.url) {
+    if (!isAllowedNoteOpenUrl(plan.url)) {
+      return "已拦截不受支持的资源链接。";
+    }
+
+    window.open(plan.url, "_blank", "noopener,noreferrer");
+    return plan.feedback;
+  }
+
+  if (plan.mode === "copy_path" && plan.path) {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(plan.path);
+      return `${plan.feedback} 已复制路径。`;
+    }
+
+    return `${plan.feedback} 路径：${plan.path}`;
+  }
+
+  return plan.feedback;
 }

@@ -22,6 +22,9 @@ export type NoteResource = {
   label: string;
   path: string;
   type: string;
+  openAction?: "task_detail" | "open_url" | "copy_path" | null;
+  taskId?: string | null;
+  url?: string | null;
 };
 
 export type NoteAgentSuggestion = {

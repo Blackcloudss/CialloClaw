@@ -109,8 +109,8 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "这次周报想先把固定结构整理干净，后续每周只需要替换数据与结论。",
     prerequisite: "先确认这周重点结论和图表截图已经齐全。",
     relatedResources: [
-      { id: "res_001", label: "上周周报模板", path: "workspace/templates/weekly-report.md", type: "模板" },
-      { id: "res_002", label: "本周数据草稿", path: "workspace/drafts/weekly-report-data.md", type: "草稿" },
+      { id: "res_001", label: "上周周报模板", path: "workspace/templates/weekly-report.md", type: "模板", openAction: "copy_path", taskId: null, url: null },
+      { id: "res_002", label: "本周数据草稿", path: "workspace/drafts/weekly-report-data.md", type: "草稿", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "下一步建议",
@@ -137,7 +137,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "主要是确认长按语音、事件球调度和入口球拖动这三块的视觉打磨排期。",
     prerequisite: "先整理出想确认的 3 个问题和期望结果。",
     relatedResources: [
-      { id: "res_003", label: "首页交互说明", path: "docs/home-interaction-notes.md", type: "说明" },
+      { id: "res_003", label: "首页交互说明", path: "docs/home-interaction-notes.md", type: "说明", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "下一步建议",
@@ -164,7 +164,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "当前风险摘要仍然偏技术表达，需要再压缩成更容易理解的一版。",
     prerequisite: "先明确今天最重要的风险提示语气。",
     relatedResources: [
-      { id: "res_004", label: "安全页草稿", path: "apps/desktop/src/features/dashboard/safety/SecurityApp.tsx", type: "页面" },
+      { id: "res_004", label: "安全页草稿", path: "apps/desktop/src/features/dashboard/safety/SecurityApp.tsx", type: "页面", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "下一步建议",
@@ -191,7 +191,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "这件事已记下，但不需要现在处理，等本月 dashboard 子页样式稳定后再统一梳理。",
     prerequisite: "先积累任务页、便签页、镜子页的视觉 token。",
     relatedResources: [
-      { id: "res_005", label: "UI token 草稿", path: "docs/ui-token-notes.md", type: "草稿" },
+      { id: "res_005", label: "UI token 草稿", path: "docs/ui-token-notes.md", type: "草稿", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "下一步建议",
@@ -218,7 +218,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "跨页联动的演示要等镜子页和任务页都稳定之后再做。",
     prerequisite: "镜子页、任务页交互和样式都已收口。",
     relatedResources: [
-      { id: "res_006", label: "镜子页入口", path: "apps/desktop/src/features/dashboard/memory/MirrorApp.tsx", type: "页面" },
+      { id: "res_006", label: "镜子页入口", path: "apps/desktop/src/features/dashboard/memory/MirrorApp.tsx", type: "页面", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "下一步建议",
@@ -245,7 +245,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "每周一固定整理一次周报，若当天进入处理窗口，就会在“近期要做”中生成当天实例。",
     prerequisite: "周日晚上或周一早上先汇总本周数据。",
     relatedResources: [
-      { id: "res_007", label: "周报模板", path: "workspace/templates/weekly-report.md", type: "模板" },
+      { id: "res_007", label: "周报模板", path: "workspace/templates/weekly-report.md", type: "模板", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "流程化建议",
@@ -272,7 +272,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "每天 09:00 做一轮邮件巡检，重要邮件进入近期要做，其余归档。",
     prerequisite: "需要邮箱接入和当前白名单规则已生效。",
     relatedResources: [
-      { id: "res_008", label: "邮件巡检说明", path: "docs/mail-inspection.md", type: "说明" },
+      { id: "res_008", label: "邮件巡检说明", path: "docs/mail-inspection.md", type: "说明", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "流程化建议",
@@ -299,7 +299,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "这条事项对应的首页交互截图已经完成并归档，可作为后续风格参考。",
     prerequisite: null,
     relatedResources: [
-      { id: "res_009", label: "铃兰截图目录", path: "workspace/exports/lily-home", type: "文件夹" },
+      { id: "res_009", label: "铃兰截图目录", path: "workspace/exports/lily-home", type: "文件夹", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "后续建议",
@@ -326,7 +326,7 @@ const noteExperiences: Record<string, NoteDetailExperience> = {
     noteText: "这件事已取消，原因是当前阶段不适合扩大重构范围。",
     prerequisite: null,
     relatedResources: [
-      { id: "res_010", label: "原型文件清单", path: "docs/prototype-audit.md", type: "清单" },
+      { id: "res_010", label: "原型文件清单", path: "docs/prototype-audit.md", type: "清单", openAction: "copy_path", taskId: null, url: null },
     ],
     agentSuggestion: {
       label: "后续建议",
