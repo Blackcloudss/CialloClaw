@@ -83,6 +83,8 @@ export const NOTIFICATION_METHODS = {
   TASK_UPDATED: "task.updated",
   DELIVERY_READY: "delivery.ready",
   APPROVAL_PENDING: "approval.pending",
+  TASK_SESSION_QUEUED: "task.session_queued",
+  TASK_SESSION_RESUMED: "task.session_resumed",
   MIRROR_OVERVIEW_UPDATED: "mirror.overview.updated",
   PLUGIN_UPDATED: "plugin.updated",
   PLUGIN_METRIC_UPDATED: "plugin.metric.updated",
@@ -159,6 +161,7 @@ export interface AgentInputSubmitParams {
 export interface AgentInputSubmitResult {
   task: Task;
   bubble_message: BubbleMessage | null;
+  delivery_result: DeliveryResult | null;
 }
 
 // AgentTaskStartParams 定义当前模块的接口约束。
@@ -174,7 +177,7 @@ export interface AgentTaskStartParams {
     page_context?: PageContext;
     error_message?: string;
   };
-  intent?: IntentPayload;
+  context?: InputContext;
   delivery?: DeliveryPreference;
 }
 
@@ -621,6 +624,15 @@ export interface DeliveryReadyNotification {
 export interface ApprovalPendingNotification {
   task_id: string;
   approval_request: ApprovalRequest;
+}
+
+export interface TaskSessionQueuedNotification {
+  task_id: string;
+  blocking_task_id: string;
+}
+
+export interface TaskSessionResumedNotification {
+  task_id: string;
 }
 
 export interface MirrorOverviewUpdatedNotification {
