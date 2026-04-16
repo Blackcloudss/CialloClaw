@@ -3191,6 +3191,189 @@ test("shell-ball bubble ordering keeps late agent replies attached to the origin
   );
 });
 
+test("shell-ball selected-text prompt stays below an existing intent bubble even when timestamps skew", () => {
+  const originalDate = globalThis.Date;
+  let bubbleItemsState: ShellBallBubbleItem[] = [
+    {
+      bubble: {
+        bubble_id: "bubble-intent-1",
+        task_id: "task-intent-1",
+        type: "intent_confirm",
+        text: "Please confirm the intent.",
+        pinned: false,
+        hidden: false,
+        created_at: "2026-04-11T10:05:00.000Z",
+      },
+      role: "agent",
+      desktop: {
+        lifecycleState: "visible",
+        turnIndex: 1,
+        turnPhase: 1,
+      },
+    },
+  ];
+  let refCallCount = 0;
+
+  class FakeDate extends Date {
+    constructor(...args: ConstructorParameters<typeof Date>) {
+      super(args.length === 0 ? "2026-04-11T10:00:00.000Z" : args[0]);
+    }
+
+    static now() {
+      return originalDate.parse("2026-04-11T10:00:00.000Z");
+    }
+  }
+
+  Object.defineProperty(globalThis, "Date", {
+    configurable: true,
+    value: FakeDate,
+  });
+
+  try {
+    const { useShellBallCoordinator } = withShellBallModuleRuntime("useShellBallCoordinator.ts", {
+      react: {
+        ...require("react"),
+        useEffect(callback: () => void) {
+          callback();
+        },
+        useMemo<T>(factory: () => T) {
+          return factory();
+        },
+        useRef<T>(value: T) {
+          refCallCount += 1;
+
+          if (refCallCount === 3) {
+            return { current: 1 };
+          }
+
+          return { current: value };
+        },
+        useState<T>(value: T) {
+          const resolvedValue = typeof value === "function" ? (value as () => T)() : value;
+
+          if (Array.isArray(resolvedValue) && resolvedValue.every((item) => item && typeof item === "object" && "bubble" in item)) {
+            return [bubbleItemsState as unknown as T, (nextValue: T | ((currentValue: T) => T)) => {
+              bubbleItemsState = typeof nextValue === "function"
+                ? (nextValue as (currentValue: T) => T)(bubbleItemsState as unknown as T) as unknown as ShellBallBubbleItem[]
+                : nextValue as unknown as ShellBallBubbleItem[];
+            }] as const;
+          }
+
+          return [resolvedValue, () => {}] as const;
+        },
+      },
+      "@tauri-apps/api/window": {
+        getCurrentWindow() {
+          return {
+            label: shellBallWindowLabels.ball,
+            listen() {
+              return Promise.resolve(() => {});
+            },
+            onMoved() {
+              return Promise.resolve(() => {});
+            },
+            onResized() {
+              return Promise.resolve(() => {});
+            },
+            outerPosition() {
+              return Promise.resolve({ toLogical: () => ({ x: 0, y: 0 }) });
+            },
+            outerSize() {
+              return Promise.resolve({ toLogical: () => ({ width: 124, height: 104 }) });
+            },
+            scaleFactor() {
+              return Promise.resolve(1);
+            },
+          };
+        },
+      },
+      "@/rpc/subscriptions": {
+        subscribeDeliveryReady() {
+          return () => {};
+        },
+      },
+      "../../platform/shellBallWindowController": {
+        SHELL_BALL_PINNED_BUBBLE_WINDOW_FRAME: { width: 240, height: 140 },
+        closeShellBallPinnedBubbleWindow() {
+          return Promise.resolve();
+        },
+        emitToShellBallWindowLabel() {
+          return Promise.resolve();
+        },
+        getShellBallPinnedBubbleIdFromLabel() {
+          return null;
+        },
+        getShellBallPinnedBubbleWindowAnchor() {
+          return { x: 0, y: 0 };
+        },
+        getShellBallPinnedBubbleWindowLabel(bubbleId: string) {
+          return `shell-ball-bubble-pinned-${bubbleId}`;
+        },
+        openShellBallPinnedBubbleWindow() {
+          return Promise.resolve();
+        },
+        setShellBallPinnedBubbleWindowVisible() {
+          return Promise.resolve();
+        },
+        shellBallWindowLabels,
+      },
+      "./shellBall.bubble": require(resolve(desktopRoot, ".cache/shell-ball-tests/features/shell-ball/shellBall.bubble.js")),
+      "./shellBall.windowSync": require(resolve(desktopRoot, ".cache/shell-ball-tests/features/shell-ball/shellBall.windowSync.js")),
+      "./useShellBallWindowMetrics": {
+        getShellBallBubbleAnchor() {
+          return { x: 0, y: 0 };
+        },
+      },
+    }, (moduleExports) => moduleExports as { useShellBallCoordinator: typeof import("./useShellBallCoordinator").useShellBallCoordinator });
+
+    const { handleSelectedTextPrompt } = useShellBallCoordinator({
+      visualState: "hover_input",
+      inputValue: "",
+      finalizedSpeechPayload: null,
+      voicePreview: null,
+      voiceHintMode: "hidden",
+      setInputValue: () => {},
+      onFinalizedSpeechHandled: () => {},
+      onRegionEnter: () => {},
+      onRegionLeave: () => {},
+      onInputFocusChange: () => {},
+      onSubmitText: () => {},
+      onAttachFile: () => {},
+      onPrimaryClick: () => {},
+    });
+
+    handleSelectedTextPrompt();
+
+    assert.deepEqual(
+      bubbleItemsState.map((item) => ({
+        bubbleId: item.bubble.bubble_id,
+        text: item.bubble.text,
+        turnIndex: item.desktop.turnIndex,
+        turnPhase: item.desktop.turnPhase,
+      })),
+      [
+        {
+          bubbleId: "bubble-intent-1",
+          text: "Please confirm the intent.",
+          turnIndex: 1,
+          turnPhase: 1,
+        },
+        {
+          bubbleId: bubbleItemsState[1]?.bubble.bubble_id,
+          text: "识别到选中了文字",
+          turnIndex: 2,
+          turnPhase: 0,
+        },
+      ],
+    );
+  } finally {
+    Object.defineProperty(globalThis, "Date", {
+      configurable: true,
+      value: originalDate,
+    });
+  }
+});
+
 test("shell-ball detached bubble actions close pinned windows and delete detached bubbles entirely", () => {
   const listeners = new Map<string, (event: { payload: unknown }) => void>();
   const closeCalls: string[] = [];

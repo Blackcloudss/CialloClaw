@@ -536,6 +536,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
             text: error instanceof Error ? error.message : "文件承接失败，请稍后再试。",
             bubbleType: "status",
             createdAt: new Date().toISOString(),
+            turnIndex,
+            turnPhase: 1,
           }),
         ]),
       );
@@ -544,6 +546,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   }, [revealBubbleRegion]);
 
   const handleSelectedTextPrompt = useCallback(() => {
+    const turnIndex = allocateBubbleTurnIndex();
     setBubbleItems((currentItems) =>
       sortShellBallBubbleItemsByTimestamp([
         ...currentItems,
@@ -552,6 +555,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           text: "识别到选中了文字",
           bubbleType: "status",
           createdAt: new Date().toISOString(),
+          turnIndex,
+          turnPhase: 0,
         }),
       ]),
     );
@@ -824,8 +829,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
     async function handlePrimaryAction(action: ShellBallPrimaryAction) {
       switch (action) {
-        case "attach_file":
+        case "attach_file": {
           handlersRef.current.onAttachFile();
+          const turnIndex = allocateBubbleTurnIndex();
           setBubbleItems((currentItems) =>
             sortShellBallBubbleItemsByTimestamp([
               ...currentItems,
@@ -834,11 +840,14 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
                 text: "把文件拖到悬浮球上，就会按 issue #187 的 file_drop 入口创建任务。",
                 bubbleType: "status",
                 createdAt: new Date().toISOString(),
+                turnIndex,
+                turnPhase: 0,
               }),
             ]),
           );
           revealBubbleRegion();
           break;
+        }
         case "submit": {
           const submittedText = snapshotRef.current.inputValue.trim();
           const submittedFiles = snapshotRef.current.pendingFiles;
