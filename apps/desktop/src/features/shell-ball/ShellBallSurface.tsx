@@ -54,6 +54,12 @@ export function extractShellBallDroppedText(dataTransfer: ShellBallDropDataTrans
     return "";
   }
 
+  // The acceptability check is not a TypeScript type guard, so keep the null
+  // branch explicit before reading transfer payloads.
+  if (dataTransfer === null) {
+    return "";
+  }
+
   for (const type of ["text/plain", "text", "Text", "text/uri-list"]) {
     const value = dataTransfer.getData(type).replace(/\r\n/g, "\n").trim();
     if (value !== "") {
