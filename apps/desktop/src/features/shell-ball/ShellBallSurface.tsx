@@ -30,7 +30,7 @@ type ShellBallSurfaceProps = {
 
 type ShellBallDropDataTransfer = Pick<DataTransfer, "effectAllowed" | "files" | "getData">;
 
-export function shouldAcceptShellBallTextDrop(dataTransfer: Pick<DataTransfer, "files"> | null) {
+export function shouldAcceptShellBallTextDrop(dataTransfer: Pick<DataTransfer, "files"> | null): dataTransfer is ShellBallDropDataTransfer {
   return dataTransfer !== null && dataTransfer.files.length === 0;
 }
 
@@ -52,6 +52,12 @@ export function resolveShellBallTextDropEffect(effectAllowed: DataTransfer["effe
 
 export function extractShellBallDroppedText(dataTransfer: ShellBallDropDataTransfer | null) {
   if (!shouldAcceptShellBallTextDrop(dataTransfer)) {
+    return "";
+  }
+
+  // The acceptability check is not a TypeScript type guard, so keep the null
+  // branch explicit before reading transfer payloads.
+  if (dataTransfer === null) {
     return "";
   }
 
