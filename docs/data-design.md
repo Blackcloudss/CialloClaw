@@ -421,6 +421,11 @@ CREATE TABLE todo_items (
     due_at TEXT,                                 -- 截止时间
     tags_json TEXT,                              -- 标签(JSON)
     agent_suggestion TEXT,                       -- Agent建议
+    note_text TEXT,                              -- 备注正文/详情摘要
+    prerequisite TEXT,                           -- 前置条件
+    planned_at TEXT,                             -- 原计划时间
+    ended_at TEXT,                               -- 结束时间
+    related_resources_json TEXT,                 -- 相关资料(JSON)
     linked_task_id TEXT,                         -- 转任务后的task_id
     created_at TEXT NOT NULL,                    -- 创建时间
     updated_at TEXT NOT NULL                     -- 更新时间
@@ -441,6 +446,10 @@ CREATE TABLE recurring_rules (
     interval_unit TEXT,                          -- 间隔单位(day/week/month)
     reminder_strategy TEXT NOT NULL,             -- 提醒策略
     enabled INTEGER NOT NULL DEFAULT 1,          -- 是否启用
+    repeat_rule_text TEXT,                       -- 规则展示文本
+    next_occurrence_at TEXT,                     -- 下次发生时间
+    recent_instance_status TEXT,                 -- 最近一次状态
+    effective_scope TEXT,                        -- 生效范围
     created_at TEXT NOT NULL,                    -- 创建时间
     updated_at TEXT NOT NULL,                    -- 更新时间,
     FOREIGN KEY(item_id) REFERENCES todo_items(item_id)
