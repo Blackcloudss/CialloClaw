@@ -4329,7 +4329,12 @@ test("shell-ball security respond stub exposes the restore union branch for rest
   assert.equal("recovery_point" in result, true);
 
   if ("recovery_point" in result) {
+    assert.equal(result.applied, true);
     assert.equal(result.task.task_id, "task_restore_stub");
+    assert.equal(result.task.status, "completed");
     assert.equal(result.recovery_point.task_id, "task_restore_stub");
+    assert.equal(result.audit_record?.task_id, "task_restore_stub");
+    assert.equal(result.audit_record === null, false);
+    assert.match(result.bubble_message?.text ?? "", /Restored the workspace state/);
   }
 });

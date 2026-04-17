@@ -1159,6 +1159,11 @@ export function SecurityApp() {
       setSubscribedTaskId(result.response.task.task_id);
       if (isSecurityRestoreRespondResult(result.response)) {
         setRestorePointSnapshot(result.response.recovery_point);
+        setApprovalSnapshot(null);
+        setRouteDrivenDetailKey("restore");
+        setActiveDetailKey("restore");
+        setActiveRestorePointId(result.response.recovery_point.recovery_point_id);
+        bringCardToFront("restore");
       }
       setLastResolvedApproval(result);
       for (const queryKey of taskRefreshPlan.invalidatePrefixes) {
@@ -1391,6 +1396,13 @@ export function SecurityApp() {
       restorePoint ??
       restorePoints[0] ??
       null;
+    const resolvedRestoreOutcome =
+      selectedRestorePoint &&
+      lastResolvedApproval &&
+      isSecurityRestoreRespondResult(lastResolvedApproval.response) &&
+      lastResolvedApproval.response.recovery_point.recovery_point_id === selectedRestorePoint.recovery_point_id
+        ? lastResolvedApproval.response
+        : null;
 
     return (
       <div className="security-page__detail-stack">
@@ -1457,6 +1469,50 @@ export function SecurityApp() {
               <p className="security-page__detail-label">影响对象</p>
               {renderDetailEntryList(selectedRestorePoint.objects, "该恢复点没有对象清单。", "restore-objects")}
             </article>
+
+            {resolvedRestoreOutcome ? (
+              <>
+                <div className="security-page__detail-grid">
+                  <article className="security-page__detail-card">
+                    <p className="security-page__detail-label">恢复结果</p>
+                    <p className="security-page__detail-value">{resolvedRestoreOutcome.applied ? "completed" : "pending"}</p>
+                    <p className="security-page__detail-copy">task {resolvedRestoreOutcome.task.status}</p>
+                  </article>
+                  <article className="security-page__detail-card">
+                    <p className="security-page__detail-label">审计记录</p>
+                    <p className="security-page__detail-value security-page__detail-value--mono">
+                      {resolvedRestoreOutcome.audit_record?.audit_id ?? "未生成"}
+                    </p>
+                    <p className="security-page__detail-copy">
+                      {resolvedRestoreOutcome.audit_record
+                        ? `${resolvedRestoreOutcome.audit_record.result} · ${formatDateTime(resolvedRestoreOutcome.audit_record.created_at)}`
+                        : "最近一次恢复响应没有返回 audit_record。"}
+                    </p>
+                  </article>
+                  <article className="security-page__detail-card">
+                    <p className="security-page__detail-label">状态气泡</p>
+                    <p className="security-page__detail-value">
+                      {resolvedRestoreOutcome.bubble_message ? "已返回" : "未返回"}
+                    </p>
+                    <p className="security-page__detail-copy">
+                      {resolvedRestoreOutcome.bubble_message?.text ?? "最近一次恢复响应没有返回 bubble_message。"}
+                    </p>
+                  </article>
+                </div>
+
+                {resolvedRestoreOutcome.audit_record ? (
+                  <article className="security-page__detail-list-item">
+                    <p className="security-page__detail-label">审计摘要</p>
+                    <p className="security-page__detail-copy">
+                      {resolvedRestoreOutcome.audit_record.action} · {resolvedRestoreOutcome.audit_record.summary}
+                    </p>
+                    <p className="security-page__detail-copy">
+                      target {resolvedRestoreOutcome.audit_record.target} · result {resolvedRestoreOutcome.audit_record.result}
+                    </p>
+                  </article>
+                ) : null}
+              </>
+            ) : null}
 
             <Flex align="center" gap="3" wrap="wrap">
               <Button variant="soft" color="gray" onClick={() => openTaskDetail(selectedRestorePoint.task_id)}>
@@ -1712,10 +1768,14 @@ export function SecurityApp() {
       lastResolvedApproval.response.authorization_record.approval_id === approval.approval_id
         ? lastResolvedApproval
         : null;
-    const authorizationRecord = resolvedApprovalOutcome?.response.authorization_record;
-    const responseTask = resolvedApprovalOutcome?.response.task;
-    const bubbleMessage = resolvedApprovalOutcome?.response.bubble_message;
-    const impactScope = resolvedApprovalOutcome?.response.impact_scope as ImpactScopeDetails | undefined;
+    const resolvedApprovalResponse =
+      resolvedApprovalOutcome && isSecurityApprovalRespondResult(resolvedApprovalOutcome.response)
+        ? resolvedApprovalOutcome.response
+        : null;
+    const authorizationRecord = resolvedApprovalResponse?.authorization_record;
+    const responseTask = resolvedApprovalResponse?.task;
+    const bubbleMessage = resolvedApprovalResponse?.bubble_message;
+    const impactScope = resolvedApprovalResponse?.impact_scope as ImpactScopeDetails | undefined;
 
     return (
       <div className="security-page__detail-stack">

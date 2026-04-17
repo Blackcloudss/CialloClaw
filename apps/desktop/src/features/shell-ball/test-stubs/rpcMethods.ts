@@ -97,6 +97,15 @@ function createAuditRecord(result: AuditRecord["result"] = "success"): AuditReco
   };
 }
 
+function createAuditRecordForTask(taskId: string, result: AuditRecord["result"] = "success"): AuditRecord {
+  return {
+    ...createAuditRecord(result),
+    audit_id: `audit_${taskId}_${result}`,
+    task_id: taskId,
+    target: `workspace/${taskId}.txt`,
+  };
+}
+
 function createResolvedPayload(): DeliveryPayload {
   return {
     path: null,
@@ -177,18 +186,18 @@ function createSecurityApprovalRespondResult(taskId = "task_stub", approvalId = 
 
 function createSecurityRestoreRespondResult(taskId = "task_stub"): AgentSecurityRespondResult {
   return {
-    applied: false,
+    applied: true,
     task: {
-      ...createTask("waiting_auth", "restore_point_approval"),
+      ...createTask("completed", "restore_apply"),
       task_id: taskId,
     },
     recovery_point: createRecoveryPointForTask(taskId),
-    audit_record: null,
+    audit_record: createAuditRecordForTask(taskId),
     bubble_message: {
       bubble_id: "bubble_restore_stub",
       task_id: taskId,
       type: "status",
-      text: "Restore requires approval before execution.",
+      text: `Restored the workspace state for ${taskId}.`,
       pinned: false,
       hidden: false,
       created_at: new Date().toISOString(),
