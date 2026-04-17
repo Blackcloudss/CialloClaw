@@ -675,13 +675,20 @@ test("security audit cards and mirror cards stay aligned with the v6 frontend pr
   const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
   const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
   const mirrorDetailSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorDetailContent.tsx"), "utf8");
+  const rpcClientSource = readFileSync(resolve(desktopRoot, "src/rpc/client.ts"), "utf8");
 
   assert.match(securityAppSource, /const \[auditScope, setAuditScope\] = useState<SecurityAuditScope>\("focused_task"\)/);
   assert.match(securityAppSource, /const auditFilterTaskId = auditScope === "focused_task" \? focusedTaskId : null/);
+  assert.match(securityAppSource, /const rpcAuditRequiresTaskContext = moduleData\?\.source === "rpc"/);
+  assert.match(securityAppSource, /disabled=\{rpcAuditRequiresTaskContext\}/);
+  assert.match(securityAppSource, /当前后端仅支持按 task 查看审计记录/);
   assert.match(securityAppSource, /loadSecurityAuditRecords\(moduleData\.source, auditFilterTaskId/);
   assert.match(securityAppSource, /title: "审计记录"/);
   assert.doesNotMatch(securityAppSource, /decisionHistory/);
   assert.doesNotMatch(securityAppSource, /loadDashboardSettingsSnapshot/);
+  assert.match(rpcClientSource, /function readImportMetaEnv\(\)/);
+  assert.match(rpcClientSource, /windowEnv\?\.debugEndpoint \?\? importMetaEnv\.debugEndpoint \?\? processEnv\?\.VITE_CIALLOCLAW_DEBUG_RPC_ENDPOINT/);
+  assert.match(rpcClientSource, /windowEnv\?\.transport \?\?[\s\S]*importMetaEnv\.transport \?\?/);
   assert.match(mirrorAppSource, /overview\.history_summary\[0\] \?\? latestConversation\?\.user_text/);
   assert.match(mirrorAppSource, /overview\.history_summary\[1\] \?\?[\s\S]*latestConversation\?\.agent_text/);
   assert.match(mirrorAppSource, /latestMemoryReference\?\.summary \|\| latestMemoryReference\?\.reason/);

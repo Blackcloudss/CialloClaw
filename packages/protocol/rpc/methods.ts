@@ -536,7 +536,7 @@ export interface AgentSecurityPendingListResult {
 // `agent.security.audit.list`.
 export interface AgentSecurityAuditListParams {
   request_meta: RequestMeta;
-  task_id?: string;
+  task_id: string;
   limit: number;
   offset: number;
 }

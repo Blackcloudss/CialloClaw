@@ -391,11 +391,15 @@ export async function loadSecurityAuditRecords(
   }
 
   try {
+    if (!normalizedTaskId) {
+      throw new Error("Security audit list requires task context in RPC mode.");
+    }
+
     const params: AgentSecurityAuditListParams = {
       request_meta: createRequestMeta(),
+      task_id: normalizedTaskId,
       limit,
       offset,
-      ...(normalizedTaskId ? { task_id: normalizedTaskId } : {}),
     };
     const response = await listSecurityAuditDetailed(params);
 

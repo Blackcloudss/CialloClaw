@@ -643,6 +643,8 @@ export function SecurityApp() {
   );
   const restoreFilterTaskId = restoreScope === "focused_task" ? focusedTaskId : null;
   const auditFilterTaskId = auditScope === "focused_task" ? focusedTaskId : null;
+  const rpcAuditRequiresTaskContext = moduleData?.source === "rpc";
+  const canLoadAuditRecords = Boolean(auditFilterTaskId) || !rpcAuditRequiresTaskContext;
   const activeAuditRecordsData = useMemo(
     () => (auditRecordsData?.taskId === auditFilterTaskId ? auditRecordsData : null),
     [auditFilterTaskId, auditRecordsData],
@@ -774,10 +776,16 @@ export function SecurityApp() {
   }, [focusedTaskId, restoreScope]);
 
   useEffect(() => {
-    if (!focusedTaskId && auditScope === "focused_task") {
+    if (!focusedTaskId && auditScope === "focused_task" && !rpcAuditRequiresTaskContext) {
       setAuditScope("all");
     }
-  }, [auditScope, focusedTaskId]);
+  }, [auditScope, focusedTaskId, rpcAuditRequiresTaskContext]);
+
+  useEffect(() => {
+    if (rpcAuditRequiresTaskContext && auditScope === "all") {
+      setAuditScope("focused_task");
+    }
+  }, [auditScope, rpcAuditRequiresTaskContext]);
 
   useEffect(() => {
     if (activeDetailKey === "restore") {
@@ -941,6 +949,13 @@ export function SecurityApp() {
       return;
     }
 
+    if (!canLoadAuditRecords) {
+      setAuditRecordsData(null);
+      setAuditRecordsError(null);
+      setAuditRecordsLoading(false);
+      return;
+    }
+
     let disposed = false;
     setAuditRecordsLoading(true);
     setAuditRecordsError(null);
@@ -969,7 +984,7 @@ export function SecurityApp() {
     return () => {
       disposed = true;
     };
-  }, [activeDetailKey, auditFilterTaskId, auditOffset, moduleData]);
+  }, [activeDetailKey, auditFilterTaskId, auditOffset, canLoadAuditRecords, moduleData]);
 
   const getBoardLayout = useCallback(() => {
     const canvas = canvasRef.current;
@@ -1588,6 +1603,7 @@ export function SecurityApp() {
               <button
                 type="button"
                 className={`security-page__detail-filter-chip${auditScope === "all" ? " is-active" : ""}`}
+                disabled={rpcAuditRequiresTaskContext}
                 onClick={() => setAuditScope("all")}
               >
                 全部审计
@@ -1615,6 +1631,11 @@ export function SecurityApp() {
             {auditPageWindow ? <p className="security-page__detail-copy">当前页 {auditPageWindow}</p> : null}
           </div>
 
+          {!canLoadAuditRecords ? (
+            <div className="security-page__detail-callout">
+              当前后端仅支持按 task 查看审计记录。请从带 task 上下文的安全入口或任务详情进入。
+            </div>
+          ) : null}
           {auditRecordsLoading ? <div className="security-page__detail-note">正在同步审计记录…</div> : null}
           {auditRecordsError ? <div className="security-page__detail-callout">审计记录同步失败：{auditRecordsError}</div> : null}
           {!auditRecordsLoading && !auditRecordsError && activeAuditRecordsData && activeAuditRecordsData.items.length === 0 ? (
