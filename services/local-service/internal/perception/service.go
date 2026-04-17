@@ -258,7 +258,7 @@ func inferredPageIntent(snapshot SignalSnapshot) string {
 }
 
 func hasCopyBehavior(snapshot SignalSnapshot) bool {
-	return snapshot.CopyCount >= copyIntentThreshold || strings.EqualFold(snapshot.LastAction, "copy") || strings.TrimSpace(snapshot.ClipboardText) != ""
+	return snapshot.CopyCount >= copyIntentThreshold || strings.EqualFold(snapshot.LastAction, "copy")
 }
 
 func hasRichPageContext(snapshot SignalSnapshot) bool {

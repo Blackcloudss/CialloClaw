@@ -3300,7 +3300,7 @@ func originalTextFromTaskTitle(title string) string {
 
 // memoryQueryFromSnapshot 从当前上下文挑选最适合作为检索 query 的内容。
 func memoryQueryFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
-	for _, value := range []string{snapshot.SelectionText, snapshot.Text, snapshot.ErrorText, snapshot.VisibleText, snapshot.ScreenSummary, snapshot.PageTitle, snapshot.WindowTitle, snapshot.ClipboardText} {
+	for _, value := range []string{snapshot.SelectionText, snapshot.Text, snapshot.ErrorText} {
 		if value != "" {
 			return truncateText(value, 64)
 		}
@@ -3308,6 +3308,12 @@ func memoryQueryFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
 
 	if len(snapshot.Files) > 0 {
 		return snapshot.Files[0]
+	}
+
+	for _, value := range []string{snapshot.VisibleText, snapshot.ScreenSummary, snapshot.PageTitle, snapshot.WindowTitle, snapshot.ClipboardText} {
+		if value != "" {
+			return truncateText(value, 64)
+		}
 	}
 
 	return "task_context"
