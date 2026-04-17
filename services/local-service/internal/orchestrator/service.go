@@ -19,6 +19,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/perception"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/recommendation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
@@ -321,31 +322,28 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
-	if !boolValue(params, "confirmed", false) {
-		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已取消本次处理，请重新告诉我你的目标。", task.UpdatedAt.Format(dateTimeLayout))
-		updatedTask, err := s.runEngine.ControlTask(task.TaskID, "cancel", bubble)
+	confirmed := boolValue(params, "confirmed", false)
+	correctedIntent := mapValue(params, "corrected_intent")
+	intentValue := cloneMap(task.Intent)
+	if !confirmed && len(correctedIntent) > 0 {
+		intentValue = correctedIntent
+	}
+	if !confirmed && len(correctedIntent) == 0 {
+		updatedTask, err := s.revertTaskToIntentConfirmation(task)
 		if err != nil {
-			switch {
-			case errors.Is(err, runengine.ErrTaskNotFound):
-				return nil, ErrTaskNotFound
-			case errors.Is(err, runengine.ErrTaskStatusInvalid):
-				return nil, ErrTaskStatusInvalid
-			case errors.Is(err, runengine.ErrTaskAlreadyFinished):
-				return nil, ErrTaskAlreadyFinished
-			default:
-				return nil, err
-			}
+			return nil, err
+		}
+		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "这不是我该做的处理方式。请重新说明你的目标，或给我一个更准确的处理意图。", updatedTask.UpdatedAt.Format(dateTimeLayout))
+		if presentedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
+			updatedTask = presentedTask
+		} else {
+			return nil, ErrTaskNotFound
 		}
 		return map[string]any{
 			"task":            taskMap(updatedTask),
 			"bubble_message":  bubble,
 			"delivery_result": nil,
 		}, nil
-	}
-
-	intentValue := mapValue(params, "corrected_intent")
-	if len(intentValue) == 0 {
-		intentValue = cloneMap(task.Intent)
 	}
 	if strings.TrimSpace(stringValue(intentValue, "name", "")) == "" {
 		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "请先明确告诉我你希望执行的处理方式。", task.UpdatedAt.Format(dateTimeLayout))
@@ -403,20 +401,43 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	}, nil
 }
 
+func (s *Service) revertTaskToIntentConfirmation(task runengine.TaskRecord) (runengine.TaskRecord, error) {
+	updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, confirmationTitleFromTask(task), nil)
+	if !ok {
+		return runengine.TaskRecord{}, ErrTaskNotFound
+	}
+	return updatedTask, nil
+}
+
 // RecommendationGet 处理当前模块的相关逻辑。
 
 // RecommendationGet 处理 agent.recommendation.get，返回轻量推荐动作。
 func (s *Service) RecommendationGet(params map[string]any) (map[string]any, error) {
 	contextValue := mapValue(params, "context")
+	signals := perception.CaptureContextSignals(stringValue(params, "source", "floating_ball"), stringValue(params, "scene", "hover"), contextValue)
 	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 20, 0)
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 20, 0)
 	notepadItems, _ := s.runEngine.NotepadItems("", 20, 0)
 	result := s.recommendation.Get(recommendation.GenerateInput{
 		Source:          stringValue(params, "source", "floating_ball"),
 		Scene:           stringValue(params, "scene", "hover"),
-		PageTitle:       stringValue(contextValue, "page_title", ""),
-		AppName:         stringValue(contextValue, "app_name", ""),
-		SelectionText:   stringValue(contextValue, "selection_text", ""),
+		PageTitle:       signals.PageTitle,
+		PageURL:         signals.PageURL,
+		AppName:         signals.AppName,
+		WindowTitle:     signals.WindowTitle,
+		VisibleText:     signals.VisibleText,
+		ScreenSummary:   signals.ScreenSummary,
+		SelectionText:   signals.SelectionText,
+		ClipboardText:   signals.ClipboardText,
+		ClipboardMime:   signals.ClipboardMimeType,
+		HoverTarget:     signals.HoverTarget,
+		LastAction:      signals.LastAction,
+		ErrorText:       signals.ErrorText,
+		DwellMillis:     signals.DwellMillis,
+		WindowSwitches:  signals.WindowSwitchCount,
+		PageSwitches:    signals.PageSwitchCount,
+		CopyCount:       signals.CopyCount,
+		Signals:         signals,
 		UnfinishedTasks: unfinishedTasks,
 		FinishedTasks:   finishedTasks,
 		NotepadItems:    notepadItems,
@@ -962,6 +983,10 @@ func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, e
 	highValueSignal := []string(nil)
 	if shouldIncludeOverviewField(includeAll, includeSet, "high_value_signal") {
 		highValueSignal = buildDashboardSignalsWithAudit(unfinishedTasks, finishedTasks, pendingApprovals, latestAudit)
+		if contextValue := mapValue(params, "context"); len(contextValue) > 0 {
+			highValueSignal = append(highValueSignal, perception.BehaviorSignals(perception.CaptureContextSignals("dashboard", "hover", contextValue))...)
+			highValueSignal = dedupeStringSlice(highValueSignal)
+		}
 		if focusMode {
 			highValueSignal = filterDashboardSignalsForFocus(highValueSignal)
 		}
@@ -2224,6 +2249,23 @@ func filterDashboardSignalsForFocus(signals []string) []string {
 	return append([]string(nil), signals[:2]...)
 }
 
+func dedupeStringSlice(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return result
+}
+
 func buildDashboardSignals(unfinishedTasks, finishedTasks []runengine.TaskRecord, pendingApprovals []map[string]any) []string {
 	signals := make([]string, 0, 3)
 	if len(unfinishedTasks) > 0 {
@@ -3236,7 +3278,17 @@ func isEmptySnapshot(snapshot contextsvc.TaskContextSnapshot) bool {
 		len(snapshot.Files) == 0 &&
 		strings.TrimSpace(snapshot.PageTitle) == "" &&
 		strings.TrimSpace(snapshot.PageURL) == "" &&
-		strings.TrimSpace(snapshot.AppName) == ""
+		strings.TrimSpace(snapshot.AppName) == "" &&
+		strings.TrimSpace(snapshot.WindowTitle) == "" &&
+		strings.TrimSpace(snapshot.VisibleText) == "" &&
+		strings.TrimSpace(snapshot.ScreenSummary) == "" &&
+		strings.TrimSpace(snapshot.ClipboardText) == "" &&
+		strings.TrimSpace(snapshot.HoverTarget) == "" &&
+		strings.TrimSpace(snapshot.LastAction) == "" &&
+		snapshot.DwellMillis == 0 &&
+		snapshot.CopyCount == 0 &&
+		snapshot.WindowSwitches == 0 &&
+		snapshot.PageSwitches == 0
 }
 
 func originalTextFromTaskTitle(title string) string {
@@ -3249,11 +3301,19 @@ func originalTextFromTaskTitle(title string) string {
 	return trimmed
 }
 
+func confirmationTitleFromTask(task runengine.TaskRecord) string {
+	subject := strings.TrimSpace(originalTextFromTaskTitle(task.Title))
+	if subject == "" {
+		subject = "当前任务"
+	}
+	return "确认处理方式：" + subject
+}
+
 // memoryQueryFromSnapshot 处理当前模块的相关逻辑。
 
 // memoryQueryFromSnapshot 从当前上下文挑选最适合作为检索 query 的内容。
 func memoryQueryFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
-	for _, value := range []string{snapshot.SelectionText, snapshot.Text, snapshot.ErrorText, snapshot.PageTitle} {
+	for _, value := range []string{snapshot.SelectionText, snapshot.Text, snapshot.ErrorText} {
 		if value != "" {
 			return truncateText(value, 64)
 		}
@@ -3261,6 +3321,12 @@ func memoryQueryFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
 
 	if len(snapshot.Files) > 0 {
 		return snapshot.Files[0]
+	}
+
+	for _, value := range []string{snapshot.VisibleText, snapshot.ScreenSummary, snapshot.PageTitle, snapshot.WindowTitle, snapshot.ClipboardText} {
+		if value != "" {
+			return truncateText(value, 64)
+		}
 	}
 
 	return "task_context"
@@ -3277,7 +3343,23 @@ func buildMemorySummary(snapshot contextsvc.TaskContextSnapshot, taskIntent map[
 	if preview == "" {
 		preview = title
 	}
-	return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, 96))
+	perceptionSummary := []string{}
+	if snapshot.CopyCount > 0 || strings.EqualFold(snapshot.LastAction, "copy") {
+		perceptionSummary = append(perceptionSummary, "copy")
+	}
+	if snapshot.DwellMillis > 0 {
+		perceptionSummary = append(perceptionSummary, fmt.Sprintf("dwell=%dms", snapshot.DwellMillis))
+	}
+	if snapshot.WindowSwitches > 0 || snapshot.PageSwitches > 0 {
+		perceptionSummary = append(perceptionSummary, fmt.Sprintf("switch=%d/%d", snapshot.WindowSwitches, snapshot.PageSwitches))
+	}
+	if snapshot.PageTitle != "" {
+		perceptionSummary = append(perceptionSummary, "page="+truncateText(snapshot.PageTitle, 24))
+	}
+	if len(perceptionSummary) == 0 {
+		return fmt.Sprintf("任务完成，意图=%s，输入=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), title, truncateText(preview, 96))
+	}
+	return fmt.Sprintf("任务完成，意图=%s，输入=%s，感知=%s，交付=%s，结果摘要=%s", intentName, truncateText(query, 48), strings.Join(perceptionSummary, ", "), title, truncateText(preview, 96))
 }
 
 // resultSpecFromIntent 处理当前模块的相关逻辑。
