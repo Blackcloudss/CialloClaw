@@ -1164,13 +1164,15 @@ func TestServiceNotepadConvertToTaskRejectsAlreadyLinkedItem(t *testing.T) {
 func TestServiceNotepadConvertToTaskRejectsInFlightClaim(t *testing.T) {
 	service := newTestService()
 	service.runEngine.ReplaceNotepadItems([]map[string]any{{
-		"item_id":        "todo_claimed",
-		"title":          "claimed note",
-		"bucket":         "upcoming",
-		"status":         "normal",
-		"type":           "todo_item",
-		"linked_task_id": "__claim__:todo_claimed",
+		"item_id": "todo_claimed",
+		"title":   "claimed note",
+		"bucket":  "upcoming",
+		"status":  "normal",
+		"type":    "todo_item",
 	}})
+	if _, handled, err := service.runEngine.ClaimNotepadItemTask("todo_claimed"); err != nil || !handled {
+		t.Fatalf("expected runtime claim to succeed before convert, handled=%v err=%v", handled, err)
+	}
 
 	_, err := service.NotepadConvertToTask(map[string]any{
 		"item_id":   "todo_claimed",

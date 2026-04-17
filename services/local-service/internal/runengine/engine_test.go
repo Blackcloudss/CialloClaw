@@ -649,6 +649,10 @@ func TestEngineLinkNotepadItemTaskPersistsReference(t *testing.T) {
 		"type":    "todo_item",
 	}})
 
+	if _, handled, err := engine.ClaimNotepadItemTask("todo_link"); err != nil || !handled {
+		t.Fatalf("expected claim before link to succeed, handled=%v err=%v", handled, err)
+	}
+
 	linked, ok := engine.LinkNotepadItemTask("todo_link", "task_123")
 	if !ok {
 		t.Fatal("expected LinkNotepadItemTask to succeed")
@@ -680,8 +684,8 @@ func TestEngineClaimNotepadItemTaskRejectsSecondClaim(t *testing.T) {
 	if err != nil || !handled {
 		t.Fatalf("expected first claim to succeed, handled=%v err=%v", handled, err)
 	}
-	if claimed["linked_task_id"] != "__claim__:todo_claim" {
-		t.Fatalf("expected claim marker on item, got %+v", claimed)
+	if _, exists := claimed["linked_task_id"]; exists {
+		t.Fatalf("expected claim marker to stay internal, got %+v", claimed)
 	}
 
 	_, handled, err = engine.ClaimNotepadItemTask("todo_claim")
@@ -690,6 +694,55 @@ func TestEngineClaimNotepadItemTaskRejectsSecondClaim(t *testing.T) {
 	}
 	if err == nil || err.Error() != "notepad item is already being converted: todo_claim" {
 		t.Fatalf("expected in-flight conversion error, got %v", err)
+	}
+}
+
+func TestEngineMarkNotepadClosedTracksLatestRestoreState(t *testing.T) {
+	engine := NewEngine()
+	now := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+	engine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":         "todo_reclose",
+		"title":           "reclose me",
+		"bucket":          "closed",
+		"status":          "completed",
+		"type":            "todo_item",
+		"previous_bucket": "later",
+		"previous_due_at": now.Add(24 * time.Hour).Format(time.RFC3339),
+		"previous_status": "normal",
+		"ended_at":        now.Add(-2 * time.Hour).Format(time.RFC3339),
+	}})
+
+	restored, _, _, handled, err := engine.UpdateNotepadItem("todo_reclose", "restore")
+	if err != nil || !handled {
+		t.Fatalf("expected initial restore to succeed, handled=%v err=%v", handled, err)
+	}
+	if restored["bucket"] != "later" {
+		t.Fatalf("expected restore to return item to later bucket, got %+v", restored)
+	}
+
+	moved, _, _, handled, err := engine.UpdateNotepadItem("todo_reclose", "move_upcoming")
+	if err != nil || !handled {
+		t.Fatalf("expected move_upcoming after restore to succeed, handled=%v err=%v", handled, err)
+	}
+	if moved["bucket"] != "upcoming" {
+		t.Fatalf("expected move_upcoming to switch to upcoming, got %+v", moved)
+	}
+
+	reclosed, _, _, handled, err := engine.UpdateNotepadItem("todo_reclose", "complete")
+	if err != nil || !handled {
+		t.Fatalf("expected second close to succeed, handled=%v err=%v", handled, err)
+	}
+	if reclosed["bucket"] != "closed" {
+		t.Fatalf("expected reclosed item to be closed, got %+v", reclosed)
+	}
+
+	restoredAgain, _, _, handled, err := engine.UpdateNotepadItem("todo_reclose", "restore")
+	if err != nil || !handled {
+		t.Fatalf("expected second restore to succeed, handled=%v err=%v", handled, err)
+	}
+	if restoredAgain["bucket"] != "upcoming" {
+		t.Fatalf("expected restore to use latest pre-close bucket, got %+v", restoredAgain)
 	}
 }
 

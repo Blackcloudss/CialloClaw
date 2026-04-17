@@ -853,6 +853,12 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	if !handled {
 		return nil, fmt.Errorf("notepad item not found: %s", itemID)
 	}
+	claimed := true
+	defer func() {
+		if claimed {
+			s.runEngine.ReleaseNotepadItemClaim(itemID)
+		}
+	}()
 
 	itemTitle := stringValue(item, "title", "待办事项")
 	taskIntent := notepadIntent(item)
@@ -870,6 +876,7 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	if !ok {
 		return nil, fmt.Errorf("failed to link notepad item to task: %s", itemID)
 	}
+	claimed = false
 
 	return map[string]any{
 		"task":          taskMap(task),

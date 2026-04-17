@@ -141,6 +141,7 @@ type Engine struct {
 	inspector    InspectorConfig
 	settings     map[string]any
 	notepadItems []map[string]any
+	notepadClaims map[string]struct{}
 }
 
 // NewEngine 创建并返回Engine。
@@ -163,6 +164,7 @@ func newEngine(taskStore storage.TaskRunStore) (*Engine, error) {
 		tasks:        map[string]*TaskRecord{},
 		taskOrder:    []string{},
 		sessionOrder: []string{},
+		notepadClaims: map[string]struct{}{},
 		inspector: InspectorConfig{
 			TaskSources:          []string{defaultTaskSourcePath},
 			InspectionInterval:   map[string]any{"unit": "minute", "value": 15},
@@ -1331,19 +1333,11 @@ func (e *Engine) CompleteNotepadItem(itemID string) (map[string]any, bool) {
 	return normalizeNotepadItem(updated, e.now()), true
 }
 
-func notepadClaimToken(itemID string) string {
-	return "__claim__:" + strings.TrimSpace(itemID)
-}
-
-func isNotepadClaimed(linkedTaskID string) bool {
-	return strings.HasPrefix(strings.TrimSpace(linkedTaskID), "__claim__:")
-}
-
 func (e *Engine) ClaimNotepadItemTask(itemID string) (map[string]any, bool, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	item, index, ok := e.findNotepadItem(itemID)
+	item, _, ok := e.findNotepadItem(itemID)
 	if !ok {
 		return nil, false, nil
 	}
@@ -1355,16 +1349,21 @@ func (e *Engine) ClaimNotepadItemTask(itemID string) (map[string]any, bool, erro
 
 	linkedTaskID := stringValue(item, "linked_task_id", "")
 	if linkedTaskID != "" {
-		if isNotepadClaimed(linkedTaskID) {
-			return nil, true, fmt.Errorf("notepad item is already being converted: %s", itemID)
-		}
 		return nil, true, fmt.Errorf("notepad item is already linked to task: %s", linkedTaskID)
 	}
+	if _, claimed := e.notepadClaims[itemID]; claimed {
+		return nil, true, fmt.Errorf("notepad item is already being converted: %s", itemID)
+	}
 
-	updated := cloneMap(item)
-	updated["linked_task_id"] = notepadClaimToken(itemID)
-	e.notepadItems[index] = updated
-	return normalizeNotepadItem(updated, e.now()), true, nil
+	e.notepadClaims[itemID] = struct{}{}
+	return normalizeNotepadItem(item, e.now()), true, nil
+}
+
+func (e *Engine) ReleaseNotepadItemClaim(itemID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	delete(e.notepadClaims, strings.TrimSpace(itemID))
 }
 
 func (e *Engine) LinkNotepadItemTask(itemID, taskID string) (map[string]any, bool) {
@@ -1377,13 +1376,17 @@ func (e *Engine) LinkNotepadItemTask(itemID, taskID string) (map[string]any, boo
 	}
 
 	linkedTaskID := stringValue(item, "linked_task_id", "")
-	if linkedTaskID != "" && linkedTaskID != notepadClaimToken(itemID) && linkedTaskID != strings.TrimSpace(taskID) {
+	if linkedTaskID != "" && linkedTaskID != strings.TrimSpace(taskID) {
+		return nil, false
+	}
+	if _, claimed := e.notepadClaims[itemID]; !claimed {
 		return nil, false
 	}
 
 	updated := cloneMap(item)
 	updated["linked_task_id"] = strings.TrimSpace(taskID)
 	e.notepadItems[index] = updated
+	delete(e.notepadClaims, itemID)
 	return normalizeNotepadItem(updated, e.now()), true
 }
 
@@ -2116,15 +2119,9 @@ func markNotepadClosed(item map[string]any, currentBucket, nextStatus string, no
 	if item == nil {
 		return
 	}
-	if _, ok := item["previous_bucket"]; !ok {
-		item["previous_bucket"] = currentBucket
-	}
-	if _, ok := item["previous_due_at"]; !ok {
-		item["previous_due_at"] = item["due_at"]
-	}
-	if _, ok := item["previous_status"]; !ok {
-		item["previous_status"] = stringValue(item, "status", "normal")
-	}
+	item["previous_bucket"] = currentBucket
+	item["previous_due_at"] = item["due_at"]
+	item["previous_status"] = stringValue(item, "status", "normal")
 	item["bucket"] = "closed"
 	item["status"] = nextStatus
 	item["due_at"] = nil
