@@ -50,6 +50,8 @@ type Service struct {
 	toolCallStore      ToolCallStore
 	artifactStore      ArtifactStore
 	todoStore          TodoStore
+	traceStore         TraceStore
+	evalStore          EvalStore
 	secretStore        SecretStore
 	auditStore         AuditStore
 	recoveryPointStore RecoveryPointStore
@@ -70,6 +72,8 @@ func NewService(adapter platform.StorageAdapter) *Service {
 	toolCallStore := ToolCallStore(newInMemoryToolCallStore())
 	artifactStore := ArtifactStore(newInMemoryArtifactStore())
 	todoStore := TodoStore(NewInMemoryTodoStore())
+	traceStore := TraceStore(newInMemoryTraceStore())
+	evalStore := EvalStore(newInMemoryEvalStore())
 	secretStore := SecretStore(newInMemorySecretStore())
 	auditStore := AuditStore(newInMemoryAuditStore())
 	recoveryPointStore := RecoveryPointStore(newInMemoryRecoveryPointStore())
@@ -134,6 +138,24 @@ func NewService(adapter platform.StorageAdapter) *Service {
 				fallbackActive = true
 			}
 
+			sqliteTraceStore, err := NewSQLiteTraceStore(databasePath)
+			if err == nil {
+				traceStore = sqliteTraceStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite trace store: %w", err))
+				fallbackActive = true
+			}
+
+			sqliteEvalStore, err := NewSQLiteEvalStore(databasePath)
+			if err == nil {
+				evalStore = sqliteEvalStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite eval store: %w", err))
+				fallbackActive = true
+			}
+
 			if secretPath := strings.TrimSpace(adapter.SecretStorePath()); secretPath != "" {
 				sqliteSecretStore, err := NewSQLiteSecretStore(secretPath)
 				if err == nil {
@@ -175,6 +197,8 @@ func NewService(adapter platform.StorageAdapter) *Service {
 		toolCallStore:      toolCallStore,
 		artifactStore:      artifactStore,
 		todoStore:          todoStore,
+		traceStore:         traceStore,
+		evalStore:          evalStore,
 		secretStore:        secretStore,
 		auditStore:         auditStore,
 		recoveryPointStore: recoveryPointStore,
@@ -187,6 +211,16 @@ func NewService(adapter platform.StorageAdapter) *Service {
 		storeInitErr:       storeInitErr,
 		fallbackActive:     fallbackActive,
 	}
+}
+
+// TraceStore returns the configured trace persistence store.
+func (s *Service) TraceStore() TraceStore {
+	return s.traceStore
+}
+
+// EvalStore returns the configured eval snapshot persistence store.
+func (s *Service) EvalStore() EvalStore {
+	return s.evalStore
 }
 
 // Backend 处理当前模块的相关逻辑。
@@ -335,6 +369,12 @@ func (s *Service) Close() error {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.todoStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.traceStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.evalStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.secretStore.(interface{ Close() error }); ok {

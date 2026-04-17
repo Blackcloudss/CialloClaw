@@ -35,6 +35,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 	_ "modernc.org/sqlite"
 )
 
@@ -295,7 +296,7 @@ func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, execut
 		modelService,
 		toolRegistry,
 		pluginService,
-	).WithAudit(auditService).WithStorage(storageService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem))
+	).WithAudit(auditService).WithStorage(storageService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem)).WithTraceEval(traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()))
 
 	return service, workspaceRoot
 }
@@ -1556,6 +1557,75 @@ func TestServiceRecommendationGetUsesRuntimeTaskState(t *testing.T) {
 	}
 	if !strings.Contains(items[0]["text"].(string), taskTitle) {
 		t.Fatalf("expected recommendation text to reference runtime task title, got %v", items[0]["text"])
+	}
+}
+
+func TestExecuteTaskPersistsTraceAndEvalSnapshots(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed trace summary")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_trace_eval",
+		Title:       "trace eval task",
+		SourceType:  "floating_ball",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+	})
+	updated, _, _, _, err := service.executeTask(task, contextsvc.TaskContextSnapshot{InputType: "text", Text: "please summarize this content"}, map[string]any{"name": "summarize", "arguments": map[string]any{}})
+	if err != nil {
+		t.Fatalf("executeTask failed: %v", err)
+	}
+	traces, total, err := service.storage.TraceStore().ListTraceRecords(context.Background(), updated.TaskID, 10, 0)
+	if err != nil || total != 1 || len(traces) != 1 {
+		t.Fatalf("expected one trace record, total=%d len=%d err=%v", total, len(traces), err)
+	}
+	if traces[0].ReviewResult != "passed" {
+		t.Fatalf("expected passing trace review result, got %+v", traces[0])
+	}
+	evals, total, err := service.storage.EvalStore().ListEvalSnapshots(context.Background(), updated.TaskID, 10, 0)
+	if err != nil || total != 1 || len(evals) != 1 {
+		t.Fatalf("expected one eval snapshot, total=%d len=%d err=%v", total, len(evals), err)
+	}
+	if evals[0].Status != "passed" {
+		t.Fatalf("expected passing eval snapshot status, got %+v", evals[0])
+	}
+}
+
+func TestMaybeEscalateHumanLoopBlocksTask(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "unused")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_hitl",
+		Title:       "doom loop task",
+		SourceType:  "floating_ball",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop"},
+		CurrentStep: "agent_loop",
+		RiskLevel:   "yellow",
+	})
+	capture, err := service.traceEval.Capture(traceeval.CaptureInput{
+		TaskID:     task.TaskID,
+		RunID:      task.RunID,
+		IntentName: "agent_loop",
+		Snapshot:   contextsvc.TaskContextSnapshot{Text: "keep trying"},
+		ToolCalls: []tools.ToolCallRecord{
+			{ToolName: "read_file", Output: map[string]any{"loop_round": 3}},
+			{ToolName: "read_file", Output: map[string]any{"loop_round": 3}},
+			{ToolName: "read_file", Output: map[string]any{"loop_round": 3}},
+		},
+		DurationMS: 500,
+	})
+	if err != nil {
+		t.Fatalf("trace capture failed: %v", err)
+	}
+	escalated, bubble, ok := service.maybeEscalateHumanLoop(task, capture)
+	if !ok {
+		t.Fatal("expected human escalation to block task")
+	}
+	if escalated.Status != "blocked" || escalated.CurrentStep != "human_in_loop" {
+		t.Fatalf("expected blocked human_in_loop task, got %+v", escalated)
+	}
+	if bubble == nil || !strings.Contains(bubble["text"].(string), "Doom Loop") {
+		t.Fatalf("expected escalation bubble to mention doom loop, got %+v", bubble)
 	}
 }
 

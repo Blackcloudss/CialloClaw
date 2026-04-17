@@ -27,6 +27,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
 
 // ErrTaskNotFound 定义当前模块的基础变量。
@@ -58,6 +59,7 @@ type Service struct {
 	plugin         *plugin.Service
 	audit          *audit.Service
 	recommendation *recommendation.Service
+	traceEval      *traceeval.Service
 	executor       *execution.Service
 	inspector      *taskinspector.Service
 	storage        *storage.Service
@@ -89,6 +91,7 @@ func NewService(
 		plugin:         plugin,
 		audit:          audit.NewService(),
 		recommendation: recommendation.NewService(),
+		traceEval:      traceeval.NewService(nil, nil),
 		inspector:      taskinspector.NewService(nil),
 	}
 }
@@ -119,6 +122,14 @@ func (s *Service) WithTaskInspector(inspectorService *taskinspector.Service) *Se
 func (s *Service) WithStorage(storageService *storage.Service) *Service {
 	if storageService != nil {
 		s.storage = storageService
+	}
+	return s
+}
+
+// WithTraceEval attaches the owner-5 trace/eval recording service.
+func (s *Service) WithTraceEval(traceEvalService *traceeval.Service) *Service {
+	if traceEvalService != nil {
+		s.traceEval = traceEvalService
 	}
 	return s
 }
@@ -4018,6 +4029,14 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		artifacts := delivery.EnsureArtifactIdentifiers(processingTask.TaskID, s.delivery.BuildArtifact(processingTask.TaskID, resultTitle, deliveryResult))
 		resultBubble := s.delivery.BuildBubbleMessage(processingTask.TaskID, "result", resultBubbleText, processingTask.UpdatedAt.Format(dateTimeLayout))
 		processingTask = s.appendAuditData(processingTask, compactAuditRecords(s.audit.BuildDeliveryAudit(processingTask.TaskID, processingTask.RunID, deliveryResult)), nil)
+		traceCapture := s.captureExecutionTrace(processingTask, snapshot, taskIntent, execution.Result{
+			Content:        previewTextForDeliveryType(deliveryType),
+			DeliveryResult: deliveryResult,
+			Artifacts:      artifacts,
+		}, nil)
+		if escalatedTask, escalatedBubble, ok := s.maybeEscalateHumanLoop(processingTask, traceCapture); ok {
+			return escalatedTask, escalatedBubble, nil, nil, nil
+		}
 		updatedTask, ok := s.runEngine.CompleteTask(processingTask.TaskID, deliveryResult, resultBubble, artifacts)
 		if !ok {
 			return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
@@ -4046,6 +4065,10 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	}
 	executionAuditRecords, executionTokenUsage := s.buildExecutionAudit(processingTask, executionResult.ToolCalls, auditDeliveryResult)
 	processingTask = s.appendAuditData(processingTask, executionAuditRecords, executionTokenUsage)
+	traceCapture := s.captureExecutionTrace(processingTask, snapshot, taskIntent, executionResult, err)
+	if escalatedTask, escalatedBubble, ok := s.maybeEscalateHumanLoop(processingTask, traceCapture); ok {
+		return escalatedTask, escalatedBubble, nil, nil, nil
+	}
 	if err != nil {
 		failedTask, failureBubble := s.failExecutionTask(processingTask, taskIntent, executionResult, err)
 		return failedTask, failureBubble, nil, nil, nil
@@ -4064,6 +4087,52 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	}
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
+}
+
+func (s *Service) captureExecutionTrace(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, result execution.Result, executionErr error) traceeval.CaptureResult {
+	if s.traceEval == nil {
+		return traceeval.CaptureResult{}
+	}
+	capture, err := s.traceEval.Capture(traceeval.CaptureInput{
+		TaskID:          task.TaskID,
+		RunID:           task.RunID,
+		IntentName:      stringValue(taskIntent, "name", ""),
+		Snapshot:        snapshot,
+		OutputText:      result.Content,
+		DeliveryResult:  cloneMap(result.DeliveryResult),
+		Artifacts:       cloneMapSlice(result.Artifacts),
+		ModelInvocation: cloneMap(result.ModelInvocation),
+		ToolCalls:       append([]tools.ToolCallRecord(nil), result.ToolCalls...),
+		TokenUsage:      cloneMap(task.TokenUsage),
+		DurationMS:      result.DurationMS,
+		ExecutionError:  executionErr,
+	})
+	if err != nil {
+		return traceeval.CaptureResult{}
+	}
+	_ = s.traceEval.Record(context.Background(), capture)
+	return capture
+}
+
+func (s *Service) maybeEscalateHumanLoop(task runengine.TaskRecord, capture traceeval.CaptureResult) (runengine.TaskRecord, map[string]any, bool) {
+	if capture.HumanInLoop == nil {
+		return runengine.TaskRecord{}, nil, false
+	}
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", capture.HumanInLoop.Summary, task.UpdatedAt.Format(dateTimeLayout))
+	escalation := map[string]any{
+		"escalation_id":    capture.HumanInLoop.EscalationID,
+		"reason":           capture.HumanInLoop.Reason,
+		"review_result":    capture.HumanInLoop.ReviewResult,
+		"status":           capture.HumanInLoop.Status,
+		"summary":          capture.HumanInLoop.Summary,
+		"suggested_action": capture.HumanInLoop.SuggestedAction,
+		"created_at":       capture.HumanInLoop.CreatedAt,
+	}
+	updatedTask, ok := s.runEngine.EscalateHumanLoop(task.TaskID, escalation, bubble)
+	if !ok {
+		return runengine.TaskRecord{}, nil, false
+	}
+	return updatedTask, bubble, true
 }
 
 func (s *Service) recordExecutionToolCalls(task runengine.TaskRecord, toolCalls []tools.ToolCallRecord) runengine.TaskRecord {

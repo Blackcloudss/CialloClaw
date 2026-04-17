@@ -1024,6 +1024,40 @@ func (e *Engine) QueueTaskForSession(taskID, blockingTaskID string, bubbleMessag
 	return record.clone(), true
 }
 
+// EscalateHumanLoop blocks one task for structured human review while keeping
+// the pending escalation payload available for later resume/cancel handling.
+func (e *Engine) EscalateHumanLoop(taskID string, escalation map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.Status = "blocked"
+	record.CurrentStep = "human_in_loop"
+	record.PendingExecution = map[string]any{
+		"kind":       "human_in_loop",
+		"escalation": cloneMap(escalation),
+	}
+	record.UpdatedAt = e.now()
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.Timeline = advanceTimeline(record.Timeline, "human_in_loop", "pending", "等待人工介入处理当前任务")
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEventWithPayload(record, "task.updated", map[string]any{
+		"status":       record.Status,
+		"current_step": record.CurrentStep,
+	})
+	record.queueNotification("task.updated", map[string]any{
+		"task_id": record.TaskID,
+		"status":  record.Status,
+	})
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
 // NextQueuedTaskForSession returns the earliest queued task that is waiting for
 // the same session lane to become available.
 func (e *Engine) NextQueuedTaskForSession(sessionID string) (TaskRecord, bool) {

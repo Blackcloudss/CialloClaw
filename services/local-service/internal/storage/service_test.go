@@ -155,6 +155,9 @@ func TestCapabilitiesReturnsConfiguredStructuredStorageOnly(t *testing.T) {
 	if !capabilities.SupportsMemoryStore || !capabilities.SupportsArtifactStore || !capabilities.SupportsSecretStore {
 		t.Fatalf("unexpected unsupported capabilities enabled: %+v", capabilities)
 	}
+	if service.TraceStore() == nil || service.EvalStore() == nil {
+		t.Fatalf("expected trace and eval stores to be wired: %+v", capabilities)
+	}
 	if !capabilities.SupportsRetrievalHits || !capabilities.SupportsFTS5 || !capabilities.SupportsSQLiteVecStub {
 		t.Fatalf("expected retrieval and search skeleton capabilities to be enabled: %+v", capabilities)
 	}
