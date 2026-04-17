@@ -4231,16 +4231,18 @@ test("shell-ball clipboard prompts stay active for 10 seconds after clipboard re
 test("shell-ball app routes fresh clipboard prompts through the formal text submit path", () => {
   const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const syncSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.windowSync.ts"), "utf8");
 
-  assert.match(appSource, /const SHELL_BALL_CLIPBOARD_POLL_MS = 1_000;/);
   assert.match(appSource, /const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;/);
   assert.match(appSource, /const \[clipboardPrompt, setClipboardPrompt\] = useState<ShellBallClipboardPrompt \| null>\(null\);/);
+  assert.match(appSource, /listen<ShellBallClipboardSnapshotPayload>\(shellBallWindowSyncEvents\.clipboardSnapshot/);
   assert.match(appSource, /if \(clipboardPrompt !== null\) \{/);
   assert.match(appSource, /void handleCoordinatorClipboardPrompt\(clipboardPrompt\.text\);/);
   assert.match(coordinatorSource, /const handleClipboardPrompt = useCallback\(async \(text: string\) => \{/);
   assert.match(coordinatorSource, /submitTextInput\(\{/);
   assert.match(coordinatorSource, /trigger: "hover_text_input"/);
   assert.match(coordinatorSource, /inputMode: "text"/);
+  assert.match(syncSource, /clipboardSnapshot: "desktop-shell-ball:clipboard-snapshot"/);
 });
 
 test("shell-ball selected-text prompt only surfaces in resting states", () => {

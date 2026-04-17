@@ -3,7 +3,7 @@
  * windows, drag/drop affordances, and dashboard transitions around it.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useEventListener, useInterval } from "ahooks";
+import { useEventListener } from "ahooks";
 import { getCurrentWindow, monitorFromPoint } from "@tauri-apps/api/window";
 import { ShellBallSurface, shouldAcceptShellBallTextDrop } from "./ShellBallSurface";
 import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
@@ -12,7 +12,11 @@ import { getShellBallMotionConfig } from "./shellBall.motion";
 import type { ShellBallVisualState } from "./shellBall.types";
 import { emitShellBallInputRequestFocus, useShellBallCoordinator } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
-import { shellBallWindowSyncEvents, type ShellBallSelectionSnapshotPayload } from "./shellBall.windowSync";
+import {
+  shellBallWindowSyncEvents,
+  type ShellBallClipboardSnapshotPayload,
+  type ShellBallSelectionSnapshotPayload,
+} from "./shellBall.windowSync";
 import type { ShellBallDashboardTransitionRequest } from "../../platform/dashboardWindowTransition";
 import { shellBallDashboardTransitionEvents } from "../../platform/dashboardWindowTransition";
 import {
@@ -22,7 +26,6 @@ import {
   showShellBallWindow,
 } from "../../platform/shellBallWindowController";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
-import { readClipboardText } from "@/services/clipboardService";
 
 type ShellBallAppProps = {
   isDev?: boolean;
@@ -37,7 +40,6 @@ type ShellBallWindowAnchor = {
 
 const SHELL_BALL_DASHBOARD_TRANSITION_DURATION_MS = 260;
 const SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS = 240;
-const SHELL_BALL_CLIPBOARD_POLL_MS = 1_000;
 const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;
 
 type ShellBallClipboardPrompt = {
@@ -244,7 +246,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const [clipboardPrompt, setClipboardPrompt] = useState<ShellBallClipboardPrompt | null>(null);
   const anchorRef = useRef<ShellBallWindowAnchor | null>(null);
   const dashboardTransitionPhaseRef = useRef<ShellBallDashboardTransitionPhase>("idle");
-  const clipboardBaselineRef = useRef<string | null>(null);
   const clipboardPromptClearTimeoutRef = useRef<number | null>(null);
   const selectionPromptClearTimeoutRef = useRef<number | null>(null);
   const transitionQueueRef = useRef(Promise.resolve());
@@ -502,39 +503,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     };
   }, [clipboardPrompt]);
 
-  useInterval(() => {
-    void (async () => {
-      let clipboardText = "";
-
-      try {
-        clipboardText = await readClipboardText();
-      } catch {
-        return;
-      }
-
-      if (clipboardBaselineRef.current === null) {
-        clipboardBaselineRef.current = clipboardText;
-        return;
-      }
-
-      if (clipboardText === clipboardBaselineRef.current) {
-        return;
-      }
-
-      clipboardBaselineRef.current = clipboardText;
-
-      if (clipboardText.trim() === "") {
-        setClipboardPrompt(null);
-        return;
-      }
-
-      setClipboardPrompt({
-        text: clipboardText,
-        expiresAt: Date.now() + SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS,
-      });
-    })();
-  }, SHELL_BALL_CLIPBOARD_POLL_MS);
-
   useEffect(() => {
     const currentWindow = getCurrentWindow();
 
@@ -581,6 +549,43 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
         window.clearTimeout(selectionPromptClearTimeoutRef.current);
         selectionPromptClearTimeoutRef.current = null;
       }
+      cleanup?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const currentWindow = getCurrentWindow();
+
+    if (currentWindow.label !== shellBallWindowLabels.ball) {
+      return;
+    }
+
+    let cleanup: (() => void) | null = null;
+    let disposed = false;
+
+    void currentWindow
+      .listen<ShellBallClipboardSnapshotPayload>(shellBallWindowSyncEvents.clipboardSnapshot, ({ payload }) => {
+        if (payload.text.trim() === "") {
+          setClipboardPrompt(null);
+          return;
+        }
+
+        setClipboardPrompt({
+          text: payload.text,
+          expiresAt: Date.now() + SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS,
+        });
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+
+        cleanup = unlisten;
+      });
+
+    return () => {
+      disposed = true;
       cleanup?.();
     };
   }, []);

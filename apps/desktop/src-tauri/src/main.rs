@@ -22,8 +22,17 @@ use std::collections::HashSet;
 
 #[cfg(windows)]
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+    Foundation::{HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
     Graphics::Gdi::{PtInRect, ScreenToClient},
+    System::{
+        DataExchange::{
+            CloseClipboard, GetClipboardData, GetClipboardSequenceNumber,
+            IsClipboardFormatAvailable, OpenClipboard,
+        },
+        Memory::{GlobalLock, GlobalUnlock},
+        Ole::CF_UNICODETEXT,
+    },
+    UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_DELETE, VK_SHIFT},
     UI::WindowsAndMessaging::*,
 };
 
@@ -39,6 +48,7 @@ const SHELL_BALL_VOICE_WINDOW_LABEL: &str = "shell-ball-voice";
 const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 const SHELL_BALL_DASHBOARD_TRANSITION_REQUEST_EVENT: &str =
     "desktop-shell-ball:dashboard-transition-request";
+const SHELL_BALL_CLIPBOARD_SNAPSHOT_EVENT: &str = "desktop-shell-ball:clipboard-snapshot";
 const TRAY_ICON_ID: &str = "main-tray";
 const TRAY_MENU_SHOW_SHELL_BALL_ID: &str = "show-shell-ball";
 const TRAY_MENU_HIDE_SHELL_BALL_ID: &str = "hide-shell-ball";
@@ -389,6 +399,191 @@ fn show_shell_ball(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn emit_shell_ball_clipboard_snapshot(app: &tauri::AppHandle, text: String) {
+    let _ = app.emit_to(
+        SHELL_BALL_WINDOW_LABEL,
+        SHELL_BALL_CLIPBOARD_SNAPSHOT_EVENT,
+        serde_json::json!({
+            "text": text,
+        }),
+    );
+}
+
+#[cfg(windows)]
+fn schedule_shell_ball_clipboard_probe(delay_ms: u64) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+
+        let Some(app) = SHELL_BALL_APP_HANDLE
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().cloned())
+        else {
+            return;
+        };
+
+        let Ok(sequence_number) = read_clipboard_sequence_number() else {
+            return;
+        };
+
+        let should_emit = {
+            let mut state = match SHELL_BALL_CLIPBOARD_STATE.lock() {
+                Ok(guard) => guard,
+                Err(_) => return,
+            };
+
+            if sequence_number == 0 || sequence_number == state.last_sequence_number {
+                false
+            } else {
+                state.last_sequence_number = sequence_number;
+                true
+            }
+        };
+
+        if !should_emit {
+            return;
+        }
+
+        if let Ok(Some(text)) = read_windows_clipboard_text() {
+            emit_shell_ball_clipboard_snapshot(&app, text);
+        }
+    });
+}
+
+#[cfg(windows)]
+fn read_clipboard_sequence_number() -> Result<u32, String> {
+    let sequence_number = unsafe { GetClipboardSequenceNumber() };
+    Ok(sequence_number)
+}
+
+#[cfg(windows)]
+fn read_windows_clipboard_text() -> Result<Option<String>, String> {
+    unsafe {
+        OpenClipboard(None).map_err(|error| format!("failed to open clipboard: {error}"))?;
+
+        let result = (|| {
+            if IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_err() {
+                return Ok(None);
+            }
+
+            let clipboard_handle = GetClipboardData(CF_UNICODETEXT.0 as u32)
+                .map_err(|error| format!("failed to get clipboard handle: {error}"))?;
+            let clipboard_ptr = GlobalLock(HGLOBAL(clipboard_handle.0));
+            if clipboard_ptr.is_null() {
+                return Err("failed to lock clipboard handle".to_string());
+            }
+
+            let text = read_utf16_null_terminated(clipboard_ptr as *const u16);
+            let _ = GlobalUnlock(HGLOBAL(clipboard_handle.0));
+
+            if text.trim().is_empty() {
+                return Ok(None);
+            }
+
+            Ok(Some(text))
+        })();
+
+        let _ = CloseClipboard();
+        result
+    }
+}
+
+#[cfg(windows)]
+fn read_utf16_null_terminated(mut ptr: *const u16) -> String {
+    let mut buffer = Vec::new();
+
+    unsafe {
+        while !ptr.is_null() && *ptr != 0 {
+            buffer.push(*ptr);
+            ptr = ptr.add(1);
+        }
+    }
+
+    String::from_utf16_lossy(&buffer)
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn shell_ball_clipboard_mouse_hook(
+    n_code: i32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if n_code >= 0 && w_param.0 as u32 == WM_RBUTTONUP {
+        schedule_shell_ball_clipboard_probe(SHELL_BALL_CLIPBOARD_RIGHT_CLICK_DELAY_MS);
+    }
+
+    CallNextHookEx(None, n_code, w_param, l_param)
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn shell_ball_clipboard_keyboard_hook(
+    n_code: i32,
+    w_param: WPARAM,
+    l_param: LPARAM,
+) -> LRESULT {
+    if n_code >= 0 && (w_param.0 as u32 == WM_KEYDOWN || w_param.0 as u32 == WM_SYSKEYDOWN) {
+        let keyboard_info = *(l_param.0 as *const KBDLLHOOKSTRUCT);
+        let ctrl_down = (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
+        let shift_down = (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
+
+        if ctrl_down && (keyboard_info.vkCode == b'C' as u32 || keyboard_info.vkCode == b'X' as u32) {
+            schedule_shell_ball_clipboard_probe(SHELL_BALL_CLIPBOARD_COPY_DELAY_MS);
+        }
+
+        if shift_down && keyboard_info.vkCode == VK_DELETE.0 as u32 {
+            schedule_shell_ball_clipboard_probe(SHELL_BALL_CLIPBOARD_COPY_DELAY_MS);
+        }
+    }
+
+    CallNextHookEx(None, n_code, w_param, l_param)
+}
+
+#[cfg(windows)]
+fn install_shell_ball_clipboard_hooks(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Ok(mut app_handle) = SHELL_BALL_APP_HANDLE.lock() {
+        *app_handle = Some(app.clone());
+    }
+
+    if let Ok(mut state) = SHELL_BALL_CLIPBOARD_STATE.lock() {
+        state.last_sequence_number = read_clipboard_sequence_number().unwrap_or(0);
+    }
+
+    let mut mouse_hook = SHELL_BALL_CLIPBOARD_MOUSE_HOOK
+        .lock()
+        .map_err(|_| "clipboard mouse hook lock poisoned".to_string())?;
+    let mut keyboard_hook = SHELL_BALL_CLIPBOARD_KEYBOARD_HOOK
+        .lock()
+        .map_err(|_| "clipboard keyboard hook lock poisoned".to_string())?;
+
+    if mouse_hook.is_none() {
+        unsafe {
+            *mouse_hook = Some(
+                SetWindowsHookExW(WH_MOUSE_LL, Some(shell_ball_clipboard_mouse_hook), None, 0)
+                    .map_err(|error| format!("failed to install clipboard mouse hook: {error}"))?
+                    .0 as isize,
+            );
+        }
+    }
+
+    if keyboard_hook.is_none() {
+        unsafe {
+            *keyboard_hook = Some(
+                SetWindowsHookExW(WH_KEYBOARD_LL, Some(shell_ball_clipboard_keyboard_hook), None, 0)
+                    .map_err(|error| format!("failed to install clipboard keyboard hook: {error}"))?
+                    .0 as isize,
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn install_shell_ball_clipboard_hooks(_app: &tauri::AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
 fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let show_shell_ball_menu_item =
         MenuItemBuilder::with_id(TRAY_MENU_SHOW_SHELL_BALL_ID, "展示悬浮球").build(app)?;
@@ -476,6 +671,31 @@ static SHELL_BALL_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::n
 
 #[cfg(windows)]
 static FORWARDING_WINDOWS: Lazy<Mutex<HashSet<isize>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+#[cfg(windows)]
+static SHELL_BALL_CLIPBOARD_MOUSE_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
+
+#[cfg(windows)]
+static SHELL_BALL_CLIPBOARD_KEYBOARD_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
+
+#[cfg(windows)]
+static SHELL_BALL_APP_HANDLE: Lazy<Mutex<Option<tauri::AppHandle>>> = Lazy::new(|| Mutex::new(None));
+
+#[cfg(windows)]
+static SHELL_BALL_CLIPBOARD_STATE: Lazy<Mutex<ClipboardMonitorState>> =
+    Lazy::new(|| Mutex::new(ClipboardMonitorState::default()));
+
+#[cfg(windows)]
+const SHELL_BALL_CLIPBOARD_COPY_DELAY_MS: u64 = 140;
+
+#[cfg(windows)]
+const SHELL_BALL_CLIPBOARD_RIGHT_CLICK_DELAY_MS: u64 = 3_000;
+
+#[cfg(windows)]
+#[derive(Default)]
+struct ClipboardMonitorState {
+    last_sequence_number: u32,
+}
 
 #[cfg(windows)]
 unsafe fn set_forward_mouse_messages(hwnd: HWND, forward: bool) {
@@ -656,7 +876,12 @@ fn main() {
     tauri::Builder::default()
         .manage(Arc::new(NamedPipeBridgeState::default()))
         .plugin(tauri_plugin_clipboard_manager::init())
-        .setup(|app| Ok(install_system_tray(app)?))
+        .setup(|app| {
+            install_shell_ball_clipboard_hooks(app.handle())
+                .map_err(|error| std::io::Error::other(error))?;
+
+            Ok(install_system_tray(app)?)
+        })
         .invoke_handler(tauri::generate_handler![
             named_pipe_request,
             named_pipe_subscribe,
