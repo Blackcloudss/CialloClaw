@@ -3,7 +3,7 @@
  * windows, drag/drop affordances, and dashboard transitions around it.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useEventListener } from "ahooks";
+import { useEventListener, useInterval } from "ahooks";
 import { getCurrentWindow, monitorFromPoint } from "@tauri-apps/api/window";
 import { ShellBallSurface, shouldAcceptShellBallTextDrop } from "./ShellBallSurface";
 import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
@@ -22,6 +22,7 @@ import {
   showShellBallWindow,
 } from "../../platform/shellBallWindowController";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
+import { readClipboardText } from "@/services/clipboardService";
 
 type ShellBallAppProps = {
   isDev?: boolean;
@@ -36,6 +37,13 @@ type ShellBallWindowAnchor = {
 
 const SHELL_BALL_DASHBOARD_TRANSITION_DURATION_MS = 260;
 const SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS = 240;
+const SHELL_BALL_CLIPBOARD_POLL_MS = 1_000;
+const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;
+
+type ShellBallClipboardPrompt = {
+  text: string;
+  expiresAt: number;
+};
 
 /**
  * Determines whether the file-drop overlay should be visible for the current
@@ -90,6 +98,21 @@ export function shouldShowShellBallSelectionIndicator(input: {
   visualState: ShellBallVisualState;
 }) {
   return input.selection !== null && (input.visualState === "idle" || input.visualState === "hover_input");
+}
+
+/**
+ * Determines whether a clipboard prompt is still eligible for click-to-submit
+ * handling.
+ *
+ * @param prompt Current clipboard prompt state.
+ * @param now Current timestamp in milliseconds.
+ * @returns Whether the clipboard prompt should trigger a backend submit.
+ */
+export function isShellBallClipboardPromptActive(
+  prompt: ShellBallClipboardPrompt | null,
+  now = Date.now(),
+) {
+  return prompt !== null && prompt.expiresAt > now;
 }
 
 function easeShellBallDashboardTransition(progress: number) {
@@ -218,8 +241,11 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const [fileDropActive, setFileDropActive] = useState(false);
   const [textDragActive, setTextDragActive] = useState(false);
   const [selectionPrompt, setSelectionPrompt] = useState<ShellBallSelectionSnapshot | null>(null);
+  const [clipboardPrompt, setClipboardPrompt] = useState<ShellBallClipboardPrompt | null>(null);
   const anchorRef = useRef<ShellBallWindowAnchor | null>(null);
   const dashboardTransitionPhaseRef = useRef<ShellBallDashboardTransitionPhase>("idle");
+  const clipboardBaselineRef = useRef<string | null>(null);
+  const clipboardPromptClearTimeoutRef = useRef<number | null>(null);
   const selectionPromptClearTimeoutRef = useRef<number | null>(null);
   const transitionQueueRef = useRef(Promise.resolve());
   const dragDropHandlersRef = useRef<{
@@ -449,6 +475,67 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   }, [visualState]);
 
   useEffect(() => {
+    if (clipboardPrompt === null) {
+      if (clipboardPromptClearTimeoutRef.current !== null) {
+        window.clearTimeout(clipboardPromptClearTimeoutRef.current);
+        clipboardPromptClearTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    const remainingMs = clipboardPrompt.expiresAt - Date.now();
+    if (remainingMs <= 0) {
+      setClipboardPrompt(null);
+      return;
+    }
+
+    clipboardPromptClearTimeoutRef.current = window.setTimeout(() => {
+      clipboardPromptClearTimeoutRef.current = null;
+      setClipboardPrompt(null);
+    }, remainingMs);
+
+    return () => {
+      if (clipboardPromptClearTimeoutRef.current !== null) {
+        window.clearTimeout(clipboardPromptClearTimeoutRef.current);
+        clipboardPromptClearTimeoutRef.current = null;
+      }
+    };
+  }, [clipboardPrompt]);
+
+  useInterval(() => {
+    void (async () => {
+      let clipboardText = "";
+
+      try {
+        clipboardText = await readClipboardText();
+      } catch {
+        return;
+      }
+
+      if (clipboardBaselineRef.current === null) {
+        clipboardBaselineRef.current = clipboardText;
+        return;
+      }
+
+      if (clipboardText === clipboardBaselineRef.current) {
+        return;
+      }
+
+      clipboardBaselineRef.current = clipboardText;
+
+      if (clipboardText.trim() === "") {
+        setClipboardPrompt(null);
+        return;
+      }
+
+      setClipboardPrompt({
+        text: clipboardText,
+        expiresAt: Date.now() + SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS,
+      });
+    })();
+  }, SHELL_BALL_CLIPBOARD_POLL_MS);
+
+  useEffect(() => {
     const currentWindow = getCurrentWindow();
 
     if (currentWindow.label !== shellBallWindowLabels.ball) {
@@ -498,7 +585,11 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     };
   }, []);
 
-  const { handleDroppedFiles: handleCoordinatorDroppedFiles, handleSelectedTextPrompt: handleCoordinatorSelectedTextPrompt } = useShellBallCoordinator({
+  const {
+    handleClipboardPrompt: handleCoordinatorClipboardPrompt,
+    handleDroppedFiles: handleCoordinatorDroppedFiles,
+    handleSelectedTextPrompt: handleCoordinatorSelectedTextPrompt,
+  } = useShellBallCoordinator({
     visualState,
     helperWindowsVisible: dashboardTransitionPhase === "idle",
     inputValue,
@@ -535,8 +626,19 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       return;
     }
 
+    if (clipboardPrompt !== null) {
+      if (!isShellBallClipboardPromptActive(clipboardPrompt)) {
+        setClipboardPrompt(null);
+        return;
+      }
+
+      setClipboardPrompt(null);
+      void handleCoordinatorClipboardPrompt(clipboardPrompt.text);
+      return;
+    }
+
     handlePrimaryClick();
-  }, [handleCoordinatorSelectedTextPrompt, handleInputFocusRequest, handlePrimaryClick, selectionPrompt]);
+  }, [clipboardPrompt, handleCoordinatorClipboardPrompt, handleCoordinatorSelectedTextPrompt, handleInputFocusRequest, handlePrimaryClick, selectionPrompt]);
 
   return (
     <ShellBallSurface

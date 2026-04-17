@@ -2,6 +2,7 @@ import type { BubbleMessage, DeliveryResult } from "@cialloclaw/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { subscribeDeliveryReady } from "@/rpc/subscriptions";
+import { submitTextInput } from "@/services/agentInputService";
 import {
   SHELL_BALL_PINNED_BUBBLE_WINDOW_FRAME,
   closeShellBallPinnedBubbleWindow,
@@ -563,6 +564,97 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       ]),
     );
     revealBubbleRegion();
+  }, [revealBubbleRegion]);
+
+  /**
+   * Submits clipboard text through the formal shell-ball text input path while
+   * preserving the local bubble turn ordering used by hover-input submissions.
+   *
+   * @param text Clipboard text captured by the desktop clipboard prompt.
+   * @returns A promise that resolves after the bubble timeline has been updated.
+   */
+  const handleClipboardPrompt = useCallback(async (text: string) => {
+    const normalizedText = text.trim();
+    if (normalizedText === "") {
+      return;
+    }
+
+    const createdAt = new Date().toISOString();
+    const turnIndex = allocateBubbleTurnIndex();
+    const userBubbleItem = createShellBallTextBubbleItem({
+      role: "user",
+      text: normalizedText,
+      bubbleType: "result",
+      createdAt,
+      turnIndex,
+      turnPhase: 0,
+    });
+
+    setBubbleItems((currentItems) =>
+      sortShellBallBubbleItemsByTimestamp([
+        ...currentItems,
+        userBubbleItem,
+      ]),
+    );
+    revealBubbleRegion();
+
+    try {
+      const result = await submitTextInput({
+        text: normalizedText,
+        source: "floating_ball",
+        trigger: "hover_text_input",
+        inputMode: "text",
+        options: {
+          confirm_required: false,
+          preferred_delivery: "bubble",
+        },
+      });
+
+      if (!isShellBallInputSubmitResult(result)) {
+        return;
+      }
+
+      shellBallTaskIdsRef.current.add(result.task.task_id);
+      bindTaskToBubbleTurn(result.task.task_id, turnIndex);
+      setBubbleItems((currentItems) => {
+        const nextItems = currentItems.map((item) =>
+          item.bubble.bubble_id === userBubbleItem.bubble.bubble_id
+            ? {
+                ...item,
+                bubble: {
+                  ...item.bubble,
+                  task_id: result.task.task_id,
+                },
+              }
+            : item,
+        );
+
+        return sortShellBallBubbleItemsByTimestamp([
+          ...nextItems,
+          createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+            turnIndex,
+            turnPhase: 1,
+          }),
+        ]);
+      });
+      revealBubbleRegion();
+    } catch (error) {
+      console.warn("shell-ball clipboard prompt submit failed", error);
+      setBubbleItems((currentItems) =>
+        sortShellBallBubbleItemsByTimestamp([
+          ...currentItems,
+          createShellBallTextBubbleItem({
+            role: "agent",
+            text: "Clipboard request failed.",
+            bubbleType: "status",
+            createdAt: new Date().toISOString(),
+            turnIndex,
+            turnPhase: 1,
+          }),
+        ]),
+      );
+      revealBubbleRegion();
+    }
   }, [revealBubbleRegion]);
 
   useEffect(() => {
@@ -1138,7 +1230,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     };
   }, [revealBubbleRegion, scheduleBubbleRegionHide]);
 
-  return { snapshot, handleDroppedFiles, handleSelectedTextPrompt };
+  return { snapshot, handleDroppedFiles, handleSelectedTextPrompt, handleClipboardPrompt };
 }
 
 export function useShellBallHelperWindowSnapshot({ role }: ShellBallHelperSnapshotInput) {
