@@ -928,10 +928,7 @@ func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, e
 	needStorageFallback := !queryViews.hasRuntimeState()
 
 	pendingApprovals = pendingApprovalsFromTasks(unfinishedTasks)
-	pendingTotal := len(pendingApprovals)
-	if pendingTotal == 0 && runtimePendingTotal > 0 {
-		pendingTotal = runtimePendingTotal
-	}
+	pendingTotal := mergedPendingApprovalTotal(unfinishedTasks, runtimePendingTotal)
 	focusMode := boolValue(params, "focus_mode", false)
 	requestedIncludes := stringSliceValue(params["include"])
 	includeAll := len(requestedIncludes) == 0
@@ -1046,6 +1043,16 @@ func pendingApprovalsFromTasks(tasks []runengine.TaskRecord) []map[string]any {
 	return items
 }
 
+// mergedPendingApprovalTotal prefers the task-centric merged view so mixed
+// runtime and storage snapshots report one stable pending-authorization count.
+func mergedPendingApprovalTotal(unfinishedTasks []runengine.TaskRecord, runtimePendingTotal int) int {
+	pendingTotal := countPendingApprovalTasks(unfinishedTasks)
+	if pendingTotal == 0 && runtimePendingTotal > 0 {
+		return runtimePendingTotal
+	}
+	return pendingTotal
+}
+
 // DashboardModuleGet handles `agent.dashboard.module.get`.
 func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, error) {
 	module := stringValue(params, "module", "mirror")
@@ -1053,10 +1060,8 @@ func (s *Service) DashboardModuleGet(params map[string]any) (map[string]any, err
 	queryViews := newTaskQueryViews(s)
 	finishedTasks := queryViews.tasks("finished", "finished_at", "desc")
 	unfinishedTasks := queryViews.tasks("unfinished", "updated_at", "desc")
-	_, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
-	if pendingTotal == 0 {
-		pendingTotal = countPendingApprovalTasks(unfinishedTasks)
-	}
+	_, runtimePendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+	pendingTotal := mergedPendingApprovalTotal(unfinishedTasks, runtimePendingTotal)
 	latestAudit := latestAuditRecordFromTasks(append(append([]runengine.TaskRecord{}, unfinishedTasks...), finishedTasks...))
 	if latestAudit == nil {
 		latestAudit = s.latestAuditRecordFromStorage("")
@@ -1093,13 +1098,11 @@ func (s *Service) MirrorOverviewGet(params map[string]any) (map[string]any, erro
 
 // SecuritySummaryGet handles `agent.security.summary.get`.
 func (s *Service) SecuritySummaryGet() (map[string]any, error) {
-	_, pendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+	_, runtimePendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
 	queryViews := newTaskQueryViews(s)
 	unfinishedTasks := queryViews.tasks("unfinished", "updated_at", "desc")
 	finishedTasks := queryViews.tasks("finished", "finished_at", "desc")
-	if pendingTotal == 0 {
-		pendingTotal = countPendingApprovalTasks(unfinishedTasks)
-	}
+	pendingTotal := mergedPendingApprovalTotal(unfinishedTasks, runtimePendingTotal)
 	allTasks := append(append([]runengine.TaskRecord{}, unfinishedTasks...), finishedTasks...)
 	dataLogSettings := mapValue(s.runEngine.Settings(), "data_log")
 	latestRestorePoint := latestRestorePointFromTasks(allTasks)

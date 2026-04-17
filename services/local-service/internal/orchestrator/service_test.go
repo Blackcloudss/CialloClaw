@@ -4047,6 +4047,141 @@ func TestServiceSecuritySummaryCountsStoredPendingAuthorizations(t *testing.T) {
 	}
 }
 
+func TestServiceDashboardModuleCountsRuntimeAndStoredPendingAuthorizations(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "dashboard mixed waiting auth")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	runtimeResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_dashboard_module_mixed",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "runtime waiting authorization for dashboard module",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start runtime waiting task failed: %v", err)
+	}
+
+	runtimeTaskID := runtimeResult["task"].(map[string]any)["task_id"].(string)
+	err = service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_dashboard_module_waiting_stored",
+		SessionID:   "sess_dashboard_module_mixed",
+		RunID:       "run_dashboard_module_waiting_stored",
+		Title:       "stored waiting auth task for dashboard module",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 14, 18, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 18, 5, 0, 0, time.UTC),
+		ApprovalRequest: map[string]any{
+			"approval_id": "appr_dashboard_module_stored",
+			"task_id":     "task_dashboard_module_waiting_stored",
+			"risk_level":  "yellow",
+		},
+		SecuritySummary: map[string]any{
+			"security_status": "pending_confirmation",
+		},
+	})
+	if err != nil {
+		t.Fatalf("save stored waiting auth task run failed: %v", err)
+	}
+
+	moduleResult, err := service.DashboardModuleGet(map[string]any{
+		"module": "security",
+		"tab":    "audit",
+	})
+	if err != nil {
+		t.Fatalf("dashboard module get failed: %v", err)
+	}
+
+	highlights := moduleResult["highlights"].([]string)
+	foundPendingHighlight := false
+	for _, highlight := range highlights {
+		if strings.Contains(highlight, "当前仍有 2 个待授权任务等待处理。") {
+			foundPendingHighlight = true
+			break
+		}
+	}
+	if !foundPendingHighlight {
+		t.Fatalf("expected merged pending authorization highlight for runtime task %s, got %+v", runtimeTaskID, highlights)
+	}
+}
+
+func TestServiceSecuritySummaryCountsRuntimeAndStoredPendingAuthorizations(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "security mixed waiting auth")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	runtimeResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_security_summary_mixed",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "runtime waiting authorization for security summary",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start runtime waiting task failed: %v", err)
+	}
+
+	runtimeTaskID := runtimeResult["task"].(map[string]any)["task_id"].(string)
+	err = service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_security_waiting_stored",
+		SessionID:   "sess_security_summary_mixed",
+		RunID:       "run_security_waiting_stored",
+		Title:       "stored waiting auth task for security summary",
+		SourceType:  "hover_input",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 14, 19, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 14, 19, 5, 0, 0, time.UTC),
+		ApprovalRequest: map[string]any{
+			"approval_id": "appr_security_stored",
+			"task_id":     "task_security_waiting_stored",
+			"risk_level":  "yellow",
+		},
+		SecuritySummary: map[string]any{
+			"security_status": "pending_confirmation",
+		},
+	})
+	if err != nil {
+		t.Fatalf("save stored waiting auth task run failed: %v", err)
+	}
+
+	result, err := service.SecuritySummaryGet()
+	if err != nil {
+		t.Fatalf("security summary failed: %v", err)
+	}
+
+	summary := result["summary"].(map[string]any)
+	if summary["pending_authorizations"] != 2 {
+		t.Fatalf("expected merged pending authorizations for runtime task %s, got %+v", runtimeTaskID, summary)
+	}
+	if summary["security_status"] != "pending_confirmation" {
+		t.Fatalf("expected pending_confirmation status when merged pending authorizations remain, got %+v", summary)
+	}
+}
+
 func TestServiceDashboardModuleHighlightsIncludeAuditTrail(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "dashboard audit trail")
 
