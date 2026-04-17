@@ -1,4 +1,4 @@
-// 该测试文件验证主链路编排与对接点行为。
+// Orchestrator service tests cover the main task flow and RPC-facing integration points.
 package orchestrator
 
 import (
@@ -563,7 +563,7 @@ func TestServiceSubmitInputQueuesDirectAgentLoopTaskBehindSameSessionWork(t *tes
 	}
 }
 
-func TestServiceConfirmTaskQueuesConfirmedTaskBehindSameSessionWork(t *testing.T) {
+func TestServiceConfirmTaskQueuesCorrectedTaskBehindSameSessionWork(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Queued confirm output.")
 
 	firstResult, err := service.StartTask(map[string]any{
@@ -605,7 +605,7 @@ func TestServiceConfirmTaskQueuesConfirmedTaskBehindSameSessionWork(t *testing.T
 
 	confirmResult, err := service.ConfirmTask(map[string]any{
 		"task_id":   secondTaskID,
-		"confirmed": true,
+		"confirmed": false,
 		"corrected_intent": map[string]any{
 			"name":      "agent_loop",
 			"arguments": map[string]any{},
@@ -616,10 +616,10 @@ func TestServiceConfirmTaskQueuesConfirmedTaskBehindSameSessionWork(t *testing.T
 	}
 	confirmedTask := confirmResult["task"].(map[string]any)
 	if confirmedTask["status"] != "blocked" || confirmedTask["current_step"] != "session_queue" {
-		t.Fatalf("expected confirmed task to queue behind active session work, got %+v", confirmedTask)
+		t.Fatalf("expected corrected task to queue behind active session work, got %+v", confirmedTask)
 	}
 	if confirmResult["delivery_result"] != nil {
-		t.Fatalf("expected queued confirmed task not to return delivery_result, got %+v", confirmResult["delivery_result"])
+		t.Fatalf("expected queued corrected task not to return delivery_result, got %+v", confirmResult["delivery_result"])
 	}
 }
 
@@ -873,7 +873,7 @@ func TestServiceConfirmTaskRejectsUnknownIntentWithoutCorrection(t *testing.T) {
 	}
 }
 
-func TestServiceConfirmTaskCancelsUnknownIntentWhenRejected(t *testing.T) {
+func TestServiceConfirmTaskKeepsUnknownIntentInConfirmationWhenRejected(t *testing.T) {
 	service := newTestService()
 
 	startResult, err := service.SubmitInput(map[string]any{
@@ -899,8 +899,21 @@ func TestServiceConfirmTaskCancelsUnknownIntentWhenRejected(t *testing.T) {
 	}
 
 	task := confirmResult["task"].(map[string]any)
-	if task["status"] != "cancelled" {
-		t.Fatalf("expected rejected unknown intent task to be cancelled, got %v", task["status"])
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected rejected unknown intent task to remain in confirming_intent, got %v", task["status"])
+	}
+	if task["intent"] != nil {
+		intentValue, ok := task["intent"].(map[string]any)
+		if !ok || len(intentValue) != 0 {
+			t.Fatalf("expected rejected unknown intent task to clear its current intent, got %+v", task["intent"])
+		}
+	}
+	bubble := confirmResult["bubble_message"].(map[string]any)
+	if bubble["text"] != "这不是我该做的处理方式。请重新说明你的目标，或给我一个更准确的处理意图。" {
+		t.Fatalf("expected reconfirm bubble, got %v", bubble["text"])
+	}
+	if confirmResult["delivery_result"] != nil {
+		t.Fatalf("expected rejected unknown intent task not to return delivery_result, got %+v", confirmResult["delivery_result"])
 	}
 }
 
@@ -923,7 +936,7 @@ func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T)
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	confirmResult, err := service.ConfirmTask(map[string]any{
 		"task_id":   taskID,
-		"confirmed": true,
+		"confirmed": false,
 		"corrected_intent": map[string]any{
 			"name":      "translate",
 			"arguments": map[string]any{"target_language": "en"},
@@ -936,6 +949,109 @@ func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T)
 	task := confirmResult["task"].(map[string]any)
 	if task["title"] != "翻译：你好" {
 		t.Fatalf("expected corrected intent to rewrite placeholder title, got %v", task["title"])
+	}
+}
+
+func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Explained content.")
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_ignore_correction",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "这里是一段需要解释的内容",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	startTask := startResult["task"].(map[string]any)
+
+	taskID := startTask["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": true,
+		"corrected_intent": map[string]any{
+			"name": "translate",
+			"arguments": map[string]any{
+				"target_language": "en",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	task := confirmResult["task"].(map[string]any)
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || !reflect.DeepEqual(intentValue, startTask["intent"]) {
+		t.Fatalf("expected confirm=true to keep the original task intent, got %+v", task["intent"])
+	}
+	if task["title"] != startTask["title"] {
+		t.Fatalf("expected confirm=true to keep the original title, got %v", task["title"])
+	}
+}
+
+// TestServiceConfirmTaskRejectsOutOfPhaseRequest ensures stale confirm requests
+// cannot rewrite tasks that already moved beyond the confirmation phase.
+func TestServiceConfirmTaskRejectsOutOfPhaseRequest(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_out_of_phase",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "请生成一个文件版本",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	_, err = service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+		"corrected_intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+				"target_path":           "workspace_document",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed confirm task failed: %v", err)
+	}
+
+	recordedTask, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected seeded task to remain available")
+	}
+	originalTitle := recordedTask.Title
+	originalIntent := cloneMap(recordedTask.Intent)
+
+	_, err = service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+	})
+	if !errors.Is(err, ErrTaskStatusInvalid) {
+		t.Fatalf("expected out-of-phase confirm to return ErrTaskStatusInvalid, got %v", err)
+	}
+
+	recordedTask, ok = service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain available after rejected confirm")
+	}
+	if recordedTask.Title != originalTitle {
+		t.Fatalf("expected out-of-phase confirm not to rewrite title, got %q want %q", recordedTask.Title, originalTitle)
+	}
+	if !reflect.DeepEqual(recordedTask.Intent, originalIntent) {
+		t.Fatalf("expected out-of-phase confirm not to rewrite intent, got %+v want %+v", recordedTask.Intent, originalIntent)
 	}
 }
 
@@ -1907,7 +2023,7 @@ func TestServiceConfirmCanEnterWaitingAuth(t *testing.T) {
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	confirmResult, err := service.ConfirmTask(map[string]any{
 		"task_id":   taskID,
-		"confirmed": true,
+		"confirmed": false,
 		"corrected_intent": map[string]any{
 			"name": "write_file",
 			"arguments": map[string]any{
@@ -1982,7 +2098,7 @@ func TestServiceSecurityRespondAllowOnceResumesAndCompletes(t *testing.T) {
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	_, err = service.ConfirmTask(map[string]any{
 		"task_id":   taskID,
-		"confirmed": true,
+		"confirmed": false,
 		"corrected_intent": map[string]any{
 			"name": "write_file",
 			"arguments": map[string]any{
@@ -2078,7 +2194,7 @@ func TestServiceSecurityRespondRespectsFallbackDelivery(t *testing.T) {
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	_, err = service.ConfirmTask(map[string]any{
 		"task_id":   taskID,
-		"confirmed": true,
+		"confirmed": false,
 		"corrected_intent": map[string]any{
 			"name": "summarize",
 			"arguments": map[string]any{
@@ -2142,7 +2258,7 @@ func TestServiceSecurityRespondDenyOnceCancelsTask(t *testing.T) {
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	_, err = service.ConfirmTask(map[string]any{
 		"task_id":   taskID,
-		"confirmed": true,
+		"confirmed": false,
 		"corrected_intent": map[string]any{
 			"name": "write_file",
 			"arguments": map[string]any{

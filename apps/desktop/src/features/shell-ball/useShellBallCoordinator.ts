@@ -919,6 +919,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       const importRpcMethods = new Function("return import('../../rpc/methods')") as () => Promise<{
         confirmTask: (request: {
           confirmed: boolean;
+          corrected_intent?: ShellBallIntentDecisionPayload["correctedIntent"];
           request_meta: ReturnType<typeof createShellBallRequestMeta>;
           task_id: string;
         }) => Promise<ShellBallInputSubmitResult>;
@@ -952,6 +953,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         try {
           result = await rpcMethods.confirmTask({
             confirmed: payload.decision === "confirm",
+            corrected_intent: payload.correctedIntent,
             request_meta: createShellBallRequestMeta(),
             task_id: payload.taskId,
           });
@@ -963,6 +965,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           logRpcMockFallback("shell-ball confirm", error);
           result = createMockShellBallConfirmResult({
             confirmed: payload.decision === "confirm",
+            correctedIntent: payload.correctedIntent,
             taskId: payload.taskId,
           });
         }
@@ -1179,8 +1182,10 @@ export async function emitShellBallIntentDecision(
   decision: ShellBallIntentDecisionPayload["decision"],
   taskId: string,
   source: ShellBallIntentDecisionPayload["source"],
+  correctedIntent?: ShellBallIntentDecisionPayload["correctedIntent"],
 ) {
   await getCurrentWindow().emitTo(shellBallWindowLabels.ball, shellBallWindowSyncEvents.intentDecision, {
+    correctedIntent,
     decision,
     source,
     taskId,
