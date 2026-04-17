@@ -130,6 +130,36 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 	}
 }
 
+func TestTaskInspectorHelperFunctions(t *testing.T) {
+	if countChecklistItems("- [ ] one\n* [x] two\nplain text") != 2 {
+		t.Fatal("expected checklist counter to include open and closed items")
+	}
+	resolved := resolveSources(nil, map[string]any{"task_sources": []any{"workspace/todos", "workspace/todos", "workspace/later"}})
+	if len(resolved) != 2 || resolved[0] != "workspace/todos" {
+		t.Fatalf("expected resolveSources to dedupe non-empty values, got %+v", resolved)
+	}
+	if sourceToFSPath("/workspace/notes") != "workspace/notes" {
+		t.Fatalf("expected sourceToFSPath to normalize workspace prefix")
+	}
+	if sourceToFSPath("../../etc") != "" {
+		t.Fatalf("expected sourceToFSPath to reject outside-workspace paths")
+	}
+	tags := splitTagList("urgent, weekly, notes")
+	if len(tags) != 3 || tags[1] != "weekly" {
+		t.Fatalf("expected splitTagList to trim comma-separated values, got %+v", tags)
+	}
+	resources := resourceListValue([]any{map[string]any{"path": "workspace/todos/inbox.md"}})
+	if len(resources) != 1 || !hasResourcePath(resources, "workspace/todos/inbox.md") {
+		t.Fatalf("expected resourceListValue and hasResourcePath to cooperate, got %+v", resources)
+	}
+	if buildSourceResource(map[string]any{"item_id": "todo_001"}, "https://example.com")["target_kind"] != "url" {
+		t.Fatal("expected url resource to be marked as url")
+	}
+	if deriveParsedRecurringNextOccurrence(map[string]any{"planned_at": "2026-04-18T09:30:00Z", "repeat_rule_text": "every month"}) != "2026-05-18T09:30:00Z" {
+		t.Fatal("expected parsed recurring helper to support monthly rules")
+	}
+}
+
 func TestServiceRunHonorsTargetSourcesAndHandlesMissingFiles(t *testing.T) {
 	service := NewService(nil)
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC) }

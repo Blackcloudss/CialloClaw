@@ -597,6 +597,31 @@ func TestTaskInspectorRunAggregatesRuntimeState(t *testing.T) {
 	}
 }
 
+func TestTaskInspectorRunClearsStaleSourceBackedNotesWhenFilesEmpty(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "inspector clear")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id": "todo_stale_source",
+		"title":   "stale source note",
+		"bucket":  "upcoming",
+		"status":  "normal",
+		"type":    "one_time",
+	}})
+	todosDir := filepath.Join(workspaceRoot, "todos")
+	if err := os.MkdirAll(todosDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(todosDir, "empty.md"), []byte("# no checklist items here\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if _, err := service.TaskInspectorRun(map[string]any{"target_sources": []any{"workspace/todos"}}); err != nil {
+		t.Fatalf("TaskInspectorRun returned error: %v", err)
+	}
+	items, total := service.runEngine.NotepadItems("", 10, 0)
+	if total != 0 || len(items) != 0 {
+		t.Fatalf("expected source-backed sync to clear stale runtime notes when source is empty, total=%d len=%d items=%+v", total, len(items), items)
+	}
+}
+
 func TestServiceNotepadListReturnsRuntimeItemsByBucket(t *testing.T) {
 	service := newTestService()
 	now := time.Now().UTC()

@@ -44,6 +44,7 @@ type RunResult struct {
 	Summary      map[string]any
 	Suggestions  []string
 	NotepadItems []map[string]any
+	SourceSynced bool
 }
 
 // NewService 创建并返回 task inspector 服务。
@@ -57,9 +58,12 @@ func NewService(fileSystem platform.FileSystemAdapter) *Service {
 // Run 执行一次最小真实巡检。
 func (s *Service) Run(input RunInput) RunResult {
 	sources := resolveSources(input.TargetSources, input.Config)
+	sourceSynced := len(sources) > 0 && s.fileSystem != nil
 	parsedFiles, parsedNotepadItems := s.inspectSources(sources)
 	resolvedNotepadItems := cloneMapSlice(input.NotepadItems)
-	if len(parsedNotepadItems) > 0 {
+	if sourceSynced {
+		resolvedNotepadItems = cloneMapSlice(parsedNotepadItems)
+	} else if len(parsedNotepadItems) > 0 {
 		resolvedNotepadItems = parsedNotepadItems
 	}
 	fileItems := countOpenNotepadItems(parsedNotepadItems)
@@ -78,6 +82,7 @@ func (s *Service) Run(input RunInput) RunResult {
 		},
 		Suggestions:  buildSuggestions(resolvedNotepadItems, input.UnfinishedTasks, sources, parsedFiles, dueToday, overdue, staleCount, fileItems),
 		NotepadItems: cloneMapSlice(resolvedNotepadItems),
+		SourceSynced: sourceSynced,
 	}
 }
 

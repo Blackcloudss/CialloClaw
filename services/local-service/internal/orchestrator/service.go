@@ -738,7 +738,7 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 		FinishedTasks:   finishedTasks,
 		NotepadItems:    notepadItems,
 	})
-	if len(result.NotepadItems) > 0 {
+	if result.SourceSynced {
 		if err := s.runEngine.SyncNotepadItems(result.NotepadItems); err != nil {
 			return nil, err
 		}
