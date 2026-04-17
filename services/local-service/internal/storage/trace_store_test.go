@@ -2,8 +2,11 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestInMemoryTraceAndEvalStoresPersistAndList(t *testing.T) {
@@ -90,5 +93,60 @@ func TestSQLiteTraceAndEvalStoresPersistAndList(t *testing.T) {
 	}
 	if evals[0].Status != "human_review_required" {
 		t.Fatalf("expected eval status to round-trip, got %+v", evals[0])
+	}
+}
+
+func TestSQLiteEvalStoreEnforcesTraceForeignKey(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "trace-eval-fk.db")
+	traceStore, err := NewSQLiteTraceStore(databasePath)
+	if err != nil {
+		t.Fatalf("new sqlite trace store failed: %v", err)
+	}
+	defer func() { _ = traceStore.Close() }()
+	evalStore, err := NewSQLiteEvalStore(databasePath)
+	if err != nil {
+		t.Fatalf("new sqlite eval store failed: %v", err)
+	}
+	defer func() { _ = evalStore.Close() }()
+
+	err = evalStore.WriteEvalSnapshot(context.Background(), EvalSnapshotRecord{
+		EvalSnapshotID: "eval_orphan_001",
+		TraceID:        "trace_missing",
+		TaskID:         "task_sql_002",
+		Status:         "passed",
+		MetricsJSON:    `{"latency_ms":100}`,
+		CreatedAt:      "2026-04-17T11:00:00Z",
+	})
+	if err == nil {
+		t.Fatal("expected foreign key error when writing eval snapshot without trace record")
+	}
+
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatalf("open sqlite db failed: %v", err)
+	}
+	defer db.Close()
+	rows, err := db.Query(`PRAGMA foreign_key_list(eval_snapshots);`)
+	if err != nil {
+		t.Fatalf("query foreign key list failed: %v", err)
+	}
+	defer rows.Close()
+
+	hasTraceForeignKey := false
+	for rows.Next() {
+		var id, seq int
+		var table, from, to, onUpdate, onDelete, match string
+		if err := rows.Scan(&id, &seq, &table, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+			t.Fatalf("scan foreign key row failed: %v", err)
+		}
+		if table == "trace_records" && from == "trace_id" && to == "trace_id" {
+			hasTraceForeignKey = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate foreign key rows failed: %v", err)
+	}
+	if !hasTraceForeignKey {
+		t.Fatal("expected eval_snapshots to keep foreign key back to trace_records")
 	}
 }

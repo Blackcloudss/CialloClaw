@@ -3,6 +3,7 @@ package traceeval
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,9 +81,9 @@ func TestServiceCaptureEscalatesDoomLoopToHumanReview(t *testing.T) {
 		IntentName: "agent_loop",
 		Snapshot:   contextsvc.TaskContextSnapshot{Text: "keep trying"},
 		ToolCalls: []tools.ToolCallRecord{
-			{ToolName: "read_file", Output: map[string]any{"loop_round": 3}},
-			{ToolName: "read_file", Output: map[string]any{"loop_round": 3}},
-			{ToolName: "read_file", Output: map[string]any{"loop_round": 3}},
+			{ToolName: "read_file", Input: map[string]any{"path": "workspace/a.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001), Output: map[string]any{"loop_round": 3}},
+			{ToolName: "read_file", Input: map[string]any{"path": "workspace/a.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001), Output: map[string]any{"loop_round": 3}},
+			{ToolName: "read_file", Input: map[string]any{"path": "workspace/a.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001), Output: map[string]any{"loop_round": 3}},
 		},
 		DurationMS: 600,
 	})
@@ -100,16 +101,26 @@ func TestServiceCaptureEscalatesDoomLoopToHumanReview(t *testing.T) {
 	}
 }
 
+func TestDetectDoomLoopIgnoresRepeatedProgressingToolUsage(t *testing.T) {
+	doomLoop := detectDoomLoop([]tools.ToolCallRecord{
+		{ToolName: "read_file", Input: map[string]any{"path": "workspace/a.md"}, Status: tools.ToolCallStatusSucceeded, Output: map[string]any{"loop_round": 1}},
+		{ToolName: "read_file", Input: map[string]any{"path": "workspace/b.md"}, Status: tools.ToolCallStatusSucceeded, Output: map[string]any{"loop_round": 2}},
+		{ToolName: "read_file", Input: map[string]any{"path": "workspace/c.md"}, Status: tools.ToolCallStatusSucceeded, Output: map[string]any{"loop_round": 3}},
+	})
+	if doomLoop.Triggered {
+		t.Fatalf("expected progressing repeated tool usage to avoid doom-loop escalation, got %+v", doomLoop)
+	}
+}
+
 func TestTraceEvalHelpersCoverErrorAndFilePriorityBranches(t *testing.T) {
 	toolCalls := []tools.ToolCallRecord{
-		{ToolName: "read_file", ErrorCode: intPtr(1001)},
-		{ToolName: "list_dir", Status: tools.ToolCallStatusSucceeded},
-		{ToolName: "read_file", ErrorCode: intPtr(1001)},
+		{ToolName: "read_file", Input: map[string]any{"path": "workspace/specs/report.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001)},
+		{ToolName: "read_file", Input: map[string]any{"path": "workspace/specs/report.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001)},
+		{ToolName: "read_file", Input: map[string]any{"path": "workspace/specs/report.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001)},
 		{ToolName: "page_read", Status: tools.ToolCallStatusSucceeded},
-		{ToolName: "read_file", ErrorCode: intPtr(1001)},
 	}
 	doomLoop := detectDoomLoop(toolCalls)
-	if !doomLoop.Triggered || doomLoop.Trigger != "repeated_tool_error" {
+	if !doomLoop.Triggered || doomLoop.Trigger != "repeated_call_signature" {
 		t.Fatalf("expected repeated tool errors to trigger doom loop, got %+v", doomLoop)
 	}
 	input := CaptureInput{
@@ -131,7 +142,12 @@ func TestTraceEvalHelpersCoverErrorAndFilePriorityBranches(t *testing.T) {
 	if buildInputSummary(input) != "workspace/specs/report.md" {
 		t.Fatalf("expected file input to outrank perception text, got %q", buildInputSummary(input))
 	}
-	if buildOutputSummary(input) != "last tool: read_file" {
+	textInput := CaptureInput{Snapshot: contextsvc.TaskContextSnapshot{SelectionText: "secret copied token", ClipboardText: "another secret"}}
+	textSummary := buildInputSummary(textInput)
+	if strings.Contains(textSummary, "secret copied token") || strings.Contains(textSummary, "another secret") {
+		t.Fatalf("expected hashed trace input summary instead of raw text, got %q", textSummary)
+	}
+	if buildOutputSummary(input) != "last tool: page_read" {
 		t.Fatalf("expected last tool summary fallback, got %q", buildOutputSummary(input))
 	}
 	metrics := map[string]any{}

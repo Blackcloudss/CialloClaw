@@ -155,6 +155,9 @@ func (s *SQLiteTraceStore) Close() error {
 }
 
 func (s *SQLiteTraceStore) initialize(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `PRAGMA foreign_keys=ON;`); err != nil {
+		return fmt.Errorf("enable sqlite foreign keys: %w", err)
+	}
 	if _, err := s.db.ExecContext(ctx, `PRAGMA journal_mode=WAL;`); err != nil {
 		return fmt.Errorf("enable sqlite wal mode: %w", err)
 	}
@@ -262,6 +265,9 @@ func (s *SQLiteEvalStore) Close() error {
 }
 
 func (s *SQLiteEvalStore) initialize(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `PRAGMA foreign_keys=ON;`); err != nil {
+		return fmt.Errorf("enable sqlite foreign keys: %w", err)
+	}
 	if _, err := s.db.ExecContext(ctx, `PRAGMA journal_mode=WAL;`); err != nil {
 		return fmt.Errorf("enable sqlite wal mode: %w", err)
 	}
@@ -275,13 +281,88 @@ func (s *SQLiteEvalStore) initialize(ctx context.Context) error {
 			task_id TEXT NOT NULL,
 			status TEXT NOT NULL,
 			metrics_json TEXT NOT NULL,
-			created_at TEXT NOT NULL
+			created_at TEXT NOT NULL,
+			FOREIGN KEY(trace_id) REFERENCES trace_records(trace_id)
 		);
 	`); err != nil {
 		return fmt.Errorf("create eval_snapshots table: %w", err)
 	}
+	if err := ensureEvalSnapshotForeignKey(ctx, s.db); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_eval_snapshots_task_time ON eval_snapshots(task_id, created_at DESC);`); err != nil {
 		return fmt.Errorf("create eval_snapshots index: %w", err)
+	}
+	return nil
+}
+
+func ensureEvalSnapshotForeignKey(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA foreign_key_list(eval_snapshots);`)
+	if err != nil {
+		return fmt.Errorf("inspect eval_snapshots foreign keys: %w", err)
+	}
+	defer rows.Close()
+
+	hasTraceForeignKey := false
+	for rows.Next() {
+		var (
+			id       int
+			seq      int
+			table    string
+			from     string
+			to       string
+			onUpdate string
+			onDelete string
+			match    string
+		)
+		if err := rows.Scan(&id, &seq, &table, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+			return fmt.Errorf("scan eval_snapshots foreign keys: %w", err)
+		}
+		if table == "trace_records" && from == "trace_id" && to == "trace_id" {
+			hasTraceForeignKey = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate eval_snapshots foreign keys: %w", err)
+	}
+	if hasTraceForeignKey {
+		return nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin eval_snapshots foreign key migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE eval_snapshots RENAME TO eval_snapshots_legacy;`); err != nil {
+		return fmt.Errorf("rename legacy eval_snapshots table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE eval_snapshots (
+			eval_snapshot_id TEXT PRIMARY KEY,
+			trace_id TEXT NOT NULL,
+			task_id TEXT NOT NULL,
+			status TEXT NOT NULL,
+			metrics_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			FOREIGN KEY(trace_id) REFERENCES trace_records(trace_id)
+		);
+	`); err != nil {
+		return fmt.Errorf("recreate eval_snapshots table with foreign key: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO eval_snapshots (eval_snapshot_id, trace_id, task_id, status, metrics_json, created_at)
+		SELECT eval_snapshot_id, trace_id, task_id, status, metrics_json, created_at
+		FROM eval_snapshots_legacy;
+	`); err != nil {
+		return fmt.Errorf("copy eval_snapshots rows into migrated table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE eval_snapshots_legacy;`); err != nil {
+		return fmt.Errorf("drop legacy eval_snapshots table: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit eval_snapshots foreign key migration: %w", err)
 	}
 	return nil
 }

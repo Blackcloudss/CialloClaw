@@ -2,6 +2,7 @@ package traceeval
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -182,28 +183,11 @@ func detectDoomLoop(toolCalls []tools.ToolCallRecord) DoomLoopResult {
 	if len(toolCalls) < 3 {
 		return DoomLoopResult{}
 	}
-	maxRepeat := 1
-	repeat := 1
-	for index := 1; index < len(toolCalls); index++ {
-		if toolCalls[index].ToolName != "" && toolCalls[index].ToolName == toolCalls[index-1].ToolName {
-			repeat++
-			if repeat > maxRepeat {
-				maxRepeat = repeat
-			}
-			continue
-		}
-		repeat = 1
+	if repeated := repeatedCallSignature(toolCalls); repeated.count >= 3 {
+		return DoomLoopResult{Triggered: true, Reason: repeated.reason, RepeatCount: repeated.count, Trigger: "repeated_call_signature"}
 	}
-	if maxRepeat >= 3 {
-		return DoomLoopResult{Triggered: true, Reason: "same tool repeated three times", RepeatCount: maxRepeat, Trigger: "repeated_tool_sequence"}
-	}
-	repeatedError := repeatedErrorCode(toolCalls)
-	if repeatedError.count >= 3 {
-		return DoomLoopResult{Triggered: true, Reason: repeatedError.reason, RepeatCount: repeatedError.count, Trigger: "repeated_tool_error"}
-	}
-	loopRound := maxLoopRound(toolCalls)
-	if loopRound >= 3 && allToolCallsShareLoopRound(toolCalls, loopRound) {
-		return DoomLoopResult{Triggered: true, Reason: "agent loop exhausted multiple planning rounds", RepeatCount: loopRound, Trigger: "loop_round_budget"}
+	if repeatedFailure := repeatedNoProgressFailure(toolCalls); repeatedFailure.count >= 3 {
+		return DoomLoopResult{Triggered: true, Reason: repeatedFailure.reason, RepeatCount: repeatedFailure.count, Trigger: "repeated_no_progress_failure"}
 	}
 	return DoomLoopResult{}
 }
@@ -213,27 +197,23 @@ type repeatedErrorResult struct {
 	reason string
 }
 
-func repeatedErrorCode(toolCalls []tools.ToolCallRecord) repeatedErrorResult {
-	type bucket struct {
-		count int
-		label string
-	}
-	buckets := map[string]bucket{}
-	for _, toolCall := range toolCalls {
-		if toolCall.ErrorCode == nil {
+func repeatedCallSignature(toolCalls []tools.ToolCallRecord) repeatedErrorResult {
+	best := repeatedErrorResult{}
+	repeat := 1
+	for index := 1; index < len(toolCalls); index++ {
+		currentSignature := callSignature(toolCalls[index])
+		previousSignature := callSignature(toolCalls[index-1])
+		if currentSignature != "" && currentSignature == previousSignature {
+			repeat++
+			if repeat > best.count {
+				best = repeatedErrorResult{
+					count:  repeat,
+					reason: fmt.Sprintf("call signature repeated %d times for tool %s", repeat, toolCalls[index].ToolName),
+				}
+			}
 			continue
 		}
-		key := fmt.Sprintf("%s:%d", toolCall.ToolName, *toolCall.ErrorCode)
-		current := buckets[key]
-		current.count++
-		current.label = fmt.Sprintf("tool %s repeated error code %d", toolCall.ToolName, *toolCall.ErrorCode)
-		buckets[key] = current
-	}
-	best := repeatedErrorResult{}
-	for _, entry := range buckets {
-		if entry.count > best.count {
-			best = repeatedErrorResult{count: entry.count, reason: entry.label}
-		}
+		repeat = 1
 	}
 	return best
 }
@@ -249,16 +229,35 @@ func maxLoopRound(toolCalls []tools.ToolCallRecord) int {
 	return maxRound
 }
 
-func allToolCallsShareLoopRound(toolCalls []tools.ToolCallRecord, loopRound int) bool {
-	if loopRound <= 0 || len(toolCalls) == 0 {
-		return false
-	}
-	for _, toolCall := range toolCalls {
-		if intValue(toolCall.Output, "loop_round") != loopRound {
-			return false
+func repeatedNoProgressFailure(toolCalls []tools.ToolCallRecord) repeatedErrorResult {
+	best := repeatedErrorResult{}
+	repeat := 1
+	for index := 1; index < len(toolCalls); index++ {
+		current := toolCalls[index]
+		previous := toolCalls[index-1]
+		if !isNoProgressFailure(current) || !isNoProgressFailure(previous) {
+			repeat = 1
+			continue
 		}
+		currentSignature := failureSignature(current)
+		previousSignature := failureSignature(previous)
+		if currentSignature != "" && currentSignature == previousSignature {
+			repeat++
+			if repeat > best.count {
+				errorCode := 0
+				if current.ErrorCode != nil {
+					errorCode = *current.ErrorCode
+				}
+				best = repeatedErrorResult{
+					count:  repeat,
+					reason: fmt.Sprintf("tool %s repeated no-progress failure with error code %d", current.ToolName, errorCode),
+				}
+			}
+			continue
+		}
+		repeat = 1
 	}
-	return true
+	return best
 }
 
 func buildRuleHits(input CaptureInput, doomLoop DoomLoopResult, reviewResult string) []string {
@@ -286,17 +285,32 @@ func buildRuleHits(input CaptureInput, doomLoop DoomLoopResult, reviewResult str
 }
 
 func buildInputSummary(input CaptureInput) string {
-	for _, value := range []string{input.Snapshot.SelectionText, input.Snapshot.Text, input.Snapshot.ErrorText} {
-		if strings.TrimSpace(value) != "" {
-			return truncateText(value, 96)
+	for _, textInput := range []struct {
+		label string
+		value string
+	}{
+		{label: "selection_text", value: input.Snapshot.SelectionText},
+		{label: "task_text", value: input.Snapshot.Text},
+		{label: "error_text", value: input.Snapshot.ErrorText},
+	} {
+		if strings.TrimSpace(textInput.value) != "" {
+			return hashTextSummary(textInput.label, textInput.value)
 		}
 	}
 	if len(input.Snapshot.Files) > 0 {
 		return input.Snapshot.Files[0]
 	}
-	for _, value := range []string{input.Snapshot.PageTitle, input.Snapshot.WindowTitle, input.Snapshot.VisibleText, input.Snapshot.ClipboardText} {
-		if strings.TrimSpace(value) != "" {
-			return truncateText(value, 96)
+	for _, textInput := range []struct {
+		label string
+		value string
+	}{
+		{label: "page_title", value: input.Snapshot.PageTitle},
+		{label: "window_title", value: input.Snapshot.WindowTitle},
+		{label: "visible_text", value: input.Snapshot.VisibleText},
+		{label: "clipboard_text", value: input.Snapshot.ClipboardText},
+	} {
+		if strings.TrimSpace(textInput.value) != "" {
+			return hashTextSummary(textInput.label, textInput.value)
 		}
 	}
 	if strings.TrimSpace(input.IntentName) != "" {
@@ -376,6 +390,42 @@ func countWorkerCalls(toolCalls []tools.ToolCallRecord) int {
 		}
 	}
 	return count
+}
+
+func callSignature(toolCall tools.ToolCallRecord) string {
+	toolName := strings.TrimSpace(toolCall.ToolName)
+	if toolName == "" {
+		return ""
+	}
+	inputJSON, err := json.Marshal(toolCall.Input)
+	if err != nil {
+		return toolName
+	}
+	return toolName + ":" + string(inputJSON)
+}
+
+func failureSignature(toolCall tools.ToolCallRecord) string {
+	if !isNoProgressFailure(toolCall) {
+		return ""
+	}
+	errorCode := 0
+	if toolCall.ErrorCode != nil {
+		errorCode = *toolCall.ErrorCode
+	}
+	return fmt.Sprintf("%s:%d:%s", strings.TrimSpace(toolCall.ToolName), errorCode, callSignature(toolCall))
+}
+
+func isNoProgressFailure(toolCall tools.ToolCallRecord) bool {
+	return toolCall.Status == tools.ToolCallStatusFailed || toolCall.Status == tools.ToolCallStatusTimeout || toolCall.ErrorCode != nil
+}
+
+func hashTextSummary(label string, value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(trimmed))
+	return fmt.Sprintf("%s#%x", label, hash[:6])
 }
 
 func mapValue(values map[string]any, key string) map[string]any {
