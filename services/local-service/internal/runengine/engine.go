@@ -527,6 +527,14 @@ func (e *Engine) ReopenIntentConfirmation(taskID, title string, intent map[strin
 	record.BubbleMessage = cloneMap(bubbleMessage)
 	record.PendingExecution = nil
 	record.ApprovalRequest = nil
+	record.Authorization = nil
+	record.ImpactScope = nil
+	record.StorageWritePlan = nil
+	record.ArtifactPlans = nil
+	record.MemoryReadPlans = nil
+	record.MemoryWritePlans = nil
+	record.MirrorReferences = nil
+	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary))
 	record.Timeline = advanceTimeline(record.Timeline, "confirming_intent", "pending", "等待人工复核后的新方案确认")
 	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
 	record.LatestEvent = e.buildEvent(record, "task.updated")

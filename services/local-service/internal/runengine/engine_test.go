@@ -514,8 +514,23 @@ func TestEngineReopenIntentConfirmationResetsExecutionState(t *testing.T) {
 		DeliveryResult: map[string]any{
 			"type": "workspace_document",
 		},
-		Artifacts: []map[string]any{{"artifact_id": "art_001"}},
+		Artifacts:        []map[string]any{{"artifact_id": "art_001"}},
+		MirrorReferences: []map[string]any{{"memory_id": "mem_001"}},
 	})
+	if _, ok := engine.ResolveAuthorization(task.TaskID, map[string]any{"decision": "allow_once"}, map[string]any{"files": []string{"workspace/out.md"}}); !ok {
+		t.Fatal("expected authorization record to be stored before reopen")
+	}
+	if _, ok := engine.SetMemoryPlans(task.TaskID, []map[string]any{{"memory_id": "read_001"}}, []map[string]any{{"memory_id": "write_001"}}); !ok {
+		t.Fatal("expected memory plans to be stored before reopen")
+	}
+	if _, ok := engine.SetDeliveryPlans(task.TaskID, map[string]any{"target_path": "workspace/out.md"}, []map[string]any{{"artifact_id": "plan_001"}}); !ok {
+		t.Fatal("expected delivery plans to be stored before reopen")
+	}
+	if updated, ok := engine.SetMirrorReferences(task.TaskID, []map[string]any{{"memory_id": "mirror_001"}}); !ok {
+		t.Fatal("expected mirror references to be stored before reopen")
+	} else {
+		task = updated
+	}
 	if _, ok := engine.EscalateHumanLoop(task.TaskID, map[string]any{"reason": "doom_loop", "status": "pending"}, map[string]any{"task_id": task.TaskID, "type": "status", "text": "需要人工介入"}); !ok {
 		t.Fatal("expected human escalation to succeed before reopen")
 	}
@@ -528,6 +543,12 @@ func TestEngineReopenIntentConfirmationResetsExecutionState(t *testing.T) {
 	}
 	if reopened.PendingExecution != nil || reopened.DeliveryResult != nil || len(reopened.Artifacts) != 0 {
 		t.Fatalf("expected reopen to clear execution outputs, got %+v", reopened)
+	}
+	if reopened.Authorization != nil || reopened.ImpactScope != nil {
+		t.Fatalf("expected reopen to clear authorization state, got %+v", reopened)
+	}
+	if reopened.StorageWritePlan != nil || len(reopened.ArtifactPlans) != 0 || len(reopened.MemoryReadPlans) != 0 || len(reopened.MemoryWritePlans) != 0 || len(reopened.MirrorReferences) != 0 {
+		t.Fatalf("expected reopen to clear handoff plans, got %+v", reopened)
 	}
 	if reopened.Title != "new title" || stringValue(reopened.Intent, "name", "") != "translate" {
 		t.Fatalf("expected reopen to persist updated title/intent, got %+v", reopened)

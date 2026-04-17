@@ -1831,6 +1831,87 @@ func TestServiceTaskControlResumeHumanLoopReplanReturnsToIntentConfirmation(t *t
 	}
 }
 
+func TestServiceTaskControlResumeHumanLoopReplanClearsAuthorizationBeforeReconfirm(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Recovered after review.")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_hitl_replan_authorized",
+		Title:       "写入：Please update the workspace file after review",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "write_file", "arguments": map[string]any{"target_path": "workspace/original.md"}},
+		CurrentStep: "authorized_execution",
+		RiskLevel:   "yellow",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Text:      "Please update the workspace file after review",
+			InputType: "text",
+			Trigger:   "hover_text_input",
+		},
+	})
+	if _, ok := service.runEngine.ResolveAuthorization(task.TaskID, map[string]any{"decision": "allow_once"}, map[string]any{"files": []string{"workspace/original.md"}}); !ok {
+		t.Fatal("expected authorization record to be stored before human review")
+	}
+	if _, ok := service.runEngine.EscalateHumanLoop(task.TaskID, map[string]any{
+		"reason":           "doom_loop",
+		"status":           "pending",
+		"suggested_action": "review_and_replan",
+	}, map[string]any{"task_id": task.TaskID, "type": "status", "text": "需要人工介入"}); !ok {
+		t.Fatal("expected human escalation to succeed")
+	}
+
+	result, err := service.TaskControl(map[string]any{
+		"task_id": task.TaskID,
+		"action":  "resume",
+		"arguments": map[string]any{
+			"review": map[string]any{
+				"decision": "replan",
+				"corrected_intent": map[string]any{
+					"name": "write_file",
+					"arguments": map[string]any{
+						"target_path":           "workspace/replanned.md",
+						"require_authorization": true,
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("resume with replan failed: %v", err)
+	}
+	if result["task"].(map[string]any)["status"] != "confirming_intent" {
+		t.Fatalf("expected replan decision to return task to confirming_intent, got %+v", result["task"])
+	}
+
+	record, ok := service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected replanned task in runtime")
+	}
+	if record.Authorization != nil || record.ImpactScope != nil {
+		t.Fatalf("expected replan to clear prior authorization state, got %+v", record)
+	}
+
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   task.TaskID,
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("confirm task after replan failed: %v", err)
+	}
+	if confirmResult["task"].(map[string]any)["status"] != "waiting_auth" {
+		t.Fatalf("expected corrected intent to require fresh authorization, got %+v", confirmResult["task"])
+	}
+
+	record, ok = service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime after reconfirm")
+	}
+	if record.Authorization != nil {
+		t.Fatalf("expected prior authorization record to stay cleared until fresh approval, got %+v", record.Authorization)
+	}
+	if len(record.ApprovalRequest) == 0 {
+		t.Fatalf("expected reconfirmed task to create a new approval request, got %+v", record)
+	}
+}
+
 func TestServiceTaskControlResumeHumanLoopRequiresReviewDecision(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Recovered after review.")
 	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
