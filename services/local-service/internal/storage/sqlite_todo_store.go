@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -212,6 +213,9 @@ func (s *SQLiteTodoStore) initialize(ctx context.Context) error {
 	`); err != nil {
 		return fmt.Errorf("create todo_items table: %w", err)
 	}
+	if err := s.ensureTodoItemColumns(ctx); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_todo_items_bucket_due_at ON todo_items(bucket, due_at);`); err != nil {
 		return fmt.Errorf("create todo_items bucket index: %w", err)
 	}
@@ -239,10 +243,81 @@ func (s *SQLiteTodoStore) initialize(ctx context.Context) error {
 	`); err != nil {
 		return fmt.Errorf("create recurring_rules table: %w", err)
 	}
+	if err := s.ensureRecurringRuleColumns(ctx); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_recurring_rules_item_id ON recurring_rules(item_id);`); err != nil {
 		return fmt.Errorf("create recurring_rules item index: %w", err)
 	}
 	return nil
+}
+
+func (s *SQLiteTodoStore) ensureTodoItemColumns(ctx context.Context) error {
+	requiredColumns := map[string]string{
+		"note_text":              "TEXT",
+		"prerequisite":           "TEXT",
+		"planned_at":             "TEXT",
+		"ended_at":               "TEXT",
+		"related_resources_json": "TEXT",
+	}
+	return s.ensureColumns(ctx, sqliteTodoTableName, requiredColumns)
+}
+
+func (s *SQLiteTodoStore) ensureRecurringRuleColumns(ctx context.Context) error {
+	requiredColumns := map[string]string{
+		"repeat_rule_text":       "TEXT",
+		"next_occurrence_at":     "TEXT",
+		"recent_instance_status": "TEXT",
+		"effective_scope":        "TEXT",
+	}
+	return s.ensureColumns(ctx, sqliteRecurringRuleTableName, requiredColumns)
+}
+
+func (s *SQLiteTodoStore) ensureColumns(ctx context.Context, tableName string, requiredColumns map[string]string) error {
+	existingColumns, err := s.tableColumns(ctx, tableName)
+	if err != nil {
+		return err
+	}
+	columnNames := make([]string, 0, len(requiredColumns))
+	for name := range requiredColumns {
+		columnNames = append(columnNames, name)
+	}
+	sort.Strings(columnNames)
+	for _, name := range columnNames {
+		if _, ok := existingColumns[name]; ok {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, tableName, name, requiredColumns[name])); err != nil {
+			return fmt.Errorf("migrate %s add column %s: %w", tableName, name, err)
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteTodoStore) tableColumns(ctx context.Context, tableName string) (map[string]struct{}, error) {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s);`, tableName))
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s schema: %w", tableName, err)
+	}
+	defer rows.Close()
+
+	columns := make(map[string]struct{})
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return nil, fmt.Errorf("scan %s schema: %w", tableName, err)
+		}
+		columns[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate %s schema: %w", tableName, err)
+	}
+	return columns, nil
 }
 
 func nullableString(value string) any {
