@@ -6,16 +6,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useUnmount } from "ahooks";
 import type { CSSProperties } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
-import { useMutation, useQueries } from "@tanstack/react-query";
+import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, CircleDashed, NotebookPen, RefreshCcw } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import type { NotepadAction } from "@cialloclaw/protocol";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
 import { buildNoteSummary, describeNotePreview, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
-import { convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, type NotePageDataMode } from "./notePage.service";
+import { convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
 import type { NoteDetailAction, NoteListItem } from "./notePage.types";
 import { NoteDetailPanel } from "./components/NoteDetailPanel";
 import { NotePreviewCard } from "./components/NotePreviewCard";
@@ -30,6 +31,7 @@ import "./notePage.css";
  */
 export function NotePage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [showMoreClosed, setShowMoreClosed] = useState(false);
@@ -129,6 +131,60 @@ export function NotePage() {
     },
   });
 
+  const updateMutation = useMutation({
+    mutationFn: ({ action, itemId }: { action: NotepadAction; itemId: string }) => updateNote(itemId, action, dataMode),
+    onSuccess: async (outcome, variables) => {
+      await Promise.all(
+        outcome.result.refresh_groups.map((group) =>
+          queryClient.invalidateQueries({
+            queryKey: ["dashboard", "notes", "bucket", dataMode, group],
+          }),
+        ),
+      );
+
+      const feedbackByAction: Record<NotepadAction, string> = {
+        cancel: "已取消这条事项。",
+        cancel_recurring: "已取消整个重复规则。",
+        complete: "已将事项标记为完成。",
+        delete: "已删除这条记录。",
+        move_upcoming: "已提前到近期要做。",
+        restore: "已恢复为未完成事项。",
+        toggle_recurring:
+          outcome.result.notepad_item?.recurring_enabled === false ? "已暂停重复规则。" : "已重新开启重复规则。",
+      };
+
+      showFeedback(feedbackByAction[variables.action]);
+      if (!outcome.result.notepad_item && outcome.result.deleted_item_id === selectedItem?.item.item_id) {
+        setDetailOpen(false);
+      }
+    },
+    onError: (error, variables) => {
+      const message = error instanceof Error ? error.message : "事项更新失败，请稍后再试。";
+      showFeedback(`事项更新失败（${variables.action}）：${message}`);
+    },
+  });
+
+  function mapActionToMutation(action: NoteDetailAction): NotepadAction | null {
+    switch (action) {
+      case "complete":
+        return "complete";
+      case "cancel":
+        return "cancel";
+      case "move-upcoming":
+        return "move_upcoming";
+      case "toggle-recurring":
+        return "toggle_recurring";
+      case "cancel-recurring":
+        return "cancel_recurring";
+      case "restore":
+        return "restore";
+      case "delete":
+        return "delete";
+      default:
+        return null;
+    }
+  }
+
   function handleDetailAction(action: NoteDetailAction) {
     if (!selectedItem) {
       return;
@@ -149,20 +205,17 @@ export function NotePage() {
       return;
     }
 
-    const placeholders: Record<Exclude<NoteDetailAction, "convert-to-task">, string> = {
-      cancel: "取消本次事项的真实动作稍后接入。",
-      "cancel-recurring": "取消整个重复事项的真实动作稍后接入。",
-      complete: "标记完成的真实动作稍后接入。",
-      delete: "删除记录的真实动作稍后接入。",
-      edit: "编辑能力稍后接入。",
-      "move-upcoming": "提前到近期要做的真实动作稍后接入。",
-      "open-resource": "相关资料打开失败，请稍后再试。",
-      restore: "恢复为未完成的真实动作稍后接入。",
-      "skip-once": "跳过本次的真实动作稍后接入。",
-      "toggle-recurring": "重复规则开关的真实动作稍后接入。",
-    };
+    const mutationAction = mapActionToMutation(action);
+    if (mutationAction) {
+      updateMutation.mutate({
+        action: mutationAction,
+        itemId: selectedItem.item.item_id,
+      });
+      return;
+    }
 
-    showFeedback(placeholders[action]);
+    const placeholderMessage = action === "edit" ? "编辑能力稍后接入。" : "跳过本次的真实动作稍后接入。";
+    showFeedback(placeholderMessage);
   }
 
   async function handleResourceOpen(resourceId: string) {

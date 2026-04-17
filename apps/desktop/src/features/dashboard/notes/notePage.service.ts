@@ -1,16 +1,18 @@
 import type {
   AgentNotepadConvertToTaskParams,
   AgentNotepadListParams,
+  AgentNotepadUpdateParams,
   DeliveryPayload,
   DeliveryType,
+  NotepadAction,
   RequestMeta,
   TodoBucket,
   TodoItem,
 } from "@cialloclaw/protocol";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
-import { convertNotepadToTask, listNotepad } from "@/rpc/methods";
-import { getMockNoteBuckets, getMockNoteExperience, runMockConvertNoteToTask } from "./notePage.mock";
-import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource } from "./notePage.types";
+import { convertNotepadToTask, listNotepad, updateNotepad } from "@/rpc/methods";
+import { getMockNoteBuckets, getMockNoteExperience, runMockConvertNoteToTask, runMockUpdateNote } from "./notePage.mock";
+import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome } from "./notePage.types";
 
 const NOTEPAD_RPC_TIMEOUT_MS = 2_500;
 export type NotePageDataMode = "rpc" | "mock";
@@ -217,7 +219,7 @@ function normalizeResourceOpenAction(action: DeliveryType | null, payload: Deliv
   if (action === "task_detail") {
     return "task_detail";
   }
-  if (payload?.url) {
+  if (action === "result_page" && payload?.url) {
     return "open_url";
   }
   return "copy_path";
@@ -336,6 +338,33 @@ export async function convertNoteToTask(itemId: string, source: NotePageDataMode
     if (isRpcChannelUnavailable(error)) {
       logRpcMockFallback(`convert note ${itemId} to task`, error);
       return runMockConvertNoteToTask(itemId);
+    }
+
+    throw error;
+  }
+}
+
+export async function updateNote(itemId: string, action: NotepadAction, source: NotePageDataMode = "rpc"): Promise<NoteUpdateOutcome> {
+  if (source === "mock") {
+    return runMockUpdateNote(itemId, action);
+  }
+
+  const params: AgentNotepadUpdateParams = {
+    action,
+    item_id: itemId,
+    request_meta: createRequestMeta(`notepad_update_${action}_${itemId}`),
+  };
+
+  try {
+    const result = await withTimeout(updateNotepad(params), `update note ${itemId} with ${action}`);
+    return {
+      result,
+      source: "rpc",
+    };
+  } catch (error) {
+    if (isRpcChannelUnavailable(error)) {
+      logRpcMockFallback(`update note ${itemId} with ${action}`, error);
+      return runMockUpdateNote(itemId, action);
     }
 
     throw error;

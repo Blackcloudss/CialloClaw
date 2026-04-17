@@ -1,5 +1,5 @@
 import type { TodoItem } from "@cialloclaw/protocol";
-import type { NoteBucketsData, NoteConvertOutcome, NoteDetailExperience, NoteListItem } from "./notePage.types";
+import type { NoteBucketsData, NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteUpdateOutcome } from "./notePage.types";
 
 const now = Date.now();
 const HOUR = 1000 * 60 * 60;
@@ -387,6 +387,74 @@ export function runMockConvertNoteToTask(itemId: string): NoteConvertOutcome {
         linked_task_id: `task_from_${item.item_id}`,
       },
       refresh_groups: [item.bucket],
+    },
+    source: "mock",
+  };
+}
+
+export function runMockUpdateNote(itemId: string, action: string): NoteUpdateOutcome {
+  const index = itemsState.findIndex((entry) => entry.item_id === itemId);
+  const item = index >= 0 ? itemsState[index] : itemsState[0];
+  const nowIso = new Date().toISOString();
+  if (!item) {
+    throw new Error(`mock note not found: ${itemId}`);
+  }
+
+  let updatedItem: typeof item | null = { ...item };
+  let refreshGroups: string[] = [item.bucket];
+  let deletedItemId: string | null = null;
+
+  switch (action) {
+    case "complete":
+      updatedItem = { ...updatedItem, bucket: "closed", status: "completed", ended_at: nowIso, due_at: null };
+      refreshGroups = [item.bucket, "closed"];
+      break;
+    case "cancel":
+      updatedItem = { ...updatedItem, bucket: "closed", status: "cancelled", ended_at: nowIso, due_at: null };
+      refreshGroups = [item.bucket, "closed"];
+      break;
+    case "move_upcoming":
+      updatedItem = { ...updatedItem, bucket: "upcoming", status: "normal" };
+      refreshGroups = [item.bucket, "upcoming"];
+      break;
+    case "toggle_recurring":
+      updatedItem = {
+        ...updatedItem,
+        recurring_enabled: !updatedItem.recurring_enabled,
+        status: updatedItem.recurring_enabled ? "cancelled" : "normal",
+        recent_instance_status: updatedItem.recurring_enabled ? "重复规则已暂停" : "重复规则已恢复",
+      };
+      break;
+    case "cancel_recurring":
+      updatedItem = { ...updatedItem, bucket: "closed", status: "cancelled", recurring_enabled: false, ended_at: nowIso };
+      refreshGroups = [item.bucket, "closed"];
+      break;
+    case "restore":
+      updatedItem = { ...updatedItem, bucket: "upcoming", status: "normal", ended_at: null };
+      refreshGroups = [item.bucket, "upcoming"];
+      break;
+    case "delete":
+      updatedItem = null;
+      deletedItemId = itemId;
+      refreshGroups = [item.bucket];
+      break;
+    default:
+      throw new Error(`unsupported mock notepad action: ${action}`);
+  }
+
+  if (index >= 0) {
+    if (updatedItem) {
+      itemsState[index] = updatedItem;
+    } else {
+      itemsState.splice(index, 1);
+    }
+  }
+
+  return {
+    result: {
+      deleted_item_id: deletedItemId,
+      notepad_item: updatedItem,
+      refresh_groups: refreshGroups as Array<"upcoming" | "later" | "recurring_rule" | "closed">,
     },
     source: "mock",
   };
