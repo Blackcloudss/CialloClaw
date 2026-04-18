@@ -2628,7 +2628,7 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (rune
 			intentArguments = map[string]any{}
 		}
 	}
-	return runengine.TaskRecord{
+	runtime := runengine.TaskRecord{
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             record.RunID,
@@ -2645,7 +2645,72 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (rune
 		FinishedAt:        finishedAt,
 		Timeline:          s.taskTimelineFromStructuredStorage(record.TaskID),
 		CurrentStepStatus: record.CurrentStepStatus,
-	}, true
+	}
+	s.hydrateStructuredTaskGovernance(&runtime)
+	return runtime, true
+}
+
+// hydrateStructuredTaskGovernance rebuilds the task-facing governance fields
+// from first-class stores when the snapshot bridge is unavailable.
+func (s *Service) hydrateStructuredTaskGovernance(task *runengine.TaskRecord) {
+	if s == nil || s.storage == nil || task == nil {
+		return
+	}
+	securitySummary := cloneMap(task.SecuritySummary)
+	if securitySummary == nil {
+		securitySummary = map[string]any{}
+	}
+	if approvalRequest := s.pendingApprovalRequestFromStorage(task.TaskID, task.RiskLevel); approvalRequest != nil {
+		task.ApprovalRequest = approvalRequest
+		securitySummary["pending_authorizations"] = 1
+		if strings.TrimSpace(stringValue(approvalRequest, "risk_level", "")) != "" {
+			securitySummary["security_status"] = "pending_confirmation"
+		}
+	} else if task.Status == "waiting_auth" {
+		securitySummary["pending_authorizations"] = 0
+	}
+	if latestRestorePoint := s.latestRestorePointFromStorage(task.TaskID); latestRestorePoint != nil {
+		securitySummary["latest_restore_point"] = latestRestorePoint
+	}
+	task.SecuritySummary = securitySummary
+}
+
+func (s *Service) pendingApprovalRequestFromStorage(taskID, fallbackRiskLevel string) map[string]any {
+	if s == nil || s.storage == nil || s.storage.ApprovalRequestStore() == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	records, _, err := s.storage.ApprovalRequestStore().ListApprovalRequests(context.Background(), taskID, 0, 0)
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+	for _, record := range records {
+		approvalRequest := normalizeTaskDetailApprovalRequest(taskID, fallbackRiskLevel, approvalRequestRecordToMap(record))
+		if approvalRequest != nil {
+			return approvalRequest
+		}
+	}
+	return nil
+}
+
+func approvalRequestRecordToMap(record storage.ApprovalRequestRecord) map[string]any {
+	result := map[string]any{
+		"approval_id":    record.ApprovalID,
+		"task_id":        record.TaskID,
+		"operation_name": record.OperationName,
+		"risk_level":     record.RiskLevel,
+		"target_object":  record.TargetObject,
+		"reason":         record.Reason,
+		"status":         record.Status,
+		"created_at":     record.CreatedAt,
+		"updated_at":     record.UpdatedAt,
+	}
+	if strings.TrimSpace(record.ImpactScopeJSON) != "" {
+		var scope map[string]any
+		if err := json.Unmarshal([]byte(record.ImpactScopeJSON), &scope); err == nil && len(scope) > 0 {
+			result["impact_scope"] = scope
+		}
+	}
+	return result
 }
 
 func (s *Service) taskTimelineFromStructuredStorage(taskID string) []runengine.TaskStepRecord {

@@ -6761,6 +6761,128 @@ func TestServiceTaskDetailGetPrefersStructuredTaskStoreFallback(t *testing.T) {
 	}
 }
 
+func TestServiceTaskDetailGetStructuredFallbackRehydratesApprovalRequest(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail approval")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_waiting_auth"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured",
+		RunID:               "run_structured_waiting_auth",
+		Title:               "structured waiting auth task",
+		SourceType:          "hover_input",
+		Status:              "waiting_auth",
+		IntentName:          "write_file",
+		IntentArgumentsJSON: `{"require_authorization":true}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "waiting_authorization",
+		CurrentStepStatus:   "pending",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 11, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 11, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_waiting_auth",
+		TaskID:        taskID,
+		Name:          "waiting_authorization",
+		Status:        "pending",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "waiting for approval",
+		CreatedAt:     time.Date(2026, 4, 15, 11, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 11, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+	if err := service.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), storage.ApprovalRequestRecord{
+		ApprovalID:      "appr_structured_waiting_auth",
+		TaskID:          taskID,
+		OperationName:   "write_file",
+		RiskLevel:       "yellow",
+		TargetObject:    "workspace/document.md",
+		Reason:          "structured fallback should restore approval state",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":["workspace/document.md"]}`,
+		CreatedAt:       "2026-04-15T11:05:00Z",
+		UpdatedAt:       "2026-04-15T11:05:00Z",
+	}); err != nil {
+		t.Fatalf("write approval request failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	approvalRequest, ok := detailResult["approval_request"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured fallback approval request, got %+v", detailResult["approval_request"])
+	}
+	if approvalRequest["approval_id"] != "appr_structured_waiting_auth" {
+		t.Fatalf("unexpected structured fallback approval request: %+v", approvalRequest)
+	}
+	securitySummary := detailResult["security_summary"].(map[string]any)
+	if securitySummary["pending_authorizations"] != 1 || securitySummary["security_status"] != "pending_confirmation" {
+		t.Fatalf("expected structured fallback security summary to reflect pending approval, got %+v", securitySummary)
+	}
+}
+
+func TestServiceSecuritySummaryCountsStructuredFallbackPendingAuthorizations(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured security summary pending auth")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_security_waiting_auth"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_security",
+		RunID:               "run_structured_security_waiting_auth",
+		Title:               "structured waiting auth security task",
+		SourceType:          "hover_input",
+		Status:              "waiting_auth",
+		IntentName:          "write_file",
+		IntentArgumentsJSON: `{"require_authorization":true}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "waiting_authorization",
+		CurrentStepStatus:   "pending",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 12, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), storage.ApprovalRequestRecord{
+		ApprovalID:      "appr_structured_security_waiting_auth",
+		TaskID:          taskID,
+		OperationName:   "write_file",
+		RiskLevel:       "yellow",
+		TargetObject:    "workspace/security.md",
+		Reason:          "structured fallback should count pending authorization",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":["workspace/security.md"]}`,
+		CreatedAt:       "2026-04-15T12:05:00Z",
+		UpdatedAt:       "2026-04-15T12:05:00Z",
+	}); err != nil {
+		t.Fatalf("write approval request failed: %v", err)
+	}
+
+	result, err := service.SecuritySummaryGet()
+	if err != nil {
+		t.Fatalf("security summary failed: %v", err)
+	}
+	summary := result["summary"].(map[string]any)
+	if summary["pending_authorizations"] != 1 || summary["security_status"] != "pending_confirmation" {
+		t.Fatalf("expected structured fallback pending authorization to appear in security summary, got %+v", summary)
+	}
+}
+
 func TestServiceTaskArtifactListReturnsStoredArtifacts(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "artifact list")
 	if service.storage == nil {
