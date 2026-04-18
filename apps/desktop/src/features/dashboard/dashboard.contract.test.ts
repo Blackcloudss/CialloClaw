@@ -428,6 +428,12 @@ function createDetail(overrides: Partial<AgentTaskDetailGetResult> = {}): AgentT
     approval_request: createApprovalRequest(),
     artifacts: [],
     mirror_references: [],
+    runtime_summary: {
+      active_steering_count: 0,
+      events_count: 0,
+      latest_event_type: null,
+      loop_stop_reason: null,
+    },
     security_summary: {
       latest_restore_point: createRecoveryPoint(),
       pending_authorizations: 1,

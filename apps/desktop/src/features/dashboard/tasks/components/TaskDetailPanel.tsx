@@ -1,4 +1,5 @@
-import { AlertTriangle, ArrowUpRight, Clock3, FolderOutput, RefreshCcw, ShieldAlert, X } from "lucide-react";
+import { useState } from "react";
+import { AlertTriangle, ArrowUpRight, Clock3, FolderOutput, RefreshCcw, SendHorizonal, ShieldAlert, X } from "lucide-react";
 import { motion } from "motion/react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,9 @@ type TaskDetailPanelProps = {
   detailWarningMessage: string | null;
   detailData: TaskDetailData;
   detailErrorMessage: string | null;
+  eventErrorMessage: string | null;
+  eventItems: import("../taskPage.types").TaskEventItem[];
+  eventLoading: boolean;
   detailState: "loading" | "error" | "ready";
   deliveryActionPending: boolean;
   feedback: string | null;
@@ -27,6 +31,8 @@ type TaskDetailPanelProps = {
   onOpenArtifact: (artifactId: string) => void;
   onOpenLatestDelivery: () => void;
   onRetryDetail: (() => void) | null;
+  onSteerTask: (message: string) => void;
+  steeringPending: boolean;
 };
 
 export function TaskDetailPanel({
@@ -37,6 +43,9 @@ export function TaskDetailPanel({
   detailWarningMessage,
   detailData,
   detailErrorMessage,
+  eventErrorMessage,
+  eventItems,
+  eventLoading,
   detailState,
   deliveryActionPending,
   feedback,
@@ -45,8 +54,11 @@ export function TaskDetailPanel({
   onOpenArtifact,
   onOpenLatestDelivery,
   onRetryDetail,
+  onSteerTask,
+  steeringPending,
 }: TaskDetailPanelProps) {
   const { detail, experience, task } = detailData;
+  const [steeringMessage, setSteeringMessage] = useState("");
   const progress = getTaskProgress(detail.timeline);
   const stateVoice = getTaskStateVoice(task, experience, detail.timeline);
   const ended = isTaskEnded(task);
@@ -59,6 +71,15 @@ export function TaskDetailPanel({
     ? "当前先展示基础任务信息，时间线、产出和安全摘要正在从本地服务拉取。"
     : `${detailErrorMessage ?? "任务详情请求失败"}。当前先展示基础任务信息，你可以稍后重试。`;
   const shouldDeferSecuritySummary = detailData.source === "fallback" || detailState !== "ready";
+  const canSteerTask = !ended && task.status !== "cancelled";
+
+  function handleSubmitSteering() {
+    if (!steeringMessage.trim()) {
+      return;
+    }
+    onSteerTask(steeringMessage);
+    setSteeringMessage("");
+  }
 
   return (
     <motion.section animate={{ opacity: 1, x: 0 }} className="task-detail-shell" initial={{ opacity: 0, x: 18 }} transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}>
@@ -179,6 +200,55 @@ export function TaskDetailPanel({
               </section>
 
               <TaskContextBlock detailData={detailData} />
+
+              <section className="task-detail-card">
+                <div className="task-detail-card__header task-detail-card__header--actionable">
+                  <div>
+                    <p className="task-detail-card__eyebrow">任务引导</p>
+                    <h3 className="task-detail-card__title">补充新的执行要求</h3>
+                  </div>
+                </div>
+                <p className="task-detail-card__hint">这会调用正式 `agent.task.steer`，把补充说明排入当前任务后续执行。</p>
+                <div className="task-detail-steer-box">
+                  <textarea
+                    className="task-detail-steer-box__input"
+                    disabled={!canSteerTask || steeringPending}
+                    onChange={(event) => setSteeringMessage(event.target.value)}
+                    placeholder={canSteerTask ? "例如：保留现有结果，再额外补一份简短结论。" : "当前任务已结束，不能继续补充要求。"}
+                    rows={3}
+                    value={steeringMessage}
+                  />
+                  <button className="task-detail-card__action" disabled={!canSteerTask || steeringPending || !steeringMessage.trim()} onClick={handleSubmitSteering} type="button">
+                    <SendHorizonal className="h-4 w-4" />
+                    {steeringPending ? "提交中..." : "追加要求"}
+                  </button>
+                </div>
+              </section>
+
+              <section className="task-detail-card">
+                <div className="task-detail-card__header">
+                  <p className="task-detail-card__eyebrow">Runtime Events</p>
+                  <h3 className="task-detail-card__title">执行事件与循环回流</h3>
+                </div>
+                {eventErrorMessage ? <p className="task-detail-card__hint">{eventErrorMessage}</p> : null}
+                {eventLoading && eventItems.length === 0 ? <p className="task-detail-card__empty">正在同步运行时事件...</p> : null}
+                {eventItems.length > 0 ? (
+                  <div className="task-detail-runtime-list">
+                    {eventItems.map((event) => (
+                      <article key={event.event_id} className="task-detail-runtime-item">
+                        <div className="task-detail-runtime-item__meta">
+                          <span className="task-detail-runtime-item__type">{event.type}</span>
+                          <span>{formatTimestamp(event.created_at)}</span>
+                        </div>
+                        <p className="task-detail-runtime-item__summary">{event.payload?.stop_reason ? `stop_reason: ${String(event.payload.stop_reason)}` : `level: ${event.level}`}</p>
+                        <p className="task-detail-runtime-item__payload">{event.payload_json}</p>
+                      </article>
+                    ))}
+                  </div>
+                ) : !eventLoading ? (
+                  <p className="task-detail-card__empty">当前没有可展示的运行时事件。</p>
+                ) : null}
+              </section>
 
               <section className="task-detail-card">
                 <div className="task-detail-card__header task-detail-card__header--actionable">
