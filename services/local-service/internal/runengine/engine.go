@@ -321,9 +321,7 @@ func (e *Engine) DeleteTask(taskID string) error {
 	return nil
 }
 
-// GetTask 获取Task。
-
-// GetTask 根据 task_id 读取一份防御性复制后的任务快照。
+// GetTask returns a defensive copy of the task snapshot for the given task_id.
 func (e *Engine) GetTask(taskID string) (TaskRecord, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -363,7 +361,8 @@ func (e *Engine) ActiveSessionTask(sessionID, excludeTaskID string) (TaskRecord,
 	return TaskRecord{}, false
 }
 
-// HydrateTaskFromStorage 将持久化快照重新装载回运行时内存，用于恢复重启后的治理动作。
+// HydrateTaskFromStorage reloads a persisted task snapshot into runtime memory
+// so governance and query flows can survive restarts.
 func (e *Engine) HydrateTaskFromStorage(record TaskRecord) TaskRecord {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -588,12 +587,14 @@ func (e *Engine) SetPresentation(taskID string, bubbleMessage map[string]any, de
 	return record.clone(), true
 }
 
-// RecordToolCall 记录主链路最近一次完成的 tool_call 兼容层快照。
+// RecordToolCall records the latest completed compatibility-layer tool_call for
+// the task.
 func (e *Engine) RecordToolCall(taskID, toolName string, input, output map[string]any, durationMS int64) (TaskRecord, bool) {
 	return e.RecordToolCallLifecycle(taskID, toolName, "succeeded", input, output, durationMS, nil)
 }
 
-// RecordToolCallLifecycle 根据工具执行状态记录最近一次 tool_call 快照。
+// RecordToolCallLifecycle records the latest tool_call snapshot with the given
+// execution status.
 func (e *Engine) RecordToolCallLifecycle(taskID, toolName, status string, input, output map[string]any, durationMS int64, errorCode any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -724,7 +725,8 @@ func (e *Engine) DrainSteeringMessages(taskID string) ([]string, bool) {
 	return messages, true
 }
 
-// FailTaskExecution 将任务收敛到 failed，用于执行失败或恢复点准备失败场景。
+// FailTaskExecution collapses a task into failed for execution failures and
+// recovery-point preparation failures.
 func (e *Engine) FailTaskExecution(taskID, stepName, securityStatus, outputSummary string, impactScope map[string]any, bubbleMessage map[string]any, latestRestorePoint ...map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -764,7 +766,7 @@ func (e *Engine) FailTaskExecution(taskID, stepName, securityStatus, outputSumma
 	return record.clone(), true
 }
 
-// BlockTaskByPolicy 将被治理策略拦截的任务收敛到 cancelled。
+// BlockTaskByPolicy collapses a policy-intercepted task into cancelled.
 func (e *Engine) BlockTaskByPolicy(taskID, riskLevel, outputSummary string, impactScope map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -804,9 +806,8 @@ func (e *Engine) BlockTaskByPolicy(taskID, riskLevel, outputSummary string, impa
 	return record.clone(), true
 }
 
-// CompleteTask 完成Task。
-
-// CompleteTask 把任务收敛到 completed，并写入正式交付结果、artifact 和恢复点摘要。
+// CompleteTask collapses a task into completed and records its formal delivery,
+// artifacts, and recovery-point summary.
 func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubbleMessage map[string]any, artifacts []map[string]any, latestRestorePoint ...map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1296,9 +1297,8 @@ func (e *Engine) ResumeQueuedTask(taskID, stepName string, bubbleMessage map[str
 	return record.clone(), true
 }
 
-// SetMemoryPlans 设置MemoryPlans。
-
-// SetMemoryPlans 记录 memory 读取/写入计划，供主链路后续交接和观测使用。
+// SetMemoryPlans stores memory read/write plans for later orchestration
+// handoffs and observability.
 func (e *Engine) SetMemoryPlans(taskID string, readPlans []map[string]any, writePlans []map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1318,11 +1318,8 @@ func (e *Engine) SetMemoryPlans(taskID string, readPlans []map[string]any, write
 	return record.clone(), true
 }
 
-// SetDeliveryPlans 设置DeliveryPlans。
-
-// SetDeliveryPlans 记录 workspace 写入计划和 artifact 持久化计划。
-// SetMirrorReferences 记录任务挂接后的镜像引用快照。
-// SetMirrorReferences 记录任务挂接后的镜像引用快照。
+// SetMirrorReferences stores the mirror-reference snapshot attached to the
+// task.
 func (e *Engine) SetMirrorReferences(taskID string, mirrorReferences []map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1337,7 +1334,8 @@ func (e *Engine) SetMirrorReferences(taskID string, mirrorReferences []map[strin
 	return record.clone(), true
 }
 
-// SetDeliveryPlans 记录 workspace 写入计划和 artifact 持久化计划。
+// SetDeliveryPlans stores the workspace write plan and artifact persistence
+// plans.
 func (e *Engine) SetDeliveryPlans(taskID string, storageWritePlan map[string]any, artifactPlans []map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1353,9 +1351,8 @@ func (e *Engine) SetDeliveryPlans(taskID string, storageWritePlan map[string]any
 	return record.clone(), true
 }
 
-// PendingNotifications 返回待处理的Notifications。
-
-// PendingNotifications 返回当前尚未被消费的通知快照。
+// PendingNotifications returns the notification snapshot that has not yet been
+// consumed.
 func (e *Engine) PendingNotifications(taskID string) ([]NotificationRecord, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -1368,9 +1365,8 @@ func (e *Engine) PendingNotifications(taskID string) ([]NotificationRecord, bool
 	return cloneNotifications(record.Notifications), true
 }
 
-// DrainNotifications 取出并清空Notifications。
-
-// DrainNotifications 取出并清空某个任务的通知队列。
+// DrainNotifications returns and clears the buffered notification queue for a
+// task.
 func (e *Engine) DrainNotifications(taskID string) ([]NotificationRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1386,9 +1382,7 @@ func (e *Engine) DrainNotifications(taskID string) ([]NotificationRecord, bool) 
 	return notifications, true
 }
 
-// PendingApprovalRequests 返回待处理的ApprovalRequests。
-
-// PendingApprovalRequests 枚举当前所有待处理的审批请求。
+// PendingApprovalRequests enumerates the currently pending approval requests.
 func (e *Engine) PendingApprovalRequests(limit, offset int) ([]map[string]any, int) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -1756,9 +1750,7 @@ func (e *Engine) AppendAuditData(taskID string, auditRecords []map[string]any, t
 	return record.clone(), true
 }
 
-// buildEvent 处理当前模块的相关逻辑。
-
-// buildEvent 为当前任务生成一条兼容层 Event 记录。
+// buildEvent creates one compatibility-layer event record for the task.
 func (e *Engine) buildEvent(record *TaskRecord, eventType string) map[string]any {
 	return e.buildEventWithPayload(record, eventType, map[string]any{"status": record.Status})
 }
@@ -1776,9 +1768,7 @@ func (e *Engine) buildEventWithPayload(record *TaskRecord, eventType string, pay
 	}
 }
 
-// buildToolCall 处理当前模块的相关逻辑。
-
-// buildToolCall 为当前任务生成一条兼容层 ToolCall 记录。
+// buildToolCall creates one compatibility-layer tool_call record for the task.
 func (e *Engine) buildToolCall(record *TaskRecord, toolName string) map[string]any {
 	return e.buildToolCallRecord(record, toolName, "succeeded", map[string]any{}, map[string]any{}, 120, nil)
 }
