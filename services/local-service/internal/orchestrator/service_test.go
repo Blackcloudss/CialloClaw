@@ -39,8 +39,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// TestServiceStartTaskAndConfirmFlow verifies that a confirmed standard task
-// continues execution and completes delivery.
 type stubModelClient struct {
 	output string
 }
@@ -390,6 +388,8 @@ func replaceTaskRunStore(t *testing.T, service *storage.Service, store storage.T
 	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
 }
 
+// TestServiceStartTaskAndConfirmFlow verifies that a confirmed standard task
+// continues execution and completes delivery.
 func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	service := NewService(
 		contextsvc.NewService(),

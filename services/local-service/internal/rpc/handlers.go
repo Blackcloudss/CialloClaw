@@ -106,7 +106,6 @@ func (s *Server) handleAgentTaskDetailGet(params map[string]any) (any, *rpcError
 	return wrapOrchestratorResult(data, err)
 }
 
-// handleAgentTaskControl handles agent.task.control.
 // handleAgentTaskEventsList handles agent.task.events.list.
 func (s *Server) handleAgentTaskEventsList(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.TaskEventsList(params)
@@ -119,6 +118,7 @@ func (s *Server) handleAgentTaskSteer(params map[string]any) (any, *rpcError) {
 	return wrapOrchestratorResult(data, err)
 }
 
+// handleAgentTaskControl handles agent.task.control.
 func (s *Server) handleAgentTaskControl(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.TaskControl(params)
 	return wrapOrchestratorResult(data, err)
