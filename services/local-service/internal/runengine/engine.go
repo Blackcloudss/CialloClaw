@@ -433,8 +433,10 @@ func (e *Engine) ConfirmTask(taskID, title string, intent map[string]any, bubble
 	return record.clone(), true
 }
 
-// BeginExecution moves a task into its real execution step and refreshes
-// timeline and event state.
+// BeginExecution moves a task from suggestion or approval states into the real
+// execution step. It must advance timeline state and emit task.updated together
+// so task-centric readers and notification consumers see the same step/status
+// transition without having to query compatibility-layer events separately.
 func (e *Engine) BeginExecution(taskID, stepName, outputSummary string) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -483,10 +485,10 @@ func (e *Engine) UpdateIntent(taskID, title string, intent map[string]any) (Task
 	return record.clone(), true
 }
 
-// SetPresentation updates task-facing presentation fields without changing the
-// state-machine conclusion.
-// ReopenIntentConfirmation moves a reviewed task back to the intent
-// confirmation phase so a human-requested replan does not rerun the old plan.
+// ReopenIntentConfirmation moves a reviewed task back into confirming_intent
+// after human intervention. The reset must clear delivery, approval, memory,
+// and persistence plans so stale post-confirmation state cannot leak into the
+// next plan the user is about to confirm.
 func (e *Engine) ReopenIntentConfirmation(taskID, title string, intent map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -828,8 +830,11 @@ func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubb
 	return record.clone(), true
 }
 
-// ApplyRecoveryOutcome refreshes task status, security summary, and buffered
-// notifications after recovery-point application.
+// ApplyRecoveryOutcome finalizes restore-point execution and rewrites the task
+// security summary around the outcome. It clears pending approval state because
+// a restore decision is terminal for that authorization path, then emits one
+// recovery-specific event so audit and task views can distinguish success from
+// execution failure.
 func (e *Engine) ApplyRecoveryOutcome(taskID, taskStatus, securityStatus string, recoveryPoint map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -876,8 +881,10 @@ func (e *Engine) ApplyRecoveryOutcome(taskID, taskStatus, securityStatus string,
 	return record.clone(), true
 }
 
-// ControlTask applies user control actions such as pause, resume, cancel, and
-// restart.
+// ControlTask applies user-driven runtime controls while preserving the task
+// to run mapping. Each branch enforces state guards so invalid resumes or
+// restarts fail early instead of silently mutating timeline, approval, or
+// delivery state into a combination the orchestrator cannot reason about.
 func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any) (TaskRecord, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1789,8 +1796,9 @@ func toolCallEventPayload(record *TaskRecord, toolName, status string, input, ou
 	return payload
 }
 
-// nextIdentifier allocates a prefixed identifier, delegating to persistent
-// storage when available.
+// nextIdentifier allocates a prefixed identifier and prefers persistent
+// storage-backed allocation when available. That keeps task/run/event/tool ids
+// stable across process restarts instead of relying on an in-memory counter.
 func (e *Engine) nextIdentifier(prefix string) string {
 	if e.taskStore != nil {
 		identifier, err := e.taskStore.AllocateIdentifier(context.Background(), prefix)
@@ -1840,7 +1848,9 @@ func (e *Engine) persistTaskLocked(record *TaskRecord) {
 }
 
 // clone returns a deep copy of TaskRecord so callers cannot retain internal
-// state references.
+// state references. The engine stores mutable maps and slices in memory, so
+// every outward read must copy nested state to keep locks and later mutations
+// from leaking through shared references.
 func (r TaskRecord) clone() TaskRecord {
 	clone := r
 	clone.Intent = cloneMap(r.Intent)
@@ -1871,8 +1881,10 @@ func (r TaskRecord) clone() TaskRecord {
 	return clone
 }
 
-// queueNotification appends one notification to the task's buffered outbound
-// queue.
+// queueNotification appends one buffered outbound notification. RPC transports
+// drain this queue after the main response so state changes and delivery events
+// can be replayed in order without requiring the runtime engine to know the
+// active transport.
 func (r *TaskRecord) queueNotification(method string, params map[string]any) {
 	r.Notifications = append(r.Notifications, NotificationRecord{
 		Method:    method,
@@ -1964,7 +1976,8 @@ func cloneNotifications(values []NotificationRecord) []NotificationRecord {
 	return result
 }
 
-// currentTimelineStatus returns the status of the last timeline step.
+// currentTimelineStatus returns the status of the last timeline step because
+// the engine treats the tail entry as the single authoritative current step.
 func currentTimelineStatus(timeline []TaskStepRecord) string {
 	if len(timeline) == 0 {
 		return "pending"
@@ -2478,7 +2491,9 @@ func stringValue(values map[string]any, key, fallback string) string {
 }
 
 // buildDefaultSettings constructs the default settings snapshot used by the
-// main pipeline and dashboard surfaces.
+// main pipeline and dashboard surfaces. Defaults intentionally stay workspace-
+// relative so the runtime does not leak machine-specific absolute paths into
+// persisted task, recovery, or automation configuration.
 func buildDefaultSettings() map[string]any {
 	return map[string]any{
 		"general": map[string]any{

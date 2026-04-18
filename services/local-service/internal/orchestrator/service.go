@@ -903,8 +903,11 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 	return resolved
 }
 
-// TaskControl handles agent.task.control and converts user control actions into
-// state-machine operations.
+// TaskControl handles agent.task.control and converts user actions into runtime
+// state-machine transitions. The orchestration layer owns error translation and
+// post-transition follow-up such as human-loop resume handling and queue drain,
+// because those behaviors depend on task-centric semantics rather than the raw
+// runtime mutation alone.
 func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
 	if strings.TrimSpace(taskID) == "" {
@@ -1532,9 +1535,11 @@ func (s *Service) DrainNotifications(taskID string) ([]map[string]any, error) {
 	return items, nil
 }
 
-// SecurityRespond handles agent.security.respond.
-// It is the resume entrypoint for risk-gated tasks and translates allow/deny
-// decisions into task state transitions, resumed delivery, and audit data.
+// SecurityRespond handles agent.security.respond. It is the single resume
+// entrypoint for risk-gated tasks, so it must translate allow/deny decisions
+// into runtime state changes, delivery continuation, impact scope reporting,
+// and audit data in one place instead of letting transports or callers stitch
+// those pieces together inconsistently.
 func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
 	task, ok := s.runEngine.GetTask(taskID)
@@ -3594,8 +3599,10 @@ func deliveryTypeFromIntent(taskIntent map[string]any) string {
 	}
 }
 
-// deliveryPreferenceFromSubmit reads preferred delivery settings from
-// agent.input.submit options.
+// deliveryPreferenceFromSubmit reads delivery preferences from
+// agent.input.submit. Submit uses options.* while agent.task.start uses a
+// dedicated delivery object, so the orchestrator keeps both decoders separate
+// and normalizes them before any execution or approval plan is built.
 func deliveryPreferenceFromSubmit(params map[string]any) (string, string) {
 	options := mapValue(params, "options")
 	return stringValue(options, "preferred_delivery", ""), ""
@@ -3616,8 +3623,11 @@ func mergeSuggestedDeliveryPreference(preferredDelivery, fallbackDelivery, sugge
 	return preferredDelivery, fallbackDelivery
 }
 
-// buildPendingExecution creates the delivery plan required to resume a task
-// after authorization.
+// buildPendingExecution creates the minimum delivery plan required to resume a
+// task after authorization. The stored plan must be deterministic and task-
+// centric because waiting_auth can outlive the original request and later needs
+// to restart execution without recomputing delivery intent from transport-only
+// inputs.
 func (s *Service) buildPendingExecution(task runengine.TaskRecord, taskIntent map[string]any) map[string]any {
 	plan := s.delivery.BuildApprovalExecutionPlan(task.TaskID, taskIntent)
 	return s.applyResolvedDeliveryToPlan(task, plan, taskIntent)
