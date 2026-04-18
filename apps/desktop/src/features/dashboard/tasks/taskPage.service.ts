@@ -1,9 +1,9 @@
-import type { AgentTaskDetailGetResult, AgentTaskControlParams, RequestMeta, Task, TaskControlAction, TaskListGroup } from "@cialloclaw/protocol";
-import { controlTask, getTaskDetail, listTasks } from "@/rpc/methods";
-import { isActiveApprovalRequest, isApprovalRequest, isArtifact, isBinaryPendingAuthorizations, isMirrorReference, isRecoveryPoint, isTask, isTaskStep, normalizeArray, normalizeNullable } from "../shared/dashboardContractValidators";
+import type { AgentTaskDetailGetResult, AgentTaskControlParams, AgentTaskEventsListParams, AgentTaskSteerParams, RequestMeta, Task, TaskControlAction, TaskEvent, TaskListGroup } from "@cialloclaw/protocol";
+import { controlTask, getTaskDetail, listTaskEvents, listTasks, steerTask } from "@/rpc/methods";
+import { isActiveApprovalRequest, isApprovalRequest, isArtifact, isBinaryPendingAuthorizations, isMirrorReference, isRecoveryPoint, isTask, isTaskEvent, isTaskStep, normalizeArray, normalizeNullable } from "../shared/dashboardContractValidators";
 import { RISK_LEVELS, SECURITY_STATUSES, TASK_STEP_STATUSES } from "@/rpc/protocolEnumerations";
 import { getMockTaskBuckets, getMockTaskDetail, getTaskExperience, runMockTaskControl } from "./taskPage.mock";
-import type { TaskBucketPageData, TaskBucketsData, TaskControlOutcome, TaskDetailData, TaskExperience, TaskListItem } from "./taskPage.types";
+import type { TaskBucketPageData, TaskBucketsData, TaskControlOutcome, TaskDetailData, TaskEventPageData, TaskExperience, TaskListItem } from "./taskPage.types";
 
 export type TaskPageDataMode = "rpc" | "mock";
 
@@ -79,6 +79,12 @@ function createFallbackTaskDetail(task: Task): AgentTaskDetailGetResult {
     approval_request: null,
     artifacts: [],
     mirror_references: [],
+    runtime_summary: {
+      active_steering_count: 0,
+      events_count: 0,
+      latest_event_type: null,
+      loop_stop_reason: null,
+    },
     security_summary: {
       latest_restore_point: null,
       pending_authorizations: 0,
@@ -87,6 +93,53 @@ function createFallbackTaskDetail(task: Task): AgentTaskDetailGetResult {
     },
     task,
     timeline: [],
+  };
+}
+
+function parseTaskEventPayload(event: TaskEvent): Record<string, unknown> | null {
+  const source = event.payload_json.trim();
+  if (!source) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(source) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function createFallbackRuntimeSummary(): AgentTaskDetailGetResult["runtime_summary"] {
+  return {
+    active_steering_count: 0,
+    events_count: 0,
+    latest_event_type: null,
+    loop_stop_reason: null,
+  };
+}
+
+function normalizeRuntimeSummary(detail: AgentTaskDetailGetResult): AgentTaskDetailGetResult["runtime_summary"] {
+  const candidate = detail.runtime_summary as Partial<AgentTaskDetailGetResult["runtime_summary"]> | null | undefined;
+  if (!candidate || typeof candidate !== "object") {
+    return createFallbackRuntimeSummary();
+  }
+
+  return {
+    active_steering_count: typeof candidate.active_steering_count === "number" ? candidate.active_steering_count : 0,
+    events_count: typeof candidate.events_count === "number" ? candidate.events_count : 0,
+    latest_event_type: typeof candidate.latest_event_type === "string" ? candidate.latest_event_type : null,
+    loop_stop_reason: typeof candidate.loop_stop_reason === "string" ? candidate.loop_stop_reason : null,
+  };
+}
+
+function normalizeTaskEventPage(result: { items: TaskEvent[]; page: TaskEventPageData["page"] }): TaskEventPageData {
+  return {
+    items: normalizeArray(result.items, isTaskEvent, "task events payload items").map((event) => ({
+      ...event,
+      payload: parseTaskEventPayload(event),
+    })),
+    page: result.page,
   };
 }
 
@@ -152,6 +205,7 @@ export function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): Age
     approval_request: approvalRequest,
     artifacts,
     mirror_references: mirrorReferences,
+    runtime_summary: normalizeRuntimeSummary(detail),
     security_summary: {
       ...detail.security_summary,
       latest_restore_point: latestRestorePoint,
@@ -276,6 +330,52 @@ export async function loadTaskBucketPage(group: TaskListGroup, options?: { limit
     items: mapTasks(result.items),
     page: result.page,
   };
+}
+
+export async function loadTaskEventPage(taskId: string, source: TaskPageDataMode = "rpc"): Promise<TaskEventPageData> {
+  if (source === "mock") {
+    return {
+      items: [],
+      page: { has_more: false, limit: 20, offset: 0, total: 0 },
+    };
+  }
+
+  const params: AgentTaskEventsListParams = {
+    limit: 20,
+    offset: 0,
+    request_meta: createRequestMeta(`task_events_${taskId}`),
+    task_id: taskId,
+  };
+
+  return normalizeTaskEventPage(await withTimeout(listTaskEvents(params), `task events ${taskId}`));
+}
+
+export async function steerTaskByMessage(taskId: string, message: string, source: TaskPageDataMode = "rpc") {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    throw new Error("补充要求不能为空");
+  }
+
+  if (source === "mock") {
+    return {
+      bubble_message: {
+        created_at: new Date().toISOString(),
+        level: "info",
+        task_id: taskId,
+        text: "已记录新的补充要求，后续执行会纳入该指令。",
+        type: "status",
+      },
+      task: getMockTaskDetail(taskId).detail.task,
+    };
+  }
+
+  const params: AgentTaskSteerParams = {
+    message: trimmed,
+    request_meta: createRequestMeta(`task_steer_${taskId}`),
+    task_id: taskId,
+  };
+
+  return withTimeout(steerTask(params), `task steer ${taskId}`);
 }
 
 export async function loadTaskBuckets(options?: { unfinishedLimit?: number; finishedLimit?: number; source?: TaskPageDataMode }): Promise<TaskBucketsData> {

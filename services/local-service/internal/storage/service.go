@@ -52,34 +52,40 @@ type Descriptor struct {
 
 // Service 提供当前模块的服务能力。
 type Service struct {
-	adapter            platform.StorageAdapter
-	memoryStore        MemoryStore
-	taskRunStore       TaskRunStore
-	toolCallStore      ToolCallStore
-	loopRuntimeStore   LoopRuntimeStore
-	artifactStore      ArtifactStore
-	todoStore          TodoStore
-	traceStore         TraceStore
-	evalStore          EvalStore
-	secretStore        SecretStore
-	auditStore         AuditStore
-	recoveryPointStore RecoveryPointStore
-	memoryStoreName    string
-	taskRunStoreName   string
-	toolCallStoreName  string
-	artifactStoreName  string
-	secretStoreName    string
-	retrievalBackend   string
-	storeInitErr       error
-	fallbackActive     bool
+	adapter                  platform.StorageAdapter
+	memoryStore              MemoryStore
+	taskRunStore             TaskRunStore
+	toolCallStore            ToolCallStore
+	loopRuntimeStore         LoopRuntimeStore
+	taskStore                TaskStore
+	taskStepStore            TaskStepStore
+	artifactStore            ArtifactStore
+	todoStore                TodoStore
+	traceStore               TraceStore
+	evalStore                EvalStore
+	secretStore              SecretStore
+	auditStore               AuditStore
+	recoveryPointStore       RecoveryPointStore
+	approvalRequestStore     ApprovalRequestStore
+	authorizationRecordStore AuthorizationRecordStore
+	memoryStoreName          string
+	taskRunStoreName         string
+	toolCallStoreName        string
+	artifactStoreName        string
+	secretStoreName          string
+	retrievalBackend         string
+	storeInitErr             error
+	fallbackActive           bool
 }
 
 // NewService 创建并返回Service。
 func NewService(adapter platform.StorageAdapter) *Service {
 	memoryStore := MemoryStore(NewInMemoryMemoryStore())
-	taskRunStore := TaskRunStore(NewInMemoryTaskRunStore())
 	toolCallStore := ToolCallStore(newInMemoryToolCallStore())
 	loopRuntimeStore := LoopRuntimeStore(newInMemoryLoopRuntimeStore())
+	taskStore := TaskStore(newInMemoryTaskStore())
+	taskStepStore := TaskStepStore(newInMemoryTaskStepStore())
+	taskRunStore := TaskRunStore(NewInMemoryTaskRunStore().WithStructuredStores(taskStore, taskStepStore))
 	artifactStore := ArtifactStore(newInMemoryArtifactStore())
 	todoStore := TodoStore(NewInMemoryTodoStore())
 	traceStore := TraceStore(newInMemoryTraceStore())
@@ -87,6 +93,12 @@ func NewService(adapter platform.StorageAdapter) *Service {
 	secretStore := SecretStore(newInMemorySecretStore())
 	auditStore := AuditStore(newInMemoryAuditStore())
 	recoveryPointStore := RecoveryPointStore(newInMemoryRecoveryPointStore())
+	governanceState := &inMemoryGovernanceState{
+		approvalRequests:     make([]ApprovalRequestRecord, 0),
+		authorizationRecords: make([]AuthorizationRecordRecord, 0),
+	}
+	approvalRequestStore := ApprovalRequestStore(newInMemoryApprovalRequestStoreWithState(governanceState))
+	authorizationRecordStore := AuthorizationRecordStore(newInMemoryAuthorizationRecordStoreWithState(governanceState))
 	memoryStoreName := memoryStoreBackendInMemory
 	taskRunStoreName := memoryStoreBackendInMemory
 	toolCallStoreName := memoryStoreBackendInMemory
@@ -135,6 +147,24 @@ func NewService(adapter platform.StorageAdapter) *Service {
 			}
 			if err != nil {
 				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite loop runtime store: %w", err))
+				fallbackActive = true
+			}
+
+			sqliteTaskStore, err := NewSQLiteTaskStore(databasePath)
+			if err == nil {
+				taskStore = sqliteTaskStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite task store: %w", err))
+				fallbackActive = true
+			}
+
+			sqliteTaskStepStore, err := NewSQLiteTaskStepStore(databasePath)
+			if err == nil {
+				taskStepStore = sqliteTaskStepStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite task_step store: %w", err))
 				fallbackActive = true
 			}
 
@@ -196,32 +226,54 @@ func NewService(adapter platform.StorageAdapter) *Service {
 				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite recovery point store: %w", err))
 				fallbackActive = true
 			}
+
+			sqliteApprovalRequestStore, err := NewSQLiteApprovalRequestStore(databasePath)
+			if err == nil {
+				approvalRequestStore = sqliteApprovalRequestStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite approval request store: %w", err))
+				fallbackActive = true
+			}
+
+			sqliteAuthorizationRecordStore, err := NewSQLiteAuthorizationRecordStore(databasePath)
+			if err == nil {
+				authorizationRecordStore = sqliteAuthorizationRecordStore
+			}
+			if err != nil {
+				storeInitErrors = append(storeInitErrors, fmt.Errorf("initialize sqlite authorization record store: %w", err))
+				fallbackActive = true
+			}
 		}
 	}
 
 	storeInitErr := errors.Join(storeInitErrors...)
 
 	return &Service{
-		adapter:            adapter,
-		memoryStore:        memoryStore,
-		taskRunStore:       taskRunStore,
-		toolCallStore:      toolCallStore,
-		loopRuntimeStore:   loopRuntimeStore,
-		artifactStore:      artifactStore,
-		todoStore:          todoStore,
-		traceStore:         traceStore,
-		evalStore:          evalStore,
-		secretStore:        secretStore,
-		auditStore:         auditStore,
-		recoveryPointStore: recoveryPointStore,
-		memoryStoreName:    memoryStoreName,
-		taskRunStoreName:   taskRunStoreName,
-		toolCallStoreName:  toolCallStoreName,
-		artifactStoreName:  artifactStoreName,
-		secretStoreName:    secretStoreName,
-		retrievalBackend:   retrievalBackend,
-		storeInitErr:       storeInitErr,
-		fallbackActive:     fallbackActive,
+		adapter:                  adapter,
+		memoryStore:              memoryStore,
+		taskRunStore:             taskRunStore,
+		toolCallStore:            toolCallStore,
+		loopRuntimeStore:         loopRuntimeStore,
+		taskStore:                taskStore,
+		taskStepStore:            taskStepStore,
+		artifactStore:            artifactStore,
+		todoStore:                todoStore,
+		traceStore:               traceStore,
+		evalStore:                evalStore,
+		secretStore:              secretStore,
+		auditStore:               auditStore,
+		recoveryPointStore:       recoveryPointStore,
+		approvalRequestStore:     approvalRequestStore,
+		authorizationRecordStore: authorizationRecordStore,
+		memoryStoreName:          memoryStoreName,
+		taskRunStoreName:         taskRunStoreName,
+		toolCallStoreName:        toolCallStoreName,
+		artifactStoreName:        artifactStoreName,
+		secretStoreName:          secretStoreName,
+		retrievalBackend:         retrievalBackend,
+		storeInitErr:             storeInitErr,
+		fallbackActive:           fallbackActive,
 	}
 }
 
@@ -340,6 +392,16 @@ func (s *Service) LoopRuntimeStore() LoopRuntimeStore {
 	return s.loopRuntimeStore
 }
 
+// TaskStore returns the configured first-class tasks store.
+func (s *Service) TaskStore() TaskStore {
+	return s.taskStore
+}
+
+// TaskStepStore returns the configured first-class task_steps store.
+func (s *Service) TaskStepStore() TaskStepStore {
+	return s.taskStepStore
+}
+
 // ArtifactStore returns the configured artifact store.
 func (s *Service) ArtifactStore() ArtifactStore {
 	return s.artifactStore
@@ -386,6 +448,16 @@ func (s *Service) RecoveryPointStore() RecoveryPointStore {
 	return s.recoveryPointStore
 }
 
+// ApprovalRequestStore returns the configured approval_request persistence store.
+func (s *Service) ApprovalRequestStore() ApprovalRequestStore {
+	return s.approvalRequestStore
+}
+
+// AuthorizationRecordStore returns the configured authorization_record persistence store.
+func (s *Service) AuthorizationRecordStore() AuthorizationRecordStore {
+	return s.authorizationRecordStore
+}
+
 // Close 处理当前模块的相关逻辑。
 func (s *Service) Close() error {
 	errs := make([]error, 0, 2)
@@ -399,6 +471,12 @@ func (s *Service) Close() error {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.loopRuntimeStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.taskStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.taskStepStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.artifactStore.(interface{ Close() error }); ok {
@@ -420,6 +498,12 @@ func (s *Service) Close() error {
 		errs = append(errs, closer.Close())
 	}
 	if closer, ok := s.recoveryPointStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.approvalRequestStore.(interface{ Close() error }); ok {
+		errs = append(errs, closer.Close())
+	}
+	if closer, ok := s.authorizationRecordStore.(interface{ Close() error }); ok {
 		errs = append(errs, closer.Close())
 	}
 

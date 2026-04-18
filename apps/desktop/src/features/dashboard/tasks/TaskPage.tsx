@@ -4,7 +4,7 @@ import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, CircleDashed, LayoutList, RefreshCcw } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { subscribeDeliveryReady, subscribeTask } from "@/rpc/subscriptions";
+import { subscribeDeliveryReady, subscribeTask, subscribeTaskRuntime } from "@/rpc/subscriptions";
 import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
 import { buildDashboardSafetyNavigationState } from "@/features/dashboard/shared/dashboardSafetyNavigation";
@@ -20,7 +20,7 @@ import {
   resolveDashboardTaskSafetyOpenPlan,
   shouldEnableDashboardTaskDetailQuery,
 } from "./taskPage.query";
-import { buildFallbackTaskDetailData, controlTaskByAction, loadTaskBucketPage, loadTaskDetailData, type TaskPageDataMode } from "./taskPage.service";
+import { buildFallbackTaskDetailData, controlTaskByAction, loadTaskBucketPage, loadTaskDetailData, loadTaskEventPage, steerTaskByMessage, type TaskPageDataMode } from "./taskPage.service";
 import { describeTaskOpenResultForCurrentTask, loadTaskArtifactPage, openTaskArtifactForTask, openTaskDeliveryForTask, performTaskOpenExecution, resolveTaskOpenExecutionPlan } from "./taskOutput.service";
 import { TaskDetailPanel } from "./components/TaskDetailPanel";
 import { TaskPreviewCard } from "./components/TaskPreviewCard";
@@ -133,6 +133,15 @@ export function TaskPage() {
     refetchOnWindowFocus: false,
     retry: false,
   });
+  const taskEventsQuery = useQuery({
+    enabled: detailOpen && Boolean(selectedTaskId),
+    queryKey: ["dashboard", "tasks", "events", dataMode, selectedTaskId ?? ""],
+    queryFn: () => loadTaskEventPage(selectedTaskId!, dataMode),
+    refetchOnMount: securityRefreshPlan.refetchOnMount,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
   const bucketErrors = [
     { error: unfinishedQuery.error, label: "未完成任务" },
     { error: finishedQuery.error, label: "已结束任务" },
@@ -154,12 +163,18 @@ export function TaskPage() {
       return;
     }
 
+    function invalidateSelectedTaskDetail(taskId: string) {
+      void queryClient.invalidateQueries({ queryKey: buildDashboardTaskDetailQueryKey(dataMode, taskId) });
+      void queryClient.invalidateQueries({ queryKey: buildDashboardTaskArtifactQueryKey(dataMode, taskId) });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "events", dataMode, taskId] });
+    }
+
     function invalidateTaskQueries(deliveryTaskId?: string) {
       for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
         void queryClient.invalidateQueries({ queryKey });
       }
       if (selectedTaskId && (!deliveryTaskId || deliveryTaskId === selectedTaskId)) {
-        void queryClient.invalidateQueries({ queryKey: buildDashboardTaskArtifactQueryKey(dataMode, selectedTaskId) });
+        invalidateSelectedTaskDetail(selectedTaskId);
       }
     }
 
@@ -173,9 +188,16 @@ export function TaskPage() {
         })
       : () => {};
 
+    const clearRuntimeSubscription = selectedTaskId
+      ? subscribeTaskRuntime(selectedTaskId, () => {
+          invalidateSelectedTaskDetail(selectedTaskId);
+        })
+      : () => {};
+
     return () => {
       clearDeliverySubscription();
       clearTaskSubscription();
+      clearRuntimeSubscription();
     };
   }, [dataMode, queryClient, securityRefreshPlan, selectedTaskId]);
 
@@ -243,6 +265,21 @@ export function TaskPage() {
     },
   });
 
+  const taskSteerMutation = useMutation({
+    mutationFn: ({ message, taskId }: { message: string; taskId: string }) => steerTaskByMessage(taskId, message, dataMode),
+    onSuccess: (result, variables) => {
+      showFeedback(result.bubble_message?.text ?? "已记录新的补充要求。");
+      for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
+        void queryClient.invalidateQueries({ queryKey });
+      }
+      void queryClient.invalidateQueries({ queryKey: buildDashboardTaskDetailQueryKey(dataMode, variables.taskId) });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "events", dataMode, variables.taskId] });
+    },
+    onError: (error) => {
+      showFeedback(error instanceof Error ? `补充要求提交失败：${error.message}` : "补充要求提交失败，请稍后再试。");
+    },
+  });
+
   async function handleOpenSafety() {
     if (!detailData) {
       return;
@@ -298,6 +335,23 @@ export function TaskPage() {
     }
 
     deliveryOpenMutation.mutate({ taskId: detailData.task.task_id });
+  }
+
+  function handleSteerTask(message: string) {
+    if (!detailData) {
+      return;
+    }
+
+    taskSteerMutation.mutate(
+      { message, taskId: detailData.task.task_id },
+      {
+        onSuccess: () => {
+          // Keep the only editable draft intact until the formal steering request succeeds.
+          // This prevents user input loss when the local service is temporarily unavailable.
+          setFeedback((current) => current);
+        },
+      },
+    );
   }
 
   function handleLoadMore(group: "unfinished" | "finished") {
@@ -489,6 +543,9 @@ export function TaskPage() {
                 detailData={detailData}
                 detailWarningMessage={detailData.detailWarningMessage ?? null}
                 detailErrorMessage={detailErrorMessage}
+                eventErrorMessage={taskEventsQuery.isError ? (taskEventsQuery.error instanceof Error ? taskEventsQuery.error.message : "运行时事件请求失败") : null}
+                eventItems={taskEventsQuery.data?.items ?? []}
+                eventLoading={taskEventsQuery.isPending}
                 detailState={detailState}
                 deliveryActionPending={deliveryOpenMutation.isPending}
                 feedback={feedback}
@@ -497,6 +554,8 @@ export function TaskPage() {
                 onOpenArtifact={handleOpenArtifact}
                 onOpenLatestDelivery={handleOpenLatestDelivery}
                 onRetryDetail={taskDetailQuery.isError ? () => void taskDetailQuery.refetch() : null}
+                onSteerTask={handleSteerTask}
+                steeringPending={taskSteerMutation.isPending}
               />
             </motion.div>
           </>

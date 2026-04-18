@@ -428,6 +428,12 @@ function createDetail(overrides: Partial<AgentTaskDetailGetResult> = {}): AgentT
     approval_request: createApprovalRequest(),
     artifacts: [],
     mirror_references: [],
+    runtime_summary: {
+      active_steering_count: 0,
+      events_count: 0,
+      latest_event_type: null,
+      loop_stop_reason: null,
+    },
     security_summary: {
       latest_restore_point: createRecoveryPoint(),
       pending_authorizations: 1,
@@ -1592,6 +1598,16 @@ test("task detail normalization recovers invalid artifacts but still rejects bro
     assert.match(recoveredBoth.detailWarningMessage ?? "", /成果信息暂时无法完整展示/);
     assert.match(recoveredBoth.detailWarningMessage ?? "", /镜子命中信息暂时无法完整展示/);
 
+    const recoveredRuntimeSummary = service.normalizeTaskDetailResult({
+      ...createDetail(),
+      runtime_summary: undefined as never,
+    });
+
+    assert.equal(recoveredRuntimeSummary.runtime_summary.events_count, 0);
+    assert.equal(recoveredRuntimeSummary.runtime_summary.active_steering_count, 0);
+    assert.equal(recoveredRuntimeSummary.runtime_summary.latest_event_type, null);
+    assert.equal(recoveredRuntimeSummary.runtime_summary.loop_stop_reason, null);
+
     assert.throws(
       () =>
         service.normalizeTaskDetailResult(
@@ -1768,6 +1784,28 @@ test("TaskDetailPanel defers the entire fallback security summary until formal d
 
   assert.match(panelSource, /detailData\.source === "fallback" \|\| detailState !== "ready"/);
   assert.match(panelSource, /等待详情同步后展示风险、授权与恢复点/);
+});
+
+test("TaskDetailPanel renders runtime summary fields from the formal detail payload", () => {
+  const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
+
+  assert.match(panelSource, /Runtime Summary/);
+  assert.match(panelSource, /循环停止原因与调试概览/);
+  assert.match(panelSource, /runtimeSummary\.loop_stop_reason \?\? "当前还没有停止原因"/);
+  assert.match(panelSource, /runtimeSummary\.latest_event_type \?\? "当前还没有 runtime event"/);
+  assert.match(panelSource, /runtimeSummary\.events_count/);
+  assert.match(panelSource, /runtimeSummary\.active_steering_count/);
+});
+
+test("TaskDetailPanel keeps runtime sections visible for ended tasks and preserves steering draft until success", () => {
+  const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
+  const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+
+  assert.match(panelSource, /if \(!feedback \|\| !\/已记录新的补充要求\/\.test\(feedback\)\)/);
+  assert.doesNotMatch(panelSource, /handleSubmitSteering\(\)[\s\S]*setSteeringMessage\(""\)/);
+  assert.match(panelSource, /\{renderRuntimeSummarySection\(\)\}/);
+  assert.match(panelSource, /\{renderRuntimeEventsSection\(\)\}/);
+  assert.match(taskPageSource, /invalidateSelectedTaskDetail\(selectedTaskId\)/);
 });
 
 test("dashboard validators read enum truth sources from protocol exports", () => {

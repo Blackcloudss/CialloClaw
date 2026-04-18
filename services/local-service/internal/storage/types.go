@@ -257,13 +257,61 @@ type TaskRunStore interface {
 	LoadTaskRuns(ctx context.Context) ([]TaskRunRecord, error)
 }
 
+// TaskRecord describes one first-class tasks row aligned with the product layer.
+type TaskRecord struct {
+	TaskID              string
+	SessionID           string
+	RunID               string
+	Title               string
+	SourceType          string
+	Status              string
+	IntentName          string
+	IntentArgumentsJSON string
+	PreferredDelivery   string
+	FallbackDelivery    string
+	CurrentStep         string
+	CurrentStepStatus   string
+	RiskLevel           string
+	StartedAt           string
+	UpdatedAt           string
+	FinishedAt          string
+	SnapshotJSON        string
+}
+
+// TaskStepRecord describes one first-class task_steps row for user-facing timelines.
+type TaskStepRecord struct {
+	StepID        string
+	TaskID        string
+	Name          string
+	Status        string
+	OrderIndex    int
+	InputSummary  string
+	OutputSummary string
+	CreatedAt     string
+	UpdatedAt     string
+}
+
+// TaskStore persists first-class tasks rows alongside task_runs snapshots.
+type TaskStore interface {
+	WriteTask(ctx context.Context, record TaskRecord) error
+	DeleteTask(ctx context.Context, taskID string) error
+	GetTask(ctx context.Context, taskID string) (TaskRecord, error)
+	ListTasks(ctx context.Context, limit, offset int) ([]TaskRecord, int, error)
+}
+
+// TaskStepStore persists first-class task_steps rows for task-facing timelines.
+type TaskStepStore interface {
+	ReplaceTaskSteps(ctx context.Context, taskID string, records []TaskStepRecord) error
+	ListTaskSteps(ctx context.Context, taskID string, limit, offset int) ([]TaskStepRecord, int, error)
+}
+
 // LoopRuntimeStore defines normalized run/step/event/delivery_result persistence.
 type LoopRuntimeStore interface {
 	SaveRun(ctx context.Context, record RunRecord) error
 	SaveSteps(ctx context.Context, records []StepRecord) error
 	SaveEvents(ctx context.Context, records []EventRecord) error
 	SaveDeliveryResult(ctx context.Context, record DeliveryResultRecord) error
-	ListEvents(ctx context.Context, taskID string, limit, offset int) ([]EventRecord, int, error)
+	ListEvents(ctx context.Context, taskID, runID, eventType string, limit, offset int) ([]EventRecord, int, error)
 }
 
 // ToolCallStore 定义 tool_call 持久化契约。
@@ -282,4 +330,46 @@ type RecoveryPointStore interface {
 	WriteRecoveryPoint(ctx context.Context, point checkpoint.RecoveryPoint) error
 	ListRecoveryPoints(ctx context.Context, taskID string, limit, offset int) ([]checkpoint.RecoveryPoint, int, error)
 	GetRecoveryPoint(ctx context.Context, recoveryPointID string) (checkpoint.RecoveryPoint, error)
+}
+
+// ApprovalRequestRecord describes one persisted approval_requests snapshot.
+type ApprovalRequestRecord struct {
+	ApprovalID      string
+	TaskID          string
+	OperationName   string
+	RiskLevel       string
+	TargetObject    string
+	Reason          string
+	Status          string
+	ImpactScopeJSON string
+	CreatedAt       string
+	UpdatedAt       string
+}
+
+// AuthorizationRecordRecord describes one persisted authorization_records snapshot.
+type AuthorizationRecordRecord struct {
+	AuthorizationRecordID string
+	TaskID                string
+	ApprovalID            string
+	Decision              string
+	Operator              string
+	RememberRule          bool
+	CreatedAt             string
+}
+
+// ApprovalRequestStore persists formal approval_requests records.
+type ApprovalRequestStore interface {
+	WriteApprovalRequest(ctx context.Context, record ApprovalRequestRecord) error
+	UpdateApprovalRequestStatus(ctx context.Context, approvalID string, status string, updatedAt string) error
+	ListApprovalRequests(ctx context.Context, taskID string, limit, offset int) ([]ApprovalRequestRecord, int, error)
+	ListPendingApprovalRequests(ctx context.Context, limit, offset int) ([]ApprovalRequestRecord, int, error)
+}
+
+// AuthorizationRecordStore persists formal authorization_records records.
+type AuthorizationRecordStore interface {
+	WriteAuthorizationRecord(ctx context.Context, record AuthorizationRecordRecord) error
+	// WriteAuthorizationDecision persists one authorization_records row and its
+	// linked approval_requests status transition inside a single storage boundary.
+	WriteAuthorizationDecision(ctx context.Context, record AuthorizationRecordRecord, approvalStatus string, updatedAt string) error
+	ListAuthorizationRecords(ctx context.Context, taskID string, limit, offset int) ([]AuthorizationRecordRecord, int, error)
 }

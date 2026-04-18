@@ -5,6 +5,7 @@ import type {
   JsonRpcPage,
   Task,
   TaskControlAction,
+  TaskEvent,
 } from "@cialloclaw/protocol";
 
 export type TaskPriority = "critical" | "high" | "steady";
@@ -92,6 +93,15 @@ export type TaskDetailData = {
 export type TaskControlOutcome = {
   result: AgentTaskControlResult;
   source: TaskDataSource;
+};
+
+export type TaskEventItem = TaskEvent & {
+  payload: Record<string, unknown> | null;
+};
+
+export type TaskEventPageData = {
+  items: TaskEventItem[];
+  page: JsonRpcPage;
 };
 
 export type TaskActionShortcut = {

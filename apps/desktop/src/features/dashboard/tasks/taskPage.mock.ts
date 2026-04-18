@@ -527,6 +527,12 @@ function createDetail(
     approval_request: approvalRequest,
     artifacts,
     mirror_references: mirrorReferences,
+    runtime_summary: {
+      active_steering_count: 0,
+      events_count: 0,
+      latest_event_type: null,
+      loop_stop_reason: null,
+    },
     security_summary: securitySummary,
     task,
     timeline,

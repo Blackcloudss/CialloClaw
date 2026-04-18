@@ -2,6 +2,8 @@ import type {
   ApprovalPendingNotification,
   DeliveryReadyNotification,
   MirrorOverviewUpdatedNotification,
+  TaskRuntimeNotification,
+  TaskSteeredNotification,
   TaskUpdatedNotification,
 } from "@cialloclaw/protocol";
 
@@ -26,5 +28,9 @@ export function subscribeTask(_taskId?: string, _listener?: (payload: TaskUpdate
 }
 
 export function subscribeTaskUpdated(_listener?: (payload: TaskUpdatedNotification) => void) {
+  return noopUnsubscribe();
+}
+
+export function subscribeTaskRuntime(_taskId?: string, _listener?: (payload: TaskSteeredNotification | TaskRuntimeNotification) => void) {
   return noopUnsubscribe();
 }
