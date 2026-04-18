@@ -538,6 +538,9 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 		securitySummary = map[string]any{}
 	}
 	approvalRequest := activeTaskDetailApprovalRequest(task)
+	if task.Status != "waiting_auth" {
+		approvalRequest = nil
+	}
 	approvalRequestValue := any(nil)
 	if approvalRequest != nil {
 		approvalRequestValue = approvalRequest

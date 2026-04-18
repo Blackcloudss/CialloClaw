@@ -371,6 +371,9 @@ func TestDispatchTaskDetailGetOmitsApprovalAnchorForCompletedTask(t *testing.T) 
 	}
 
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, ok := server.orchestrator.RunEngine().CompleteTask(taskID, map[string]any{"type": "task_detail", "payload": map[string]any{"task_id": taskID}}, map[string]any{"task_id": taskID, "type": "result", "text": "done"}, nil); !ok {
+		t.Fatal("expected runtime task completion to succeed")
+	}
 	response := server.dispatch(requestEnvelope{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-task-detail-no-anchor"`),
@@ -457,6 +460,9 @@ func TestDispatchMapsTaskControlFinishedErrors(t *testing.T) {
 	}
 
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, ok := server.orchestrator.RunEngine().CompleteTask(taskID, map[string]any{"type": "task_detail", "payload": map[string]any{"task_id": taskID}}, map[string]any{"task_id": taskID, "type": "result", "text": "done"}, nil); !ok {
+		t.Fatal("expected runtime task completion to succeed")
+	}
 	response := server.dispatch(requestEnvelope{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-task-control-finished"`),
@@ -809,8 +815,8 @@ func TestDispatchReturnsDeliveryOpenForTaskResult(t *testing.T) {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
 	data := success.Result.Data.(map[string]any)
-	if data["open_action"] != "workspace_document" {
-		t.Fatalf("expected workspace_document action, got %+v", data)
+	if data["open_action"] != "task_detail" {
+		t.Fatalf("expected task_detail action, got %+v", data)
 	}
 }
 

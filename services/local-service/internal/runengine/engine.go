@@ -826,6 +826,7 @@ func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubb
 	record.Artifacts = cloneMapSlice(artifacts)
 	record.PendingExecution = nil
 	record.ApprovalRequest = nil
+	record.Authorization = nil
 	record.Timeline = advanceTimeline(record.Timeline, "return_result", "completed", "结果已正式交付")
 	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
 	restorePoint := buildRecoveryPoint(record.TaskID, now)
