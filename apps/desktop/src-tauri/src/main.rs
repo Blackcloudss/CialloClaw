@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod activity;
+mod screen_capture;
 mod selection;
 
 use serde_json::Value;
@@ -266,6 +267,13 @@ async fn named_pipe_unsubscribe(
 #[tauri::command]
 fn desktop_get_mouse_activity_snapshot() -> Option<activity::MouseActivitySnapshotPayload> {
     activity::read_mouse_activity_snapshot()
+}
+
+#[tauri::command]
+async fn desktop_capture_screenshot() -> Result<screen_capture::ScreenCapturePayload, String> {
+    tauri::async_runtime::spawn_blocking(screen_capture::capture_screenshot)
+        .await
+        .map_err(|error| format!("desktop screenshot task failed: {error}"))?
 }
 
 fn writer_loop(
@@ -899,6 +907,7 @@ fn main() {
             shell_ball_set_ignore_cursor_events,
             shell_ball_get_mouse_position,
             desktop_get_mouse_activity_snapshot,
+            desktop_capture_screenshot,
             pick_shell_ball_files,
             shell_ball_read_selection_snapshot
         ])
