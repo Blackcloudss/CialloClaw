@@ -313,16 +313,24 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		}
 
 		streamedRuntimeCounts := map[string]int{}
-		unsubscribe := s.orchestrator.SubscribeRuntimeNotifications(func(_ string, method string, params map[string]any) {
-			if !isLiveRuntimeMethod(method) {
-				return
-			}
-			writeMu.Lock()
-			defer writeMu.Unlock()
-			if err := encoder.Encode(newNotificationEnvelope(method, params)); err == nil {
-				streamedRuntimeCounts[notificationKey(method, params)]++
-			}
-		})
+		requestTaskIDs := taskIDSetFromRequest(request)
+		unsubscribe := func() {}
+		if len(requestTaskIDs) > 0 {
+			unsubscribe = s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
+				if !isLiveRuntimeMethod(method) {
+					return
+				}
+				notificationTaskID := runtimeNotificationTaskID(taskID, params)
+				if notificationTaskID == "" || !requestTaskIDs[notificationTaskID] {
+					return
+				}
+				writeMu.Lock()
+				defer writeMu.Unlock()
+				if err := encoder.Encode(newNotificationEnvelope(method, params)); err == nil {
+					streamedRuntimeCounts[notificationKey(method, params)]++
+				}
+			})
+		}
 
 		response := s.dispatch(request)
 		unsubscribe()
@@ -424,8 +432,38 @@ func taskIDsFromResponse(response any) []string {
 	return result
 }
 
+func taskIDSetFromRequest(request requestEnvelope) map[string]bool {
+	params, rpcErr := decodeParams(request.Params)
+	if rpcErr != nil {
+		return nil
+	}
+
+	ids := map[string]struct{}{}
+	collectTaskIDs(params, ids)
+	if len(ids) == 0 {
+		return nil
+	}
+
+	result := make(map[string]bool, len(ids))
+	for taskID := range ids {
+		result[taskID] = true
+	}
+	return result
+}
+
 func isLiveRuntimeMethod(method string) bool {
 	return strings.HasPrefix(method, "loop.") || method == "task.steered"
+}
+
+func runtimeNotificationTaskID(taskID string, params map[string]any) string {
+	if strings.TrimSpace(taskID) != "" {
+		return taskID
+	}
+	if params == nil {
+		return ""
+	}
+	rawTaskID, _ := params["task_id"].(string)
+	return strings.TrimSpace(rawTaskID)
 }
 
 func notificationKey(method string, params map[string]any) string {

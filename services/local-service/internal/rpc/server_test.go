@@ -76,6 +76,42 @@ func (s *stubLoopModelClient) GenerateToolCalls(_ context.Context, request model
 	return result, nil
 }
 
+type selectiveWaitLoopModelClient struct {
+	stubLoopModelClient
+	blockedTaskID string
+}
+
+func (s *selectiveWaitLoopModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	return s.stubLoopModelClient.GenerateText(ctx, request)
+}
+
+func (s *selectiveWaitLoopModelClient) GenerateToolCalls(_ context.Context, request model.ToolCallRequest) (model.ToolCallResult, error) {
+	if s.generateToolSeen != nil && request.TaskID == s.blockedTaskID {
+		select {
+		case <-s.generateToolSeen:
+		default:
+			close(s.generateToolSeen)
+		}
+	}
+	if s.generateToolWait != nil && request.TaskID == s.blockedTaskID {
+		<-s.generateToolWait
+	}
+	result := s.toolResult
+	if strings.TrimSpace(result.OutputText) == "" && len(result.ToolCalls) == 0 {
+		result.OutputText = request.Input
+	}
+	if result.RequestID == "" {
+		result.RequestID = "req_loop_tools"
+	}
+	if result.Provider == "" {
+		result.Provider = "openai_responses"
+	}
+	if result.ModelID == "" {
+		result.ModelID = "gpt-5.4"
+	}
+	return result, nil
+}
+
 type testStorageAdapter struct {
 	databasePath string
 }
@@ -354,6 +390,128 @@ func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponse(t *test
 	if !responseSeen {
 		t.Fatal("expected final response after streamed loop notifications")
 	}
+}
+
+func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) {
+	modelClient := &selectiveWaitLoopModelClient{
+		stubLoopModelClient: stubLoopModelClient{
+			toolResult: model.ToolCallResult{
+				OutputText: "Scoped runtime finished.",
+			},
+			generateToolWait: make(chan struct{}),
+		},
+	}
+	server := newTestServerWithModelClient(modelClient)
+
+	startTask := func(sessionID string) string {
+		t.Helper()
+		result, err := server.orchestrator.StartTask(map[string]any{
+			"session_id": sessionID,
+			"source":     "floating_ball",
+			"trigger":    "text_selected_click",
+			"input": map[string]any{
+				"type": "text_selection",
+				"text": "inspect this workspace",
+			},
+		})
+		if err != nil {
+			t.Fatalf("seed task.start for %s: %v", sessionID, err)
+		}
+		return result["task"].(map[string]any)["task_id"].(string)
+	}
+
+	taskA := startTask("sess_loop_scope_a")
+	taskB := startTask("sess_loop_scope_b")
+	modelClient.blockedTaskID = taskA
+
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-loop-scope"`),
+		Method:  "agent.task.confirm",
+		Params: mustMarshal(t, map[string]any{
+			"task_id":   taskA,
+			"confirmed": false,
+			"corrected_intent": map[string]any{
+				"name":      "agent_loop",
+				"arguments": map[string]any{},
+			},
+		}),
+	}
+
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set first notification deadline: %v", err)
+	}
+
+	var firstEnvelope notificationEnvelope
+	if err := decoder.Decode(&firstEnvelope); err != nil {
+		t.Fatalf("decode first notification: %v", err)
+	}
+	if !strings.HasPrefix(firstEnvelope.Method, "loop.") {
+		t.Fatalf("expected first streamed envelope to be loop.* notification, got %+v", firstEnvelope)
+	}
+
+	if _, err := server.orchestrator.TaskSteer(map[string]any{
+		"task_id": taskB,
+		"message": "Mention the unrelated steering marker.",
+	}); err != nil {
+		t.Fatalf("queue steering for unrelated task: %v", err)
+	}
+
+	confirmDone := make(chan error, 1)
+	go func() {
+		_, err := server.orchestrator.ConfirmTask(map[string]any{
+			"task_id":   taskB,
+			"confirmed": false,
+			"corrected_intent": map[string]any{
+				"name":      "agent_loop",
+				"arguments": map[string]any{},
+			},
+		})
+		confirmDone <- err
+	}()
+
+	if err := right.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
+		t.Fatalf("set scoped notification deadline: %v", err)
+	}
+	for {
+		var envelope notificationEnvelope
+		if err := decoder.Decode(&envelope); err != nil {
+			break
+		}
+		params, ok := envelope.Params.(map[string]any)
+		if !ok {
+			t.Fatalf("expected notification params map, got %+v", envelope)
+		}
+		taskID := stringValue(params, "task_id", "")
+		if taskID == taskB {
+			t.Fatalf("expected stream to suppress unrelated runtime notification for task %s, got %+v", taskB, envelope)
+		}
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
+	}
+
+	select {
+	case err := <-confirmDone:
+		if err != nil {
+			t.Fatalf("confirm unrelated task: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected unrelated task confirmation to complete")
+	}
+
+	close(modelClient.generateToolWait)
 }
 
 func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
