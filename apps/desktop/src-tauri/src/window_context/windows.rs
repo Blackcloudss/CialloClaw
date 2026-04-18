@@ -42,8 +42,14 @@ const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 
 static WINDOW_CONTEXT_APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
 static WINDOW_CONTEXT_FOREGROUND_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
-static LAST_EXTERNAL_WINDOW_CONTEXT: Lazy<Mutex<Option<ActiveWindowContextPayload>>> =
+static LAST_EXTERNAL_WINDOW_CONTEXT: Lazy<Mutex<Option<CachedWindowContext>>> =
     Lazy::new(|| Mutex::new(None));
+
+#[derive(Clone)]
+struct CachedWindowContext {
+    hwnd: isize,
+    context: ActiveWindowContextPayload,
+}
 
 struct ComGuard {
     should_uninitialize: bool,
@@ -84,11 +90,11 @@ pub fn read_active_window_context() -> Result<Option<ActiveWindowContextPayload>
     }
 
     if is_shell_ball_cluster_window(hwnd) {
-        return Ok(read_cached_window_context());
+        return read_cached_window_context_with_url();
     }
 
     let context = read_window_context_for_hwnd(hwnd)?;
-    cache_window_context(&context);
+    cache_window_context(hwnd, &context);
     Ok(Some(context))
 }
 
@@ -125,23 +131,35 @@ pub fn install_window_context_listener(app: &AppHandle) -> Result<(), String> {
         *hook = Some(installed_hook.0 as isize);
     }
 
-    if let Some(current_context) = read_current_external_window_context() {
-        cache_window_context(&current_context);
+    if let Some((hwnd, current_context)) = read_current_external_window_context() {
+        cache_window_context(hwnd, &current_context);
     }
 
     Ok(())
 }
 
-fn read_current_external_window_context() -> Option<ActiveWindowContextPayload> {
+fn read_current_external_window_context() -> Option<(HWND, ActiveWindowContextPayload)> {
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd.0.is_null() || is_shell_ball_cluster_window(hwnd) {
         return None;
     }
 
-    read_window_context_for_hwnd(hwnd).ok()
+    read_lightweight_window_context_for_hwnd(hwnd).ok().map(|context| (hwnd, context))
 }
 
 fn read_window_context_for_hwnd(hwnd: HWND) -> Result<ActiveWindowContextPayload, String> {
+    let mut context = read_lightweight_window_context_for_hwnd(hwnd)?;
+    context.url = match context.browser_kind.as_str() {
+        BROWSER_KIND_CHROME => read_chrome_url_via_mcp(context.title.as_deref())
+            .or_else(|| read_browser_url_via_uia(hwnd)),
+        BROWSER_KIND_EDGE | BROWSER_KIND_OTHER_BROWSER => read_browser_url_via_uia(hwnd),
+        _ => None,
+    };
+
+    Ok(context)
+}
+
+fn read_lightweight_window_context_for_hwnd(hwnd: HWND) -> Result<ActiveWindowContextPayload, String> {
     let process_path = get_process_path(hwnd);
     let app_name = process_path
         .as_deref()
@@ -149,24 +167,22 @@ fn read_window_context_for_hwnd(hwnd: HWND) -> Result<ActiveWindowContextPayload
         .unwrap_or_else(|| "unknown".to_string());
     let browser_kind = classify_browser_kind(&app_name);
     let title = get_window_title(hwnd);
-    let url = match browser_kind {
-        BROWSER_KIND_CHROME => read_chrome_url_via_mcp(title.as_deref()).or_else(|| read_browser_url_via_uia(hwnd)),
-        BROWSER_KIND_EDGE | BROWSER_KIND_OTHER_BROWSER => read_browser_url_via_uia(hwnd),
-        _ => None,
-    };
 
     Ok(ActiveWindowContextPayload {
         app_name,
         process_path,
         title,
-        url,
+        url: None,
         browser_kind: browser_kind.to_string(),
     })
 }
 
-fn cache_window_context(context: &ActiveWindowContextPayload) {
+fn cache_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) {
     if let Ok(mut cached_context) = LAST_EXTERNAL_WINDOW_CONTEXT.lock() {
-        *cached_context = Some(context.clone());
+        *cached_context = Some(CachedWindowContext {
+            hwnd: hwnd.0 as isize,
+            context: context.clone(),
+        });
     }
 }
 
@@ -174,7 +190,27 @@ fn read_cached_window_context() -> Option<ActiveWindowContextPayload> {
     LAST_EXTERNAL_WINDOW_CONTEXT
         .lock()
         .ok()
-        .and_then(|context| context.clone())
+        .and_then(|cached| cached.as_ref().map(|value| value.context.clone()))
+}
+
+fn read_cached_window_context_with_url() -> Result<Option<ActiveWindowContextPayload>, String> {
+    let cached = LAST_EXTERNAL_WINDOW_CONTEXT
+        .lock()
+        .ok()
+        .and_then(|context| context.clone());
+
+    let Some(cached_context) = cached else {
+        return Ok(None);
+    };
+
+    let hwnd = HWND(cached_context.hwnd as *mut core::ffi::c_void);
+    if hwnd.0.is_null() {
+        return Ok(Some(cached_context.context));
+    }
+
+    let context = read_window_context_for_hwnd(hwnd).unwrap_or(cached_context.context.clone());
+    cache_window_context(hwnd, &context);
+    Ok(Some(context))
 }
 
 fn is_shell_ball_cluster_window(hwnd: HWND) -> bool {
@@ -243,8 +279,8 @@ unsafe extern "system" fn window_context_foreground_hook(
         return;
     }
 
-    if let Ok(context) = read_window_context_for_hwnd(hwnd) {
-        cache_window_context(&context);
+    if let Ok(context) = read_lightweight_window_context_for_hwnd(hwnd) {
+        cache_window_context(hwnd, &context);
     }
 }
 
