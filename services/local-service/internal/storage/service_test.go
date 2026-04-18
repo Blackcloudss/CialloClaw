@@ -227,6 +227,54 @@ func TestMemoryStoreReturnsWorkingImplementation(t *testing.T) {
 	}
 }
 
+func TestApprovalAndAuthorizationStoresPersistStructuredGovernanceRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "approval-auth.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	err := service.ApprovalRequestStore().WriteApprovalRequest(context.Background(), ApprovalRequestRecord{
+		ApprovalID:      "appr_001",
+		TaskID:          "task_approval_001",
+		OperationName:   "screen_capture",
+		RiskLevel:       "yellow",
+		TargetObject:    "inputs/screen.png",
+		Reason:          "screen_capture_requires_authorization",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":["inputs/screen.png"]}`,
+		CreatedAt:       "2026-04-18T10:00:00Z",
+		UpdatedAt:       "2026-04-18T10:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("write approval request failed: %v", err)
+	}
+	err = service.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_001",
+		TaskID:                "task_approval_001",
+		ApprovalID:            "appr_001",
+		Decision:              "allow_once",
+		Operator:              "user",
+		RememberRule:          true,
+		CreatedAt:             "2026-04-18T10:01:00Z",
+	})
+	if err != nil {
+		t.Fatalf("write authorization record failed: %v", err)
+	}
+	approvalItems, approvalTotal, err := service.ApprovalRequestStore().ListApprovalRequests(context.Background(), "task_approval_001", 10, 0)
+	if err != nil || approvalTotal != 1 || len(approvalItems) != 1 {
+		t.Fatalf("unexpected approval records total=%d len=%d err=%v", approvalTotal, len(approvalItems), err)
+	}
+	if approvalItems[0].OperationName != "screen_capture" || approvalItems[0].Status != "pending" {
+		t.Fatalf("unexpected approval record: %+v", approvalItems[0])
+	}
+	authorizationItems, authorizationTotal, err := service.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), "task_approval_001", 10, 0)
+	if err != nil || authorizationTotal != 1 || len(authorizationItems) != 1 {
+		t.Fatalf("unexpected authorization records total=%d len=%d err=%v", authorizationTotal, len(authorizationItems), err)
+	}
+	if authorizationItems[0].Decision != "allow_once" || !authorizationItems[0].RememberRule {
+		t.Fatalf("unexpected authorization record: %+v", authorizationItems[0])
+	}
+}
+
 // TestCloseIsSafeWithoutConfiguredStore 验证CloseIsSafeWithoutConfiguredStore。
 func TestCloseIsSafeWithoutConfiguredStore(t *testing.T) {
 	service := NewService(nil)
