@@ -854,15 +854,12 @@ func (s *Service) buildTaskRuntimeSummary(task runengine.TaskRecord) map[string]
 	if strings.TrimSpace(task.LoopStopReason) != "" {
 		summary["loop_stop_reason"] = task.LoopStopReason
 	}
-	if task.LatestEvent != nil {
-		latestType := strings.TrimSpace(stringValue(task.LatestEvent, "type", ""))
-		if latestType != "" {
-			summary["latest_event_type"] = latestType
-		}
-	}
 	if s.storage == nil || s.storage.LoopRuntimeStore() == nil {
 		return summary
 	}
+	// Keep latest_event_type scoped to normalized runtime events so task-level
+	// notifications such as task.updated or task.steered do not leak into the
+	// runtime summary contract when no runtime events have been persisted yet.
 	records, total, err := s.storage.LoopRuntimeStore().ListEvents(context.Background(), task.TaskID, "", "", 1, 0)
 	if err == nil {
 		summary["events_count"] = total

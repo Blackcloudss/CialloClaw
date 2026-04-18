@@ -4408,6 +4408,44 @@ func TestServiceTaskDetailGetIncludesRuntimeSummary(t *testing.T) {
 	}
 }
 
+func TestServiceTaskDetailGetKeepsRuntimeSummaryScopedToRuntimeEvents(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task detail runtime event scope")
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_detail_runtime_scope",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "task detail runtime summary should ignore non-runtime latest events",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, ok := service.runEngine.AppendSteeringMessage(taskID, "Please prioritize the action items.", nil); !ok {
+		t.Fatal("expected steering append to succeed")
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	runtimeSummary, ok := detailResult["runtime_summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected runtime_summary payload, got %+v", detailResult["runtime_summary"])
+	}
+	if runtimeSummary["events_count"] != 0 {
+		t.Fatalf("expected task-level events_count 0, got %+v", runtimeSummary)
+	}
+	if runtimeSummary["latest_event_type"] != nil {
+		t.Fatalf("expected latest_event_type to stay nil without runtime events, got %+v", runtimeSummary)
+	}
+	if runtimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected active_steering_count 1, got %+v", runtimeSummary)
+	}
+}
+
 func TestServiceDashboardOverviewRespectsIncludeFilter(t *testing.T) {
 	service := newTestService()
 
