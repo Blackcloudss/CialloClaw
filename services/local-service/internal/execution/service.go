@@ -962,11 +962,16 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		PlannerRetryBudget: s.agentLoopPlannerRetryBudget(),
 		ToolRetryBudget:    s.agentLoopToolRetryBudget(),
 		Hook:               noopAgentLoopHook{},
-		Now:                time.Now,
+		EmitEvent: func(event agentloop.LifecycleEvent) {
+			if s.notificationEmitter == nil {
+				return
+			}
+			s.notificationEmitter(request.TaskID, event.Type, cloneMap(event.Payload))
+		},
+		Now: time.Now,
 	})
 	if ok && shouldPersistAgentLoopRuntime(runtimeResult) {
 		s.persistAgentLoopRuntime(request, runtimeResult)
-		s.EmitAgentLoopNotifications(request.TaskID, runtimeResult)
 	}
 	if err != nil || !ok {
 		return generationTrace{}, ok, err
@@ -1686,17 +1691,6 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 			PreviewText:      result.DeliveryRecord.PreviewText,
 			CreatedAt:        result.DeliveryRecord.CreatedAt.UTC().Format(time.RFC3339),
 		})
-	}
-}
-
-// EmitAgentLoopNotifications forwards formal loop lifecycle methods into the
-// shared runtime notification stream once persistence has succeeded.
-func (s *Service) EmitAgentLoopNotifications(taskID string, result agentloop.Result) {
-	if s == nil || s.notificationEmitter == nil {
-		return
-	}
-	for _, event := range result.Events {
-		s.notificationEmitter(taskID, event.Type, cloneMap(event.Payload))
 	}
 }
 

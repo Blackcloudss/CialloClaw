@@ -9,6 +9,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
@@ -63,6 +64,9 @@ type Service struct {
 	executor       *execution.Service
 	inspector      *taskinspector.Service
 	storage        *storage.Service
+	runtimeMu      sync.RWMutex
+	runtimeNextID  uint64
+	runtimeTaps    map[uint64]func(taskID, method string, params map[string]any)
 }
 
 // NewService 创建并返回Service。
@@ -93,6 +97,7 @@ func NewService(
 		recommendation: recommendation.NewService(),
 		traceEval:      traceeval.NewService(nil, nil),
 		inspector:      taskinspector.NewService(nil),
+		runtimeTaps:    map[uint64]func(taskID, method string, params map[string]any){},
 	}
 }
 
@@ -109,6 +114,7 @@ func (s *Service) WithExecutor(executorService *execution.Service) *Service {
 	s.executor = executorService
 	if executorService != nil {
 		executorService.WithNotificationEmitter(func(taskID, method string, params map[string]any) {
+			s.publishRuntimeNotification(taskID, method, params)
 			_, _ = s.runEngine.EmitRuntimeNotification(taskID, method, params)
 		}).WithSteeringPoller(func(taskID string) []string {
 			messages, ok := s.runEngine.DrainSteeringMessages(taskID)
@@ -119,6 +125,48 @@ func (s *Service) WithExecutor(executorService *execution.Service) *Service {
 		})
 	}
 	return s
+}
+
+// SubscribeRuntimeNotifications registers a temporary tap for execution-time
+// runtime notifications so transports can mirror in-flight loop events without
+// waiting for the enclosing RPC response to finish.
+func (s *Service) SubscribeRuntimeNotifications(listener func(taskID, method string, params map[string]any)) func() {
+	if s == nil || listener == nil {
+		return func() {}
+	}
+
+	s.runtimeMu.Lock()
+	s.runtimeNextID++
+	listenerID := s.runtimeNextID
+	s.runtimeTaps[listenerID] = listener
+	s.runtimeMu.Unlock()
+
+	return func() {
+		s.runtimeMu.Lock()
+		delete(s.runtimeTaps, listenerID)
+		s.runtimeMu.Unlock()
+	}
+}
+
+func (s *Service) publishRuntimeNotification(taskID, method string, params map[string]any) {
+	if s == nil {
+		return
+	}
+
+	s.runtimeMu.RLock()
+	if len(s.runtimeTaps) == 0 {
+		s.runtimeMu.RUnlock()
+		return
+	}
+	listeners := make([]func(taskID, method string, params map[string]any), 0, len(s.runtimeTaps))
+	for _, listener := range s.runtimeTaps {
+		listeners = append(listeners, listener)
+	}
+	s.runtimeMu.RUnlock()
+
+	for _, listener := range listeners {
+		listener(taskID, method, cloneMap(params))
+	}
 }
 
 // WithTaskInspector 挂接任务巡检运行态服务。

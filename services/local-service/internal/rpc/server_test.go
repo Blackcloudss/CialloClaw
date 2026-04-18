@@ -32,6 +32,50 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
 )
 
+type stubLoopModelClient struct {
+	toolResult       model.ToolCallResult
+	generateToolWait chan struct{}
+	generateToolSeen chan struct{}
+}
+
+func (s *stubLoopModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	return model.GenerateTextResponse{
+		TaskID:     request.TaskID,
+		RunID:      request.RunID,
+		RequestID:  "req_loop_text",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: "loop fallback output",
+	}, nil
+}
+
+func (s *stubLoopModelClient) GenerateToolCalls(_ context.Context, request model.ToolCallRequest) (model.ToolCallResult, error) {
+	if s.generateToolSeen != nil {
+		select {
+		case <-s.generateToolSeen:
+		default:
+			close(s.generateToolSeen)
+		}
+	}
+	if s.generateToolWait != nil {
+		<-s.generateToolWait
+	}
+	result := s.toolResult
+	if strings.TrimSpace(result.OutputText) == "" && len(result.ToolCalls) == 0 {
+		result.OutputText = request.Input
+	}
+	if result.RequestID == "" {
+		result.RequestID = "req_loop_tools"
+	}
+	if result.Provider == "" {
+		result.Provider = "openai_responses"
+	}
+	if result.ModelID == "" {
+		result.ModelID = "gpt-5.4"
+	}
+	return result, nil
+}
+
 type testStorageAdapter struct {
 	databasePath string
 }
@@ -210,6 +254,105 @@ func TestHandleStreamConnEmitsLoopLifecycleNotifications(t *testing.T) {
 	}
 	if !seenLoopNotification {
 		t.Fatal("expected loop.* notification to be emitted on stream connection")
+	}
+}
+
+func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponse(t *testing.T) {
+	modelClient := &stubLoopModelClient{
+		toolResult: model.ToolCallResult{
+			OutputText: "Loop runtime finished in-flight.",
+		},
+		generateToolWait: make(chan struct{}),
+		generateToolSeen: make(chan struct{}),
+	}
+	server := newTestServerWithModelClient(modelClient)
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_loop_stream",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "inspect this workspace",
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed task.start: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if startResult["task"].(map[string]any)["status"] != "confirming_intent" {
+		t.Fatalf("expected seeded task to wait for confirm, got %+v", startResult["task"])
+	}
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-loop-stream"`),
+		Method:  "agent.task.confirm",
+		Params: mustMarshal(t, map[string]any{
+			"task_id":   taskID,
+			"confirmed": false,
+			"corrected_intent": map[string]any{
+				"name":      "agent_loop",
+				"arguments": map[string]any{},
+			},
+		}),
+	}
+
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+
+	var firstEnvelope map[string]any
+	if err := decoder.Decode(&firstEnvelope); err != nil {
+		t.Fatalf("decode first envelope: %v", err)
+	}
+	if method, _ := firstEnvelope["method"].(string); !strings.HasPrefix(method, "loop.") {
+		t.Fatalf("expected first streamed envelope to be loop.* notification, got %+v", firstEnvelope)
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
+	}
+
+	close(modelClient.generateToolWait)
+
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set response deadline: %v", err)
+	}
+	responseSeen := false
+	for index := 0; index < 8; index++ {
+		var envelope map[string]any
+		if err := decoder.Decode(&envelope); err != nil {
+			t.Fatalf("decode response envelope: %v", err)
+		}
+		if envelope["id"] == nil {
+			continue
+		}
+		result, ok := envelope["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected success result envelope, got %+v", envelope)
+		}
+		data, ok := result["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected response data payload, got %+v", envelope)
+		}
+		task, ok := data["task"].(map[string]any)
+		if !ok || task["status"] != "completed" {
+			t.Fatalf("expected completed task response, got %+v", envelope)
+		}
+		responseSeen = true
+		break
+	}
+	if !responseSeen {
+		t.Fatal("expected final response after streamed loop notifications")
 	}
 }
 
@@ -1092,6 +1235,10 @@ func TestDispatchTaskSteerReturnsUpdatedTask(t *testing.T) {
 }
 
 func newTestServer() *Server {
+	return newTestServerWithModelClient(nil)
+}
+
+func newTestServerWithModelClient(client model.Client) *Server {
 	toolRegistry := tools.NewRegistry()
 	_ = builtin.RegisterBuiltinTools(toolRegistry)
 	toolExecutor := tools.NewToolExecutor(toolRegistry)
@@ -1103,7 +1250,7 @@ func newTestServer() *Server {
 		sidecarclient.NewNoopPlaywrightSidecarClient(),
 		sidecarclient.NewNoopOCRWorkerClient(),
 		sidecarclient.NewNoopMediaWorkerClient(),
-		model.NewService(serviceconfig.ModelConfig{Provider: "openai_responses", ModelID: "gpt-5.4", Endpoint: "https://api.openai.com/v1/responses"}),
+		model.NewService(serviceconfig.ModelConfig{Provider: "openai_responses", ModelID: "gpt-5.4", Endpoint: "https://api.openai.com/v1/responses"}, client),
 		audit.NewService(),
 		checkpoint.NewService(),
 		delivery.NewService(),

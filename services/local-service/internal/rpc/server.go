@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
@@ -293,6 +294,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 
 	decoder := json.NewDecoder(conn)
 	encoder := json.NewEncoder(conn)
+	var writeMu sync.Mutex
 
 	for {
 		var request requestEnvelope
@@ -310,8 +312,25 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 			return
 		}
 
+		streamedRuntimeCounts := map[string]int{}
+		unsubscribe := s.orchestrator.SubscribeRuntimeNotifications(func(_ string, method string, params map[string]any) {
+			if !isLiveRuntimeMethod(method) {
+				return
+			}
+			writeMu.Lock()
+			defer writeMu.Unlock()
+			if err := encoder.Encode(newNotificationEnvelope(method, params)); err == nil {
+				streamedRuntimeCounts[notificationKey(method, params)]++
+			}
+		})
+
 		response := s.dispatch(request)
-		if err := encoder.Encode(response); err != nil {
+		unsubscribe()
+
+		writeMu.Lock()
+		err := encoder.Encode(response)
+		writeMu.Unlock()
+		if err != nil {
 			return
 		}
 
@@ -324,7 +343,15 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 			for _, notification := range notifications {
 				method := stringValue(notification, "method", "task.updated")
 				params := mapValue(notification, "params")
-				if err := encoder.Encode(newNotificationEnvelope(method, params)); err != nil {
+				key := notificationKey(method, params)
+				if isLiveRuntimeMethod(method) && streamedRuntimeCounts[key] > 0 {
+					streamedRuntimeCounts[key]--
+					continue
+				}
+				writeMu.Lock()
+				err := encoder.Encode(newNotificationEnvelope(method, params))
+				writeMu.Unlock()
+				if err != nil {
 					return
 				}
 			}
@@ -395,6 +422,18 @@ func taskIDsFromResponse(response any) []string {
 	}
 
 	return result
+}
+
+func isLiveRuntimeMethod(method string) bool {
+	return strings.HasPrefix(method, "loop.") || method == "task.steered"
+}
+
+func notificationKey(method string, params map[string]any) string {
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		return method
+	}
+	return method + ":" + string(encoded)
 }
 
 // collectTaskIDs 处理当前模块的相关逻辑。
