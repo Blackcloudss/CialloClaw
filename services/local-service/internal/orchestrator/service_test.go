@@ -1831,6 +1831,87 @@ func TestServiceTaskControlResumeHumanLoopReplanReturnsToIntentConfirmation(t *t
 	}
 }
 
+func TestServiceTaskControlResumeHumanLoopReplanClearsAuthorizationBeforeReconfirm(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Recovered after review.")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_hitl_replan_authorized",
+		Title:       "写入：Please update the workspace file after review",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "write_file", "arguments": map[string]any{"target_path": "workspace/original.md"}},
+		CurrentStep: "authorized_execution",
+		RiskLevel:   "yellow",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Text:      "Please update the workspace file after review",
+			InputType: "text",
+			Trigger:   "hover_text_input",
+		},
+	})
+	if _, ok := service.runEngine.ResolveAuthorization(task.TaskID, map[string]any{"decision": "allow_once"}, map[string]any{"files": []string{"workspace/original.md"}}); !ok {
+		t.Fatal("expected authorization record to be stored before human review")
+	}
+	if _, ok := service.runEngine.EscalateHumanLoop(task.TaskID, map[string]any{
+		"reason":           "doom_loop",
+		"status":           "pending",
+		"suggested_action": "review_and_replan",
+	}, map[string]any{"task_id": task.TaskID, "type": "status", "text": "需要人工介入"}); !ok {
+		t.Fatal("expected human escalation to succeed")
+	}
+
+	result, err := service.TaskControl(map[string]any{
+		"task_id": task.TaskID,
+		"action":  "resume",
+		"arguments": map[string]any{
+			"review": map[string]any{
+				"decision": "replan",
+				"corrected_intent": map[string]any{
+					"name": "write_file",
+					"arguments": map[string]any{
+						"target_path":           "workspace/replanned.md",
+						"require_authorization": true,
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("resume with replan failed: %v", err)
+	}
+	if result["task"].(map[string]any)["status"] != "confirming_intent" {
+		t.Fatalf("expected replan decision to return task to confirming_intent, got %+v", result["task"])
+	}
+
+	record, ok := service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected replanned task in runtime")
+	}
+	if record.Authorization != nil || record.ImpactScope != nil {
+		t.Fatalf("expected replan to clear prior authorization state, got %+v", record)
+	}
+
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   task.TaskID,
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("confirm task after replan failed: %v", err)
+	}
+	if confirmResult["task"].(map[string]any)["status"] != "waiting_auth" {
+		t.Fatalf("expected corrected intent to require fresh authorization, got %+v", confirmResult["task"])
+	}
+
+	record, ok = service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime after reconfirm")
+	}
+	if record.Authorization != nil {
+		t.Fatalf("expected prior authorization record to stay cleared until fresh approval, got %+v", record.Authorization)
+	}
+	if len(record.ApprovalRequest) == 0 {
+		t.Fatalf("expected reconfirmed task to create a new approval request, got %+v", record)
+	}
+}
+
 func TestServiceTaskControlResumeHumanLoopRequiresReviewDecision(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Recovered after review.")
 	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
@@ -6335,6 +6416,119 @@ func TestServiceTaskControlReturnsUpdatedTaskAndBubbleForWaitingAuthCancel(t *te
 	}
 	if recordedTask.Status != "cancelled" || recordedTask.CurrentStep != "task_cancelled" {
 		t.Fatalf("expected runtime task to stay aligned with task.control payload, got %+v", recordedTask)
+	}
+}
+
+func TestServiceTaskEventsListReturnsNormalizedLoopEvents(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "loop event list")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime store to be wired")
+	}
+	if err := service.storage.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{{
+		EventID:     "evt_loop_list_001",
+		RunID:       "run_loop_list_001",
+		TaskID:      "task_loop_list_001",
+		StepID:      "step_loop_list_001",
+		Type:        "loop.completed",
+		Level:       "info",
+		PayloadJSON: `{"stop_reason":"completed"}`,
+		CreatedAt:   "2026-04-17T10:00:00Z",
+	}}); err != nil {
+		t.Fatalf("save loop events failed: %v", err)
+	}
+
+	result, err := service.TaskEventsList(map[string]any{"task_id": "task_loop_list_001", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task events list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["type"] != "loop.completed" {
+		t.Fatalf("expected normalized loop event item, got %+v", items)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 1 {
+		t.Fatalf("expected total 1, got %+v", page)
+	}
+}
+
+func TestServiceTaskSteerPersistsFollowUpMessage(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task steer")
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_task_steer",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Please write this into a file after authorization.",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+
+	result, err := service.TaskSteer(map[string]any{"task_id": taskID, "message": "Also include a short summary section."})
+	if err != nil {
+		t.Fatalf("task steer failed: %v", err)
+	}
+	if result["task"].(map[string]any)["task_id"] != taskID {
+		t.Fatalf("expected steered task id %s, got %+v", taskID, result)
+	}
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected steered task to remain in runtime")
+	}
+	if len(record.SteeringMessages) != 1 || record.SteeringMessages[0] != "Also include a short summary section." {
+		t.Fatalf("expected steering message to persist, got %+v", record.SteeringMessages)
+	}
+	if record.LatestEvent["type"] != "task.steered" {
+		t.Fatalf("expected latest event task.steered, got %+v", record.LatestEvent)
+	}
+}
+
+func TestServiceTaskListIncludesLoopStopReason(t *testing.T) {
+	service := newTestService()
+	for index := 0; index < 2; index++ {
+		_, err := service.StartTask(map[string]any{
+			"session_id": fmt.Sprintf("sess_loop_stop_%02d", index),
+			"source":     "floating_ball",
+			"trigger":    "hover_text_input",
+			"input": map[string]any{
+				"type": "text",
+				"text": fmt.Sprintf("task %02d", index),
+			},
+			"intent": map[string]any{
+				"name": "write_file",
+				"arguments": map[string]any{
+					"require_authorization": true,
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("start task %d failed: %v", index, err)
+		}
+	}
+	items, total := service.runEngine.ListTasks("unfinished", "updated_at", "desc", 20, 0)
+	if total == 0 {
+		t.Fatal("expected tasks to exist")
+	}
+	updated, ok := service.runEngine.RecordLoopLifecycle(items[0].TaskID, "loop.failed", "tool_retry_exhausted", map[string]any{"stop_reason": "tool_retry_exhausted"})
+	if !ok {
+		t.Fatal("expected loop lifecycle update to succeed")
+	}
+	result, err := service.TaskList(map[string]any{"group": "unfinished", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	listed := result["items"].([]map[string]any)
+	if listed[0]["task_id"] != updated.TaskID || listed[0]["loop_stop_reason"] != "tool_retry_exhausted" {
+		t.Fatalf("expected task list to expose loop stop reason, got %+v", listed[0])
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
@@ -63,6 +64,10 @@ type Service struct {
 	executor       *execution.Service
 	inspector      *taskinspector.Service
 	storage        *storage.Service
+	runtimeMu      sync.RWMutex
+	runtimeNextID  uint64
+	runtimeTaps    map[uint64]func(taskID, method string, params map[string]any)
+	taskStartTaps  map[uint64]func(taskID, sessionID, traceID string)
 }
 
 // NewService 创建并返回Service。
@@ -93,6 +98,8 @@ func NewService(
 		recommendation: recommendation.NewService(),
 		traceEval:      traceeval.NewService(nil, nil),
 		inspector:      taskinspector.NewService(nil),
+		runtimeTaps:    map[uint64]func(taskID, method string, params map[string]any){},
+		taskStartTaps:  map[uint64]func(taskID, sessionID, traceID string){},
 	}
 }
 
@@ -107,7 +114,103 @@ func (s *Service) WithAudit(auditService *audit.Service) *Service {
 // WithExecutor 把真实执行服务挂入 orchestrator。
 func (s *Service) WithExecutor(executorService *execution.Service) *Service {
 	s.executor = executorService
+	if executorService != nil {
+		executorService.WithNotificationEmitter(func(taskID, method string, params map[string]any) {
+			s.publishRuntimeNotification(taskID, method, params)
+			_, _ = s.runEngine.EmitRuntimeNotification(taskID, method, params)
+		}).WithSteeringPoller(func(taskID string) []string {
+			messages, ok := s.runEngine.DrainSteeringMessages(taskID)
+			if !ok {
+				return nil
+			}
+			return messages
+		})
+	}
 	return s
+}
+
+// SubscribeRuntimeNotifications registers a temporary tap for execution-time
+// runtime notifications so transports can mirror in-flight loop events without
+// waiting for the enclosing RPC response to finish.
+func (s *Service) SubscribeRuntimeNotifications(listener func(taskID, method string, params map[string]any)) func() {
+	if s == nil || listener == nil {
+		return func() {}
+	}
+
+	s.runtimeMu.Lock()
+	s.runtimeNextID++
+	listenerID := s.runtimeNextID
+	s.runtimeTaps[listenerID] = listener
+	s.runtimeMu.Unlock()
+
+	return func() {
+		s.runtimeMu.Lock()
+		delete(s.runtimeTaps, listenerID)
+		s.runtimeMu.Unlock()
+	}
+}
+
+// SubscribeTaskStarts registers a temporary tap that reports newly created
+// tasks before execution continues, allowing transports to associate follow-on
+// runtime notifications with requests that did not yet know their task_id.
+func (s *Service) SubscribeTaskStarts(listener func(taskID, sessionID, traceID string)) func() {
+	if s == nil || listener == nil {
+		return func() {}
+	}
+
+	s.runtimeMu.Lock()
+	s.runtimeNextID++
+	listenerID := s.runtimeNextID
+	s.taskStartTaps[listenerID] = listener
+	s.runtimeMu.Unlock()
+
+	return func() {
+		s.runtimeMu.Lock()
+		delete(s.taskStartTaps, listenerID)
+		s.runtimeMu.Unlock()
+	}
+}
+
+func (s *Service) publishRuntimeNotification(taskID, method string, params map[string]any) {
+	if s == nil {
+		return
+	}
+
+	s.runtimeMu.RLock()
+	if len(s.runtimeTaps) == 0 {
+		s.runtimeMu.RUnlock()
+		return
+	}
+	listeners := make([]func(taskID, method string, params map[string]any), 0, len(s.runtimeTaps))
+	for _, listener := range s.runtimeTaps {
+		listeners = append(listeners, listener)
+	}
+	s.runtimeMu.RUnlock()
+
+	for _, listener := range listeners {
+		listener(taskID, method, cloneMap(params))
+	}
+}
+
+func (s *Service) publishTaskStart(taskID, sessionID, traceID string) {
+	if s == nil {
+		return
+	}
+
+	s.runtimeMu.RLock()
+	if len(s.taskStartTaps) == 0 {
+		s.runtimeMu.RUnlock()
+		return
+	}
+	listeners := make([]func(taskID, sessionID, traceID string), 0, len(s.taskStartTaps))
+	for _, listener := range s.taskStartTaps {
+		listeners = append(listeners, listener)
+	}
+	s.runtimeMu.RUnlock()
+
+	for _, listener := range listeners {
+		listener(taskID, sessionID, traceID)
+	}
 }
 
 // WithTaskInspector 挂接任务巡检运行态服务。
@@ -153,6 +256,12 @@ func (s *Service) Snapshot() map[string]any {
 		"pending_approvals":       pendingTotal,
 		"latest_approval_request": firstMapOrNil(pendingApprovals),
 	}
+}
+
+// RunEngine exposes the attached runtime engine for transport-layer tests and
+// debug wiring that need to seed notifications or inspect task state.
+func (s *Service) RunEngine() *runengine.Engine {
+	return s.runEngine
 }
 
 // SubmitInput 处理当前模块的相关逻辑。
@@ -208,6 +317,7 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)),
 		Snapshot:          snapshot,
 	})
+	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), task.StartedAt.Format(dateTimeLayout))
@@ -282,6 +392,7 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)),
 		Snapshot:          snapshot,
 	})
+	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForStart(suggestion), task.StartedAt.Format(dateTimeLayout))
@@ -596,6 +707,9 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 		securitySummary = map[string]any{}
 	}
 	approvalRequest := activeTaskDetailApprovalRequest(task)
+	if task.Status != "waiting_auth" {
+		approvalRequest = nil
+	}
 	approvalRequestValue := any(nil)
 	if approvalRequest != nil {
 		approvalRequestValue = approvalRequest
@@ -618,6 +732,67 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 		"mirror_references": protocolMirrorReferenceList(task.MirrorReferences),
 		"approval_request":  approvalRequestValue,
 		"security_summary":  securitySummary,
+	}, nil
+}
+
+// TaskEventsList handles agent.task.events.list and exposes normalized runtime
+// events without leaking storage-specific row shapes across the RPC boundary.
+func (s *Service) TaskEventsList(params map[string]any) (map[string]any, error) {
+	limit := clampListLimit(intValue(params, "limit", 20))
+	offset := clampListOffset(intValue(params, "offset", 0))
+	taskID := stringValue(params, "task_id", "")
+	if strings.TrimSpace(taskID) == "" {
+		return nil, errors.New("task_id is required")
+	}
+	if s.storage == nil || s.storage.LoopRuntimeStore() == nil {
+		return map[string]any{"items": []map[string]any{}, "page": pageMap(limit, offset, 0)}, nil
+	}
+	records, total, err := s.storage.LoopRuntimeStore().ListEvents(context.Background(), taskID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	items := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		items = append(items, map[string]any{
+			"event_id":     record.EventID,
+			"run_id":       record.RunID,
+			"task_id":      record.TaskID,
+			"step_id":      record.StepID,
+			"type":         record.Type,
+			"level":        record.Level,
+			"payload_json": record.PayloadJSON,
+			"created_at":   record.CreatedAt,
+		})
+	}
+	return map[string]any{
+		"items": items,
+		"page":  pageMap(limit, offset, total),
+	}, nil
+}
+
+// TaskSteer handles agent.task.steer by persisting one follow-up instruction for
+// a still-active task so later execution or resume paths can consume it.
+func (s *Service) TaskSteer(params map[string]any) (map[string]any, error) {
+	taskID := stringValue(params, "task_id", "")
+	message := stringValue(params, "message", "")
+	if strings.TrimSpace(taskID) == "" {
+		return nil, errors.New("task_id is required")
+	}
+	if strings.TrimSpace(message) == "" {
+		return nil, errors.New("message is required")
+	}
+	task, ok := s.runEngine.GetTask(taskID)
+	if !ok {
+		return nil, ErrTaskNotFound
+	}
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已记录新的补充要求，后续执行会纳入该指令。", time.Now().Format(dateTimeLayout))
+	updatedTask, changed := s.runEngine.AppendSteeringMessage(task.TaskID, message, bubble)
+	if !changed {
+		return nil, ErrTaskStatusInvalid
+	}
+	return map[string]any{
+		"task":           taskMap(updatedTask),
+		"bubble_message": bubble,
 	}, nil
 }
 
@@ -1691,16 +1866,17 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 // taskMap 把 runengine 内部任务记录映射成对外统一的 task 结构。
 func taskMap(record runengine.TaskRecord) map[string]any {
 	result := map[string]any{
-		"task_id":      record.TaskID,
-		"title":        record.Title,
-		"source_type":  record.SourceType,
-		"status":       record.Status,
-		"intent":       cloneMap(record.Intent),
-		"current_step": record.CurrentStep,
-		"risk_level":   record.RiskLevel,
-		"started_at":   record.StartedAt.Format(dateTimeLayout),
-		"updated_at":   record.UpdatedAt.Format(dateTimeLayout),
-		"finished_at":  nil,
+		"task_id":          record.TaskID,
+		"title":            record.Title,
+		"source_type":      record.SourceType,
+		"status":           record.Status,
+		"intent":           cloneMap(record.Intent),
+		"current_step":     record.CurrentStep,
+		"risk_level":       record.RiskLevel,
+		"loop_stop_reason": record.LoopStopReason,
+		"started_at":       record.StartedAt.Format(dateTimeLayout),
+		"updated_at":       record.UpdatedAt.Format(dateTimeLayout),
+		"finished_at":      nil,
 	}
 	if record.FinishedAt != nil {
 		result["finished_at"] = record.FinishedAt.Format(dateTimeLayout)
@@ -2154,6 +2330,8 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 		ArtifactPlans:     cloneMapSlice(record.ArtifactPlans),
 		LatestEvent:       cloneMap(record.LatestEvent),
 		LatestToolCall:    cloneMap(record.LatestToolCall),
+		LoopStopReason:    record.LoopStopReason,
+		SteeringMessages:  append([]string(nil), record.SteeringMessages...),
 		CurrentStepStatus: record.CurrentStepStatus,
 	}
 }
@@ -4160,6 +4338,10 @@ func stringValue(values map[string]any, key, fallback string) string {
 	return value
 }
 
+func requestTraceID(values map[string]any) string {
+	return stringValue(mapValue(values, "request_meta"), "trace_id", "")
+}
+
 // boolValue 处理当前模块的相关逻辑。
 
 // boolValue 安全读取布尔字段。
@@ -4248,6 +4430,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		Title:                processingTask.Title,
 		Intent:               taskIntent,
 		Snapshot:             snapshot,
+		SteeringMessages:     append([]string(nil), processingTask.SteeringMessages...),
 		DeliveryType:         deliveryType,
 		ResultTitle:          resultTitle,
 		ApprovalGranted:      processingTask.Authorization != nil,
