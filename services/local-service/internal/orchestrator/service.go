@@ -258,6 +258,11 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	explicitIntent := mapValue(params, "intent")
+	if handledResponse, handled, err := s.handleScreenAnalyzeStart(params, snapshot, explicitIntent); err != nil {
+		return nil, err
+	} else if handled {
+		return handledResponse, nil
+	}
 	suggestion := s.intent.Suggest(snapshot, explicitIntent, len(explicitIntent) == 0)
 	preferredDelivery, fallbackDelivery := deliveryPreferenceFromStart(params)
 	if len(explicitIntent) == 0 && !suggestion.RequiresConfirm {
@@ -321,6 +326,76 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	response["bubble_message"] = bubble
 	response["delivery_result"] = deliveryResult
 	return response, nil
+}
+
+func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, error) {
+	if stringValue(explicitIntent, "name", "") != "screen_analyze" || s.executor == nil || s.executor.ScreenCapabilitySnapshot().Available == false {
+		return nil, false, nil
+	}
+	arguments := mapValue(explicitIntent, "arguments")
+	sourcePath := stringValue(arguments, "path", "")
+	if strings.TrimSpace(sourcePath) == "" {
+		return nil, false, fmt.Errorf("screen_analyze requires intent.arguments.path")
+	}
+	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         stringValue(params, "session_id", ""),
+		Title:             firstNonEmptyString(stringValue(explicitIntent, "title", ""), "分析屏幕截图"),
+		SourceType:        "screen_capture",
+		Status:            "waiting_auth",
+		Intent:            cloneMap(explicitIntent),
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "waiting_authorization",
+		RiskLevel:         "yellow",
+		Timeline:          initialTimeline("waiting_auth", "waiting_authorization"),
+		Snapshot:          snapshot,
+	})
+	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {
+		return nil, false, queueErr
+	} else if queued {
+		return map[string]any{
+			"task":            taskMap(queuedTask),
+			"bubble_message":  queueBubble,
+			"delivery_result": nil,
+		}, true, nil
+	}
+	approvalRequest := map[string]any{
+		"approval_id":    fmt.Sprintf("appr_%s", task.TaskID),
+		"task_id":        task.TaskID,
+		"operation_name": "screen_capture",
+		"risk_level":     "yellow",
+		"target_object":  sourcePath,
+		"reason":         "screen_capture_requires_authorization",
+		"status":         "pending",
+		"created_at":     time.Now().Format(dateTimeLayout),
+	}
+	pendingExecution := map[string]any{
+		"kind":           "screen_analysis",
+		"operation_name": "screen_capture",
+		"source_path":    sourcePath,
+		"language":       firstNonEmptyString(stringValue(arguments, "language", ""), "eng"),
+		"evidence_role":  firstNonEmptyString(stringValue(arguments, "evidence_role", ""), "error_evidence"),
+		"delivery_type":  "bubble",
+		"result_title":   "屏幕分析结果",
+		"preview_text":   "已准备分析屏幕截图",
+		"impact_scope": map[string]any{
+			"files":                    []string{sourcePath},
+			"webpages":                 []string{},
+			"apps":                     []string{},
+			"out_of_workspace":         false,
+			"overwrite_or_delete_risk": false,
+		},
+	}
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "屏幕截图分析属于敏感能力，请先确认授权。", task.UpdatedAt.Format(dateTimeLayout))
+	updatedTask, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
+	if !ok {
+		return nil, false, ErrTaskNotFound
+	}
+	return map[string]any{
+		"task":            taskMap(updatedTask),
+		"bubble_message":  bubble,
+		"delivery_result": nil,
+	}, true, nil
 }
 
 // ConfirmTask handles agent.task.confirm.
@@ -1453,6 +1528,27 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 			"applied":              response["applied"],
 		}, nil
 	}
+	if stringValue(pendingExecution, "kind", "") == "screen_analysis" {
+		updatedTask, bubble, deliveryResult, err := s.executeScreenAnalysisAfterApproval(processingTask, pendingExecution)
+		if err != nil {
+			return nil, err
+		}
+		if updatedTask.Status == "completed" {
+			updatedTask, _ = s.runEngine.ResolveAuthorization(task.TaskID, authorizationRecord, impactScope)
+		}
+		if taskIsTerminal(updatedTask.Status) {
+			if queueErr := s.drainSessionQueue(updatedTask.SessionID); queueErr != nil {
+				return nil, queueErr
+			}
+		}
+		return map[string]any{
+			"authorization_record": authorizationRecord,
+			"task":                 taskMap(updatedTask),
+			"bubble_message":       bubble,
+			"impact_scope":         impactScope,
+			"delivery_result":      deliveryResult,
+		}, nil
+	}
 
 	resultTitle := stringValue(pendingExecution, "result_title", "处理结果")
 	resultPreview := stringValue(pendingExecution, "preview_text", "已为你写入文档并打开")
@@ -1540,6 +1636,54 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 		"apply_mode":         applyMode,
 		"need_restart":       needRestart,
 	}, nil
+}
+
+func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, pendingExecution map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, error) {
+	if s.executor == nil || s.executor.ScreenClient() == nil {
+		return runengine.TaskRecord{}, nil, nil, errors.New("screen capability unavailable")
+	}
+	screenSession, err := s.executor.ScreenClient().StartSession(context.Background(), tools.ScreenSessionStartInput{
+		SessionID:   task.SessionID,
+		TaskID:      task.TaskID,
+		RunID:       task.RunID,
+		Source:      "screen_capture",
+		CaptureMode: tools.ScreenCaptureModeScreenshot,
+	})
+	if err != nil {
+		return runengine.TaskRecord{}, nil, nil, err
+	}
+	candidate, err := s.executor.ScreenClient().CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{
+		ScreenSessionID: screenSession.ScreenSessionID,
+		TaskID:          task.TaskID,
+		RunID:           task.RunID,
+		CaptureMode:     tools.ScreenCaptureModeScreenshot,
+		Source:          "screen_capture",
+		SourcePath:      stringValue(pendingExecution, "source_path", ""),
+	})
+	if err != nil {
+		return runengine.TaskRecord{}, nil, nil, err
+	}
+	execIntent := map[string]any{
+		"name": "screen_analyze_candidate",
+		"arguments": map[string]any{
+			"task_id":           task.TaskID,
+			"run_id":            task.RunID,
+			"screen_session_id": screenSession.ScreenSessionID,
+			"frame_id":          candidate.FrameID,
+			"path":              candidate.Path,
+			"capture_mode":      string(candidate.CaptureMode),
+			"source":            candidate.Source,
+			"captured_at":       candidate.CapturedAt.UTC().Format(time.RFC3339),
+			"retention_policy":  string(candidate.RetentionPolicy),
+			"language":          stringValue(pendingExecution, "language", "eng"),
+			"evidence_role":     stringValue(pendingExecution, "evidence_role", "error_evidence"),
+		},
+	}
+	updatedTask, bubble, deliveryResult, _, err := s.executeTask(task, snapshotFromTask(task), execIntent)
+	if err != nil {
+		return runengine.TaskRecord{}, nil, nil, err
+	}
+	return updatedTask, bubble, deliveryResult, nil
 }
 
 // taskMap 处理当前模块的相关逻辑。

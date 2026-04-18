@@ -322,7 +322,7 @@ func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, execut
 	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	pluginService := plugin.NewService()
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService)
+	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, sidecarclient.NewLocalScreenCaptureClient(fileSystem), modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore())
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -4140,6 +4140,78 @@ func TestServiceStartTaskWritesRealMemorySummary(t *testing.T) {
 	}
 	if querySQLiteCount(t, service.storage.DatabasePath(), `SELECT COUNT(1) FROM memory_summaries WHERE task_id = ?`, taskID) != 1 {
 		t.Fatalf("expected one persisted memory summary for task %s", taskID)
+	}
+}
+
+func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, workspaceRoot := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "inputs"), 0o755); err != nil {
+		t.Fatalf("mkdir inputs failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "inputs", "screen.png"), []byte("fake screen capture"), 0o644); err != nil {
+		t.Fatalf("write screen input failed: %v", err)
+	}
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_task",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析屏幕中的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start screen analyze task failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["source_type"] != "screen_capture" {
+		t.Fatalf("expected screen source_type, got %+v", task)
+	}
+	if task["status"] != "waiting_auth" {
+		t.Fatalf("expected screen analyze task to require authorization first, got %+v", task)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "status" {
+		t.Fatalf("expected waiting authorization status bubble, got %+v", bubble)
+	}
+	approvalRequests, total := service.runEngine.PendingApprovalRequests(20, 0)
+	if total != 1 || len(approvalRequests) != 1 {
+		t.Fatalf("expected one pending approval request, got total=%d items=%+v", total, approvalRequests)
+	}
+	record, exists := service.runEngine.GetTask(task["task_id"].(string))
+	if !exists || record.Status != "waiting_auth" {
+		t.Fatalf("expected runtime screen task to wait for auth, got %+v", record)
+	}
+	if record.ApprovalRequest == nil || record.PendingExecution == nil {
+		t.Fatalf("expected approval request and pending execution, got %+v", record)
+	}
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":  task["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond allow_once failed: %v", err)
+	}
+	respondTask := respondResult["task"].(map[string]any)
+	if respondTask["status"] != "completed" {
+		t.Fatalf("expected authorized screen task to complete, got %+v", respondTask)
+	}
+	record, exists = service.runEngine.GetTask(task["task_id"].(string))
+	if !exists || record.Status != "completed" {
+		t.Fatalf("expected controlled screen task to complete, got %+v", record)
+	}
+	if len(record.Artifacts) != 1 || record.Artifacts[0]["artifact_type"] != "screen_capture" {
+		t.Fatalf("expected one screen artifact in runtime task, got %+v", record.Artifacts)
+	}
+	if record.Authorization == nil || record.Authorization["decision"] != "allow_once" {
+		t.Fatalf("expected authorization record to be stored, got %+v", record.Authorization)
 	}
 }
 
