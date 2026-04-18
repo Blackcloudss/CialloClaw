@@ -412,7 +412,13 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 	auditRecord := s.screenAnalysisAuditRecord(request.TaskID, candidate, analysis.PreviewText)
 	cleanupPlan := s.screenAnalysisCleanupPlan(candidate)
 	cleanupSummary := s.screenAnalysisCleanupSummary(candidate)
-	cleanupExecuted := s.executeScreenCleanupPlan(cleanupPlan)
+	cleanupExecuted := map[string]any{
+		"reason":        stringValue(cleanupPlan, "reason", "screen_analysis_pending_cleanup"),
+		"deleted_paths": []string{},
+		"skipped_paths": stringSliceValue(cleanupPlan, "paths"),
+		"deleted_count": 0,
+		"skipped_count": len(stringSliceValue(cleanupPlan, "paths")),
+	}
 	persistedArtifact := s.persistScreenArtifact(ctx, request.TaskID, analysis.Artifact)
 	recoveryPoint := s.screenAnalysisRecoveryPoint(ctx, request.TaskID, cleanupPlan, cleanupExecuted)
 	traceSummary := s.screenAnalysisTraceSummary(candidate, analysis)

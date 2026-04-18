@@ -1365,15 +1365,19 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 		t.Fatalf("expected cleanup plan to be attached, got %+v", result.ToolOutput)
 	}
 	cleanupExecuted := mapValue(result.ToolOutput, "cleanup_executed")
-	if cleanupExecuted["deleted_count"] != 1 {
+	if cleanupExecuted["deleted_count"] != 0 || cleanupExecuted["skipped_count"] != 1 {
 		t.Fatalf("expected cleanup execution summary, got %+v", result.ToolOutput)
 	}
 	persisted := mapValue(result.ToolOutput, "artifact_persisted")
 	if persisted["persisted"] != true {
 		t.Fatalf("expected artifact persistence result, got %+v", result.ToolOutput)
 	}
-	if len(result.RecoveryPoint) != 0 || len(mapValue(result.ToolOutput, "recovery_point")) != 0 {
-		t.Fatalf("expected successful cleanup to avoid recovery point, got %+v", result)
+	recoveryPoint := mapValue(result.ToolOutput, "recovery_point")
+	if recoveryPoint["kind"] != "screen_cleanup" || recoveryPoint["cleanup_status"] != "pending_retry" {
+		t.Fatalf("expected deferred cleanup recovery semantics, got %+v", result.ToolOutput)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, "temp", "screen_sess_020", "frame_020.png")); err != nil {
+		t.Fatalf("expected persisted screen artifact source to remain until dedicated cleanup, got %v", err)
 	}
 	records, total, err := service.artifactStore.ListArtifacts(context.Background(), "task_screen_exec_001", 20, 0)
 	if err != nil || total != 1 || len(records) != 1 {
@@ -1409,6 +1413,99 @@ func TestExecuteScreenCleanupPlanHandlesSkippedPaths(t *testing.T) {
 	})
 	if result["deleted_count"] != 0 || result["skipped_count"] != 1 {
 		t.Fatalf("expected skipped cleanup result, got %+v", result)
+	}
+}
+
+func TestScreenHelpersCoverNilAndPendingBranches(t *testing.T) {
+	service, _ := newTestExecutionService(t, "unused")
+	if got := service.executeScreenCleanupPlan(nil); got != nil {
+		t.Fatalf("expected nil cleanup plan to skip execution, got %+v", got)
+	}
+	if got := service.screenAnalysisCleanupPlan(tools.ScreenFrameCandidate{}); got != nil {
+		t.Fatalf("expected no cleanup plan for empty candidate, got %+v", got)
+	}
+	if got := service.screenAnalysisCleanupSummary(tools.ScreenFrameCandidate{}); got != nil {
+		t.Fatalf("expected no cleanup summary for empty candidate, got %+v", got)
+	}
+	if got := service.screenAnalysisRecoveryPoint(context.Background(), "task_screen_none", map[string]any{"paths": []string{}}, nil); got != nil {
+		t.Fatalf("expected no recovery point without cleanup objects, got %+v", got)
+	}
+	auditRecord := service.screenAnalysisAuditRecord("task_screen_audit", tools.ScreenFrameCandidate{ScreenSessionID: "screen_sess_extra", CaptureMode: tools.ScreenCaptureModeKeyframe, Source: "voice", Path: "temp/screen_sess_extra/frame.png"}, "screen preview")
+	if auditRecord["action"] != "screen.capture.keyframe_analyze" {
+		t.Fatalf("expected keyframe audit action, got %+v", auditRecord)
+	}
+	clipAudit := service.screenAnalysisAuditRecord("task_screen_clip", tools.ScreenFrameCandidate{ScreenSessionID: "screen_sess_clip", CaptureMode: tools.ScreenCaptureModeClip, Source: "voice", Path: "temp/screen_sess_clip/clip.webm"}, "clip preview")
+	if clipAudit["action"] != "screen.capture.clip_analyze" {
+		t.Fatalf("expected clip audit action, got %+v", clipAudit)
+	}
+	if got := service.screenAnalysisTraceSummary(tools.ScreenFrameCandidate{}, nil); got != nil {
+		t.Fatalf("expected nil trace summary when analysis missing, got %+v", got)
+	}
+	if got := service.screenAnalysisEvalSummary(tools.ScreenFrameCandidate{}, nil); got != nil {
+		t.Fatalf("expected nil eval summary when analysis missing, got %+v", got)
+	}
+	service.audit = nil
+	if got := service.screenAnalysisAuditRecord("task_screen_noaudit", tools.ScreenFrameCandidate{}, "preview"); got != nil {
+		t.Fatalf("expected nil audit record when audit service unavailable, got %+v", got)
+	}
+	service.checkpoint = nil
+	if got := service.screenAnalysisRecoveryPoint(context.Background(), "task_screen_norecovery", map[string]any{"paths": []string{"temp/demo.png"}}, map[string]any{"skipped_count": 1, "skipped_paths": []string{"temp/demo.png"}}); got != nil {
+		t.Fatalf("expected nil recovery point when checkpoint unavailable, got %+v", got)
+	}
+}
+
+func TestExecutionSmallHelpersCoverPrimitiveBranches(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "unused")
+	service.tools = nil
+	if got := service.availableToolNames(); got != nil {
+		t.Fatalf("expected nil available tools when registry missing, got %+v", got)
+	}
+	service.plugin = nil
+	if got := service.availableWorkers(); got != nil {
+		t.Fatalf("expected nil available workers when plugin missing, got %+v", got)
+	}
+	service.screen = nil
+	if got := service.ScreenClient(); got != nil {
+		t.Fatalf("expected nil screen client accessor, got %+v", got)
+	}
+	if got := stringSliceValue(map[string]any{"paths": []any{"a", " ", 1, "b"}}, "paths"); len(got) != 2 || got[1] != "b" {
+		t.Fatalf("unexpected string slice coercion: %+v", got)
+	}
+	if got := intValue(map[string]any{"n": float64(2)}, "n"); got != 2 {
+		t.Fatalf("unexpected intValue result: %d", got)
+	}
+	if got := int64Value(map[string]any{"n": float32(3)}, "n"); got != 3 {
+		t.Fatalf("unexpected int64Value result: %d", got)
+	}
+	if got := marshalEventPayload(map[string]any{"k": "v"}); !strings.Contains(got, "\"k\":\"v\"") {
+		t.Fatalf("unexpected marshaled payload: %s", got)
+	}
+	if got := runStatusFromStopReason(agentloop.StopReasonNeedAuthorization); got != "waiting_auth" {
+		t.Fatalf("unexpected run status for need auth: %s", got)
+	}
+	if got := runStatusFromStopReason(agentloop.StopReasonCompleted); got != "completed" {
+		t.Fatalf("unexpected run status for completed: %s", got)
+	}
+	if got := runStatusFromStopReason(agentloop.StopReason("other")); got != "processing" {
+		t.Fatalf("unexpected fallback run status: %s", got)
+	}
+	if got := resolveWorkspaceRoot(nil); got != "" {
+		t.Fatalf("expected empty workspace root for nil filesystem, got %q", got)
+	}
+	workspacePolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy failed: %v", err)
+	}
+	if got := resolveWorkspaceRoot(platform.NewLocalFileSystemAdapter(workspacePolicy)); !strings.Contains(got, "workspace") {
+		t.Fatalf("expected workspace root path, got %q", got)
+	}
+	modelService := model.NewService(serviceconfig.ModelConfig{PlannerRetryBudget: 3, ToolRetryBudget: 2, ContextCompressChars: 1234, MaxToolIterations: 7})
+	service.model = modelService
+	if service.agentLoopPlannerRetryBudget() != 3 || service.agentLoopToolRetryBudget() != 2 {
+		t.Fatalf("unexpected agent loop retry budgets")
+	}
+	if service.agentLoopCompressionChars() != 1234 || service.agentLoopMaxTurns() != 7 {
+		t.Fatalf("unexpected agent loop model-derived limits")
 	}
 }
 

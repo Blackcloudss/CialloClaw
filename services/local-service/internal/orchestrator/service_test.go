@@ -4296,6 +4296,49 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 	}
 }
 
+func TestSecurityRespondScreenAnalyzeFailureReconcilesTaskState(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_fail",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析屏幕中的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/missing-screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start screen analyze task failed: %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":  taskID,
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond allow_once failed: %v", err)
+	}
+	respondTask := respondResult["task"].(map[string]any)
+	if respondTask["status"] != "failed" {
+		t.Fatalf("expected failed task after approved screen capture error, got %+v", respondTask)
+	}
+	bubble := respondResult["bubble_message"].(map[string]any)
+	if bubble["type"] != "status" {
+		t.Fatalf("expected failure status bubble, got %+v", bubble)
+	}
+	record, exists := service.runEngine.GetTask(taskID)
+	if !exists || record.Status != "failed" || record.PendingExecution != nil {
+		t.Fatalf("expected runtime task to reconcile to failed terminal state, got %+v", record)
+	}
+}
+
 func TestServiceStartTaskHitsRealMemoryAndRecordsRetrievalHit(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "输出延续了 project alpha markdown bullets 风格。")
 	if service.storage == nil {

@@ -1815,7 +1815,8 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 
 func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, pendingExecution map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, error) {
 	if s.executor == nil || s.executor.ScreenClient() == nil {
-		return runengine.TaskRecord{}, nil, nil, errors.New("screen capability unavailable")
+		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, errors.New("screen capability unavailable"))
+		return failedTask, failureBubble, nil, nil
 	}
 	screenSession, err := s.executor.ScreenClient().StartSession(context.Background(), tools.ScreenSessionStartInput{
 		SessionID:   task.SessionID,
@@ -1825,7 +1826,8 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 		CaptureMode: tools.ScreenCaptureModeScreenshot,
 	})
 	if err != nil {
-		return runengine.TaskRecord{}, nil, nil, err
+		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
+		return failedTask, failureBubble, nil, nil
 	}
 	candidate, err := s.executor.ScreenClient().CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{
 		ScreenSessionID: screenSession.ScreenSessionID,
@@ -1836,7 +1838,8 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 		SourcePath:      stringValue(pendingExecution, "source_path", ""),
 	})
 	if err != nil {
-		return runengine.TaskRecord{}, nil, nil, err
+		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
+		return failedTask, failureBubble, nil, nil
 	}
 	execIntent := map[string]any{
 		"name": "screen_analyze_candidate",
