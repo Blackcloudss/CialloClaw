@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
@@ -17,15 +18,17 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
 )
 
 type stubModelClient struct {
-	output    string
-	err       error
-	toolCalls []model.ToolCallResult
+	output                 string
+	err                    error
+	toolCalls              []model.ToolCallResult
+	generateToolCallsCount int
 }
 
 func (s *stubModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
@@ -44,6 +47,7 @@ func (s *stubModelClient) GenerateText(_ context.Context, request model.Generate
 }
 
 func (s *stubModelClient) GenerateToolCalls(_ context.Context, request model.ToolCallRequest) (model.ToolCallResult, error) {
+	s.generateToolCallsCount++
 	if s.err != nil {
 		return model.ToolCallResult{}, s.err
 	}
@@ -407,6 +411,158 @@ func TestExecuteAgentLoopHonorsConfiguredMaxToolIterations(t *testing.T) {
 	}
 	if result.ModelInvocation["request_id"] != "req_loop_2" {
 		t.Fatalf("expected last recorded invocation to come from second turn, got %+v", result.ModelInvocation)
+	}
+}
+
+func TestExecuteAgentLoopPersistsRuntimeEventsAndStopReason(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{
+			{
+				RequestID: "req_loop_runtime_1",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "."}}},
+			},
+			{
+				RequestID:  "req_loop_runtime_2",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Loop runtime finished cleanly.",
+			},
+		},
+	}
+	loopStore := storage.NewService(nil).LoopRuntimeStore()
+	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
+	service = service.WithLoopRuntimeStore(loopStore)
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_runtime",
+		RunID:        "run_loop_runtime",
+		Title:        "Loop runtime persistence",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Inspect the workspace and answer."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop runtime result",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.Content != "Loop runtime finished cleanly." {
+		t.Fatalf("unexpected loop runtime result: %+v", result)
+	}
+	events, total, err := loopStore.ListEvents(context.Background(), "task_loop_runtime", 20, 0)
+	if err != nil {
+		t.Fatalf("ListEvents returned error: %v", err)
+	}
+	if total == 0 || len(events) == 0 {
+		t.Fatal("expected persisted loop events")
+	}
+	foundCompleted := false
+	for _, event := range events {
+		if event.Type == "loop.completed" {
+			foundCompleted = true
+			break
+		}
+	}
+	if !foundCompleted {
+		t.Fatalf("expected loop.completed event in %+v", events)
+	}
+}
+
+func TestExecuteAgentLoopRetriesPlannerOnceBeforeFailing(t *testing.T) {
+	modelClient := &stubModelClient{err: errors.New("temporary planner error")}
+	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
+	_, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_retry_planner",
+		RunID:        "run_loop_retry_planner",
+		Title:        "Loop retry planner",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Inspect the workspace and answer."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop retry result",
+	})
+	if err == nil {
+		t.Fatal("expected planner retry path to still surface final error")
+	}
+}
+
+func TestExecuteAgentLoopHonorsConfiguredPlannerRetryBudget(t *testing.T) {
+	modelClient := &stubModelClient{err: errors.New("temporary planner error")}
+	cfg := serviceconfig.ModelConfig{PlannerRetryBudget: 2}
+	service, _ := newTestExecutionServiceWithModelClientAndConfig(t, cfg, modelClient)
+	_, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_retry_budget",
+		RunID:        "run_loop_retry_budget",
+		Title:        "Loop retry budget",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Inspect the workspace and answer."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop retry budget result",
+	})
+	if err == nil {
+		t.Fatal("expected planner retry budget path to still surface final error")
+	}
+	if modelClient.generateToolCallsCount != 3 {
+		t.Fatalf("expected planner to be attempted three times, got %d", modelClient.generateToolCallsCount)
+	}
+}
+
+func TestExecuteAgentLoopConsumesActiveRunSteeringBetweenRounds(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{
+			{
+				RequestID: "req_loop_active_1",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+			},
+			{
+				RequestID:  "req_loop_active_2",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Loop runtime finished after follow-up steering.",
+			},
+		},
+	}
+	service, workspaceRoot := newTestExecutionServiceWithModelClient(t, modelClient)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	pollCount := 0
+	service = service.WithSteeringPoller(func(_ string) []string {
+		pollCount++
+		if pollCount == 2 {
+			return []string{"Also include the newly added summary section."}
+		}
+		return nil
+	})
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_active_steer",
+		RunID:        "run_loop_active_steer",
+		Title:        "Loop active steering",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Inspect the notes directory and answer."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop result",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.Content != "Loop runtime finished after follow-up steering." {
+		t.Fatalf("unexpected active steering result: %+v", result)
+	}
+	if len(modelClient.toolCalls) != 0 {
+		t.Fatalf("expected both tool call responses to be consumed, got %+v", modelClient.toolCalls)
+	}
+	if pollCount < 2 {
+		t.Fatalf("expected active-run steering poller to run between rounds, got %d", pollCount)
+	}
+}
+
+func TestRunStatusFromStopReasonTreatsToolRetryExhaustedAsFailed(t *testing.T) {
+	if status := runStatusFromStopReason(agentloop.StopReasonToolRetryExhausted); status != "failed" {
+		t.Fatalf("expected tool retry exhausted to map to failed, got %q", status)
 	}
 }
 
