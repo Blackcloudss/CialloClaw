@@ -210,6 +210,31 @@ func TestSQLiteTaskRunStoreRejectsInvalidRecord(t *testing.T) {
 	}
 }
 
+func TestSQLiteTaskRunStoreValidatesConstructorAndIdentifiers(t *testing.T) {
+	if _, err := NewSQLiteTaskRunStore("   "); err != ErrDatabasePathRequired {
+		t.Fatalf("expected ErrDatabasePathRequired, got %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "task-run-validation.db")
+	store, err := NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	if _, err := store.AllocateIdentifier(context.Background(), "   "); err != ErrTaskRunIdentifierPrefixRequired {
+		t.Fatalf("expected ErrTaskRunIdentifierPrefixRequired, got %v", err)
+	}
+	if err := store.DeleteTaskRun(context.Background(), "   "); err != ErrTaskRunTaskIDRequired {
+		t.Fatalf("expected ErrTaskRunTaskIDRequired, got %v", err)
+	}
+
+	var nilStore SQLiteTaskRunStore
+	if err := nilStore.Close(); err != nil {
+		t.Fatalf("expected nil sqlite task run store close to succeed, got %v", err)
+	}
+}
+
 func TestSQLiteTaskRunStoreSaveTaskRunRollsBackStructuredTaskStateOnFailure(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "task-runs-rollback.db")
 	store, err := NewSQLiteTaskRunStore(path)
@@ -316,6 +341,78 @@ func TestTaskStoresSupportUnlimitedPaginationAndDirectLookup(t *testing.T) {
 	inMemoryStepItems, inMemoryStepTotal, err := inMemoryStepStore.ListTaskSteps(context.Background(), "mem_task", 0, 0)
 	if err != nil || inMemoryStepTotal != 25 || len(inMemoryStepItems) != 25 {
 		t.Fatalf("expected in-memory unlimited ListTaskSteps to return all rows, got total=%d len=%d err=%v", inMemoryStepTotal, len(inMemoryStepItems), err)
+	}
+}
+
+func TestSQLiteTaskRunStoreValidationAndMarshalHelpers(t *testing.T) {
+	validRecord := sampleTaskRunRecord()
+	if err := validateTaskRunRecord(validRecord); err != nil {
+		t.Fatalf("expected valid task run record, got %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		record TaskRunRecord
+		want   error
+	}{
+		{name: "missing task id", record: func() TaskRunRecord { r := sampleTaskRunRecord(); r.TaskID = ""; return r }(), want: ErrTaskRunTaskIDRequired},
+		{name: "missing session id", record: func() TaskRunRecord { r := sampleTaskRunRecord(); r.SessionID = ""; return r }(), want: ErrTaskRunSessionIDRequired},
+		{name: "missing run id", record: func() TaskRunRecord { r := sampleTaskRunRecord(); r.RunID = ""; return r }(), want: ErrTaskRunRunIDRequired},
+		{name: "missing status", record: func() TaskRunRecord { r := sampleTaskRunRecord(); r.Status = ""; return r }(), want: ErrTaskRunStatusRequired},
+		{name: "missing started at", record: func() TaskRunRecord { r := sampleTaskRunRecord(); r.StartedAt = time.Time{}; return r }(), want: ErrTaskRunStartedAtRequired},
+		{name: "missing updated at", record: func() TaskRunRecord { r := sampleTaskRunRecord(); r.UpdatedAt = time.Time{}; return r }(), want: ErrTaskRunUpdatedAtRequired},
+	}
+	for _, test := range tests {
+		if err := validateTaskRunRecord(test.record); err != test.want {
+			t.Fatalf("%s: expected %v, got %v", test.name, test.want, err)
+		}
+	}
+
+	badRecord := sampleTaskRunRecord()
+	badRecord.Intent = map[string]any{"unsupported": func() {}}
+	if _, err := marshalTaskRunRecord(badRecord); err == nil {
+		t.Fatal("expected marshalTaskRunRecord to fail for unsupported payload")
+	}
+	if _, err := unmarshalTaskRunRecord("{bad json}"); err == nil {
+		t.Fatal("expected unmarshalTaskRunRecord to fail for invalid json")
+	}
+}
+
+func TestSQLiteTaskRunStoreCloneHelpersPreserveIsolation(t *testing.T) {
+	record := sampleTaskRunRecord()
+	clone := cloneTaskRunRecord(record)
+	clone.Intent["name"] = "rewrite"
+	clone.Timeline[0].Name = "changed_step"
+	clone.Artifacts[0]["artifact_id"] = "art_clone"
+	clone.Snapshot.Text = "changed snapshot"
+	clone.Notifications[0].Method = "task.changed"
+	clone.LatestEvent["type"] = "event.changed"
+	clone.SteeringMessages = []string{"changed"}
+	if record.Intent["name"] != "summarize" || record.Timeline[0].Name != "return_result" || record.Artifacts[0]["artifact_id"] != "art_001" || record.Snapshot.Text != "sample input" || record.Notifications[0].Method != "task.updated" || record.LatestEvent["type"] != "delivery.ready" || len(record.SteeringMessages) != 0 {
+		t.Fatalf("expected cloneTaskRunRecord to isolate mutable nested fields, got original %+v", record)
+	}
+
+	originalMap := map[string]any{
+		"nested": map[string]any{"value": "a"},
+		"slice":  []map[string]any{{"id": "one"}},
+		"texts":  []string{"x"},
+	}
+	clonedMap := cloneMap(originalMap)
+	clonedMap["nested"].(map[string]any)["value"] = "b"
+	clonedMap["slice"].([]map[string]any)[0]["id"] = "two"
+	clonedMap["texts"].([]string)[0] = "y"
+	if originalMap["nested"].(map[string]any)["value"] != "a" || originalMap["slice"].([]map[string]any)[0]["id"] != "one" || originalMap["texts"].([]string)[0] != "x" {
+		t.Fatalf("expected cloneMap to preserve original data, got %+v", originalMap)
+	}
+
+	originalSlice := []map[string]any{{"id": "first"}}
+	clonedSlice := cloneMapSlice(originalSlice)
+	clonedSlice[0]["id"] = "second"
+	if originalSlice[0]["id"] != "first" {
+		t.Fatalf("expected cloneMapSlice to preserve original slice, got %+v", originalSlice)
+	}
+	if cloneMap(nil) != nil || cloneMapSlice(nil) != nil || cloneTaskStepSnapshots(nil) != nil || cloneNotificationSnapshots(nil) != nil {
+		t.Fatal("expected clone helpers to preserve nil inputs")
 	}
 }
 
