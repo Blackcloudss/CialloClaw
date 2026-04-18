@@ -263,7 +263,7 @@ type LoopRuntimeStore interface {
 	SaveSteps(ctx context.Context, records []StepRecord) error
 	SaveEvents(ctx context.Context, records []EventRecord) error
 	SaveDeliveryResult(ctx context.Context, record DeliveryResultRecord) error
-	ListEvents(ctx context.Context, taskID string, limit, offset int) ([]EventRecord, int, error)
+	ListEvents(ctx context.Context, taskID, runID, eventType string, limit, offset int) ([]EventRecord, int, error)
 }
 
 // ToolCallStore 定义 tool_call 持久化契约。
@@ -282,4 +282,46 @@ type RecoveryPointStore interface {
 	WriteRecoveryPoint(ctx context.Context, point checkpoint.RecoveryPoint) error
 	ListRecoveryPoints(ctx context.Context, taskID string, limit, offset int) ([]checkpoint.RecoveryPoint, int, error)
 	GetRecoveryPoint(ctx context.Context, recoveryPointID string) (checkpoint.RecoveryPoint, error)
+}
+
+// ApprovalRequestRecord describes one persisted approval_requests snapshot.
+type ApprovalRequestRecord struct {
+	ApprovalID      string
+	TaskID          string
+	OperationName   string
+	RiskLevel       string
+	TargetObject    string
+	Reason          string
+	Status          string
+	ImpactScopeJSON string
+	CreatedAt       string
+	UpdatedAt       string
+}
+
+// AuthorizationRecordRecord describes one persisted authorization_records snapshot.
+type AuthorizationRecordRecord struct {
+	AuthorizationRecordID string
+	TaskID                string
+	ApprovalID            string
+	Decision              string
+	Operator              string
+	RememberRule          bool
+	CreatedAt             string
+}
+
+// ApprovalRequestStore persists formal approval_requests records.
+type ApprovalRequestStore interface {
+	WriteApprovalRequest(ctx context.Context, record ApprovalRequestRecord) error
+	UpdateApprovalRequestStatus(ctx context.Context, approvalID string, status string, updatedAt string) error
+	ListApprovalRequests(ctx context.Context, taskID string, limit, offset int) ([]ApprovalRequestRecord, int, error)
+	ListPendingApprovalRequests(ctx context.Context, limit, offset int) ([]ApprovalRequestRecord, int, error)
+}
+
+// AuthorizationRecordStore persists formal authorization_records records.
+type AuthorizationRecordStore interface {
+	WriteAuthorizationRecord(ctx context.Context, record AuthorizationRecordRecord) error
+	// WriteAuthorizationDecision persists one authorization_records row and its
+	// linked approval_requests status transition inside a single storage boundary.
+	WriteAuthorizationDecision(ctx context.Context, record AuthorizationRecordRecord, approvalStatus string, updatedAt string) error
+	ListAuthorizationRecords(ctx context.Context, taskID string, limit, offset int) ([]AuthorizationRecordRecord, int, error)
 }
