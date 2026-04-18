@@ -1496,7 +1496,9 @@ func clampListOffset(offset int) int {
 	return offset
 }
 
-// PendingNotifications returns the buffered notification list for a task.
+// PendingNotifications returns the buffered notification list for a task
+// without consuming it. Debug transports use this read-only path when they need
+// to inspect pending events but must not disturb the ordered replay pipeline.
 func (s *Service) PendingNotifications(taskID string) ([]map[string]any, error) {
 	notifications, ok := s.runEngine.PendingNotifications(taskID)
 	if !ok {
@@ -1516,7 +1518,9 @@ func (s *Service) PendingNotifications(taskID string) ([]map[string]any, error) 
 }
 
 // DrainNotifications returns and clears the buffered notification list for a
-// task.
+// task. The orchestrator exposes this explicit destructive read so transports
+// can replay notifications exactly once instead of coupling queue semantics to
+// ordinary task detail or list reads.
 func (s *Service) DrainNotifications(taskID string) ([]map[string]any, error) {
 	notifications, ok := s.runEngine.DrainNotifications(taskID)
 	if !ok {
@@ -3360,7 +3364,9 @@ func hasOverwriteOrDeleteRisk(taskIntent map[string]any) bool {
 }
 
 // attachMemoryReadPlans registers the retrieval plans attached at task start or
-// confirmation time.
+// confirmation time. Read plans are persisted before execution so later mirror,
+// debug, or storage-backed views can explain what memory lookup the task was
+// supposed to perform even if execution changes or the process restarts.
 func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) {
 	readPlans := []map[string]any{
 		{
@@ -3383,7 +3389,9 @@ func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot contextsv
 }
 
 // attachPostDeliveryHandoffs registers memory-write and delivery persistence
-// handoffs after a task finishes.
+// handoffs after a task finishes. Keeping these side effects in one post-
+// delivery step prevents runtime execution from mixing formal delivery with
+// memory persistence details while still leaving a durable handoff trail.
 func (s *Service) attachPostDeliveryHandoffs(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any, artifacts []map[string]any) {
 	writePlans := []map[string]any{
 		{
@@ -3407,7 +3415,9 @@ func (s *Service) attachPostDeliveryHandoffs(taskID, runID string, snapshot cont
 	s.persistArtifacts(taskID, artifactPlans)
 }
 
-// buildApprovalRequest creates the normalized approval_request payload.
+// buildApprovalRequest creates the normalized approval_request payload. The
+// object must already be protocol-facing here because it is persisted, replayed
+// to transports, and later echoed back through agent.security.respond.
 func buildApprovalRequest(taskID string, taskIntent map[string]any, assessment execution.GovernanceAssessment) map[string]any {
 	arguments := mapValue(taskIntent, "arguments")
 	targetObject := firstNonEmptyString(assessment.TargetObject, stringValue(arguments, "target_path", "workspace_document"))
@@ -3428,7 +3438,9 @@ func buildApprovalRequest(taskID string, taskIntent map[string]any, assessment e
 }
 
 // buildImpactScope derives the minimal impact summary used by authorization
-// results and the security views.
+// results and the security views. It intentionally normalizes files around the
+// workspace root so policy, audit, and restore flows all reason about one scope
+// shape instead of transport- or tool-specific paths.
 func (s *Service) buildImpactScope(task runengine.TaskRecord, pendingExecution map[string]any) map[string]any {
 	if impactScope, ok := pendingExecution["impact_scope"].(map[string]any); ok && len(impactScope) > 0 {
 		return cloneMap(impactScope)
@@ -3516,7 +3528,9 @@ func confirmationTitleFromTask(task runengine.TaskRecord) string {
 }
 
 // memoryQueryFromSnapshot selects the most representative retrieval query from
-// the current context snapshot.
+// the current context snapshot. The fallback order intentionally prefers direct
+// user focus, then file context, then broader perception signals so memory
+// lookup stays anchored to what most likely triggered the task.
 func memoryQueryFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
 	for _, value := range []string{snapshot.SelectionText, snapshot.Text, snapshot.ErrorText} {
 		if value != "" {
@@ -3538,7 +3552,8 @@ func memoryQueryFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
 }
 
 // buildMemorySummary creates the short post-task memory summary written after
-// delivery completes.
+// delivery completes. It keeps the output compact on purpose because this text
+// is later used as durable memory material rather than a full-fidelity trace.
 func buildMemorySummary(snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any) string {
 	intentName := stringValue(taskIntent, "name", "summarize")
 	title := stringValue(deliveryResult, "title", "任务结果")

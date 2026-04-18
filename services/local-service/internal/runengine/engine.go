@@ -572,8 +572,10 @@ func (e *Engine) RecordToolCall(taskID, toolName string, input, output map[strin
 	return e.RecordToolCallLifecycle(taskID, toolName, "succeeded", input, output, durationMS, nil)
 }
 
-// RecordToolCallLifecycle records the latest tool_call snapshot with the given
-// execution status.
+// RecordToolCallLifecycle captures the latest compatibility-layer tool_call and
+// emits the paired task/tool notifications together. Keeping both writes in one
+// locked transition avoids a split view where task.updated lands without the
+// corresponding tool_call.completed payload, or vice versa.
 func (e *Engine) RecordToolCallLifecycle(taskID, toolName, status string, input, output map[string]any, durationMS int64, errorCode any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -633,7 +635,9 @@ func (e *Engine) RecordLoopLifecycle(taskID, eventType, stopReason string, paylo
 }
 
 // EmitRuntimeNotification appends a formal runtime notification for task-level
-// consumers while also keeping LatestEvent in sync for query surfaces.
+// consumers while also keeping LatestEvent in sync for query surfaces. The
+// runtime path stores stop reasons here so later task queries can still explain
+// why an agent loop stopped even after transports have drained the notification.
 func (e *Engine) EmitRuntimeNotification(taskID, method string, payload map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -707,7 +711,9 @@ func (e *Engine) DrainSteeringMessages(taskID string) ([]string, bool) {
 }
 
 // FailTaskExecution collapses a task into failed for execution failures and
-// recovery-point preparation failures.
+// recovery-point preparation failures. It clears pending execution state and
+// seals FinishedAt because callers treat failed as terminal and may immediately
+// persist audit, recovery, or delivery fallback records against that outcome.
 func (e *Engine) FailTaskExecution(taskID, stepName, securityStatus, outputSummary string, impactScope map[string]any, bubbleMessage map[string]any, latestRestorePoint ...map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -747,7 +753,10 @@ func (e *Engine) FailTaskExecution(taskID, stepName, securityStatus, outputSumma
 	return record.clone(), true
 }
 
-// BlockTaskByPolicy collapses a policy-intercepted task into cancelled.
+// BlockTaskByPolicy collapses a policy-intercepted task into cancelled. This is
+// intentionally terminal because a denied governance decision is not a pause:
+// downstream code must see the task as ended unless a new user action creates a
+// different approval path.
 func (e *Engine) BlockTaskByPolicy(taskID, riskLevel, outputSummary string, impactScope map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -788,7 +797,9 @@ func (e *Engine) BlockTaskByPolicy(taskID, riskLevel, outputSummary string, impa
 }
 
 // CompleteTask collapses a task into completed and records its formal delivery,
-// artifacts, and recovery-point summary.
+// artifacts, and recovery-point summary. The completion write also emits
+// delivery.ready so transports and dashboard queries observe the same formal
+// delivery boundary instead of inferring completion from task status alone.
 func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubbleMessage map[string]any, artifacts []map[string]any, latestRestorePoint ...map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -982,7 +993,10 @@ func (e *Engine) MarkWaitingApproval(taskID string, approvalRequest map[string]a
 }
 
 // MarkWaitingApprovalWithPlan moves a task into waiting_auth and stores the
-// execution plan required to resume after approval.
+// execution plan required to resume after approval. The buffered plan must be
+// saved before approval.pending is emitted because transports and later resume
+// requests rely on this persisted shape instead of reconstructing intent from a
+// potentially stale caller payload.
 func (e *Engine) MarkWaitingApprovalWithPlan(taskID string, approvalRequest map[string]any, pendingExecution map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1026,7 +1040,9 @@ func (e *Engine) MarkWaitingApprovalWithPlan(taskID string, approvalRequest map[
 }
 
 // ResolveAuthorization records the final authorization outcome and clears the
-// pending approval state.
+// pending approval state once the orchestrator has already finalized the task
+// outcome. This separation lets allow-once flows keep authorization metadata
+// while executing, then normalize the security summary after delivery is known.
 func (e *Engine) ResolveAuthorization(taskID string, authorization map[string]any, impactScope map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1050,7 +1066,9 @@ func (e *Engine) ResolveAuthorization(taskID string, authorization map[string]an
 }
 
 // ResumeAfterApproval returns an approved task from waiting_auth to processing
-// while preserving the follow-up execution plan.
+// while preserving the follow-up execution plan. The plan is intentionally not
+// cleared here because execution still needs it to finish delivery or recovery
+// work after the user approves the risky action.
 func (e *Engine) ResumeAfterApproval(taskID string, authorization map[string]any, impactScope map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1121,7 +1139,8 @@ func (e *Engine) DenyAfterApproval(taskID string, authorization map[string]any, 
 }
 
 // PendingExecutionPlan returns the buffered resume plan for a waiting_auth
-// task.
+// task. Callers use this instead of rebuilding delivery intent so authorization
+// resumes remain deterministic even if the original request context is gone.
 func (e *Engine) PendingExecutionPlan(taskID string) (map[string]any, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -1135,7 +1154,9 @@ func (e *Engine) PendingExecutionPlan(taskID string) (map[string]any, bool) {
 }
 
 // QueueTaskForSession blocks a task behind another active task in the same
-// session so the session-level agent loop remains serial.
+// session so the session-level agent loop remains serial. This avoids two tasks
+// in one conversational lane racing to mutate shared context, notifications, or
+// follow-up decisions at the same time.
 func (e *Engine) QueueTaskForSession(taskID, blockingTaskID string, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1170,6 +1191,8 @@ func (e *Engine) QueueTaskForSession(taskID, blockingTaskID string, bubbleMessag
 
 // EscalateHumanLoop blocks one task for structured human review while keeping
 // the pending escalation payload available for later resume/cancel handling.
+// The escalation payload stays in PendingExecution because resume decisions must
+// know what review artifact or override data triggered the block.
 func (e *Engine) EscalateHumanLoop(taskID string, escalation map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
