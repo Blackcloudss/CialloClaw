@@ -188,6 +188,40 @@ func TestRegisteredProviderDescriptorsExposeStableBoundary(t *testing.T) {
 	}
 }
 
+func TestProviderRegistrySkipsBlankNamesAndHandlesMissingProviders(t *testing.T) {
+	registry := newProviderRegistry([]providerAdapter{{
+		descriptor: ProviderDescriptor{Name: "  ", SupportsToolCalling: false},
+		validate:   func(cfg config.ModelConfig) error { return nil },
+		build:      func(cfg ServiceConfig, apiKey string) (Client, error) { return nil, nil },
+	}, {
+		descriptor: ProviderDescriptor{Name: OpenAIResponsesProvider, SupportsToolCalling: true},
+		validate:   func(cfg config.ModelConfig) error { return nil },
+		build:      func(cfg ServiceConfig, apiKey string) (Client, error) { return nil, nil },
+	}})
+	descriptors := registry.descriptors()
+	if len(descriptors) != 1 || descriptors[0].Name != OpenAIResponsesProvider {
+		t.Fatalf("expected blank descriptor names to be skipped, got %+v", descriptors)
+	}
+	if _, ok := registry.descriptor("missing_provider"); ok {
+		t.Fatal("expected missing provider descriptor lookup to fail")
+	}
+	if _, ok := registry.adapter("missing_provider"); ok {
+		t.Fatal("expected missing provider adapter lookup to fail")
+	}
+}
+
+func TestBuildProviderClientHandlesUnsupportedAndBuilderErrors(t *testing.T) {
+	if _, err := buildProviderClient(ServiceConfig{ModelConfig: config.ModelConfig{Provider: "unsupported"}}, "api-key"); !errors.Is(err, ErrModelProviderUnsupported) {
+		t.Fatalf("expected unsupported provider error, got %v", err)
+	}
+	if _, err := buildProviderClient(ServiceConfig{ModelConfig: config.ModelConfig{Provider: OpenAIResponsesProvider, Endpoint: "", ModelID: "gpt-5.4"}}, "api-key"); !errors.Is(err, ErrOpenAIEndpointRequired) {
+		t.Fatalf("expected openai endpoint required error, got %v", err)
+	}
+	if _, err := buildProviderClient(ServiceConfig{ModelConfig: config.ModelConfig{Provider: OpenAIResponsesProvider, Endpoint: "https://api.openai.com/v1/responses", ModelID: ""}}, "api-key"); !errors.Is(err, ErrOpenAIModelIDRequired) {
+		t.Fatalf("expected openai model id required error, got %v", err)
+	}
+}
+
 // TestValidateModelConfigTrimsWhitespace 验证ValidateModelConfigTrimsWhitespace。
 func TestValidateModelConfigTrimsWhitespace(t *testing.T) {
 	err := ValidateModelConfig(config.ModelConfig{

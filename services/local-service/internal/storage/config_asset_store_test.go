@@ -49,6 +49,12 @@ func TestInMemoryConfigAssetStoresPersistRecords(t *testing.T) {
 	if _, err := skillStore.GetSkillManifest(context.Background(), "missing"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("expected missing in-memory skill manifest to return sql.ErrNoRows, got %v", err)
 	}
+	if _, err := blueprintStore.GetBlueprintDefinition(context.Background(), "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected missing in-memory blueprint definition to return sql.ErrNoRows, got %v", err)
+	}
+	if _, err := promptStore.GetPromptTemplateVersion(context.Background(), "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected missing in-memory prompt template version to return sql.ErrNoRows, got %v", err)
+	}
 }
 
 func TestSQLiteConfigAssetStoresPersistRecords(t *testing.T) {
@@ -113,6 +119,46 @@ func TestConfigureConfigAssetSQLiteDatabaseSetsBusyTimeoutAndWAL(t *testing.T) {
 		t.Fatalf("configure sqlite config asset pragmas failed: %v", err)
 	}
 	assertSQLiteConfigAssetPragmas(t, db)
+}
+
+func TestSQLiteConfigAssetStoresHandleConstructorAndCloseEdgeCases(t *testing.T) {
+	if _, err := NewSQLiteSkillManifestStore("   "); err == nil {
+		t.Fatal("expected sqlite skill manifest constructor to reject empty path")
+	}
+	if _, err := NewSQLiteBlueprintDefinitionStore("   "); err == nil {
+		t.Fatal("expected sqlite blueprint constructor to reject empty path")
+	}
+	if _, err := NewSQLitePromptTemplateVersionStore("   "); err == nil {
+		t.Fatal("expected sqlite prompt constructor to reject empty path")
+	}
+	var nilSkillStore SQLiteSkillManifestStore
+	if err := nilSkillStore.Close(); err != nil {
+		t.Fatalf("expected nil sqlite skill store close to succeed, got %v", err)
+	}
+	var nilBlueprintStore SQLiteBlueprintDefinitionStore
+	if err := nilBlueprintStore.Close(); err != nil {
+		t.Fatalf("expected nil sqlite blueprint store close to succeed, got %v", err)
+	}
+	var nilPromptStore SQLitePromptTemplateVersionStore
+	if err := nilPromptStore.Close(); err != nil {
+		t.Fatalf("expected nil sqlite prompt store close to succeed, got %v", err)
+	}
+}
+
+func TestConfigAssetPaginationHelpersCoverEdgeCases(t *testing.T) {
+	skillItems := []SkillManifestRecord{{SkillManifestID: "skill_001"}, {SkillManifestID: "skill_002"}}
+	if paged := pageSkillManifests(skillItems, 1, 1); len(paged) != 1 || paged[0].SkillManifestID != "skill_002" {
+		t.Fatalf("unexpected skill manifest page: %+v", paged)
+	}
+	if paged := pageSkillManifests(skillItems, 0, -1); len(paged) != 2 {
+		t.Fatalf("expected unlimited skill manifest page, got %+v", paged)
+	}
+	if paged := pageBlueprintDefinitions([]BlueprintDefinitionRecord{{BlueprintDefinitionID: "blueprint_001"}}, 1, 9); paged != nil {
+		t.Fatalf("expected nil blueprint page when offset exceeds length, got %+v", paged)
+	}
+	if paged := pagePromptTemplateVersions([]PromptTemplateVersionRecord{{PromptTemplateVersionID: "prompt_001"}, {PromptTemplateVersionID: "prompt_002"}}, 0, 1); len(paged) != 1 || paged[0].PromptTemplateVersionID != "prompt_002" {
+		t.Fatalf("unexpected prompt template page: %+v", paged)
+	}
 }
 
 func assertSQLiteConfigAssetPragmas(t *testing.T, db *sql.DB) {
