@@ -563,6 +563,25 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	if attemptIndex != 1 || segmentKind != "initial" {
 		t.Fatalf("expected step attempt/segment to persist, got attempt=%d segment=%s", attemptIndex, segmentKind)
 	}
+	if err := service.loopRuntimeStore.SaveSteps(context.Background(), []StepRecord{{
+		StepID:        "task_loop_001_attempt_01_resume_step_loop_001",
+		RunID:         "run_loop_001",
+		TaskID:        "task_loop_001",
+		OrderIndex:    1,
+		AttemptIndex:  1,
+		SegmentKind:   "resume",
+		LoopRound:     1,
+		Name:          "agent_loop_round",
+		Status:        "completed",
+		InputSummary:  "resume planner input",
+		OutputSummary: "resume planner output",
+		StopReason:    "completed",
+		StartedAt:     "2026-04-17T10:00:02Z",
+		CompletedAt:   "2026-04-17T10:00:03Z",
+	}}); err != nil {
+		t.Fatalf("SaveSteps for resume segment returned error: %v", err)
+	}
+	assertTableCount(t, sqliteStore.db, "steps", 2)
 	assertTableCount(t, sqliteStore.db, "events", 1)
 	assertTableCount(t, sqliteStore.db, "delivery_results", 1)
 

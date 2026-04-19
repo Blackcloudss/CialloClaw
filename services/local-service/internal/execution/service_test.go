@@ -33,6 +33,57 @@ type stubModelClient struct {
 	plannerInputs          []string
 }
 
+type recordingLoopRuntimeStore struct {
+	runs            []storage.RunRecord
+	steps           []storage.StepRecord
+	events          []storage.EventRecord
+	deliveryResults []storage.DeliveryResultRecord
+}
+
+func (s *recordingLoopRuntimeStore) SaveRun(_ context.Context, record storage.RunRecord) error {
+	s.runs = append(s.runs, record)
+	return nil
+}
+
+func (s *recordingLoopRuntimeStore) SaveSteps(_ context.Context, records []storage.StepRecord) error {
+	s.steps = append(s.steps, records...)
+	return nil
+}
+
+func (s *recordingLoopRuntimeStore) SaveEvents(_ context.Context, records []storage.EventRecord) error {
+	s.events = append(s.events, records...)
+	return nil
+}
+
+func (s *recordingLoopRuntimeStore) SaveDeliveryResult(_ context.Context, record storage.DeliveryResultRecord) error {
+	s.deliveryResults = append(s.deliveryResults, record)
+	return nil
+}
+
+func (s *recordingLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID, eventType string, limit, offset int) ([]storage.EventRecord, int, error) {
+	filtered := make([]storage.EventRecord, 0, len(s.events))
+	for _, record := range s.events {
+		if taskID != "" && record.TaskID != taskID {
+			continue
+		}
+		if runID != "" && record.RunID != runID {
+			continue
+		}
+		if eventType != "" && record.Type != eventType {
+			continue
+		}
+		filtered = append(filtered, record)
+	}
+	if offset >= len(filtered) {
+		return []storage.EventRecord{}, len(filtered), nil
+	}
+	end := len(filtered)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return append([]storage.EventRecord(nil), filtered[offset:end]...), len(filtered), nil
+}
+
 func (s *stubModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
 	if s.err != nil {
 		return model.GenerateTextResponse{}, s.err
@@ -477,6 +528,82 @@ func TestExecuteAgentLoopPersistsRuntimeEventsAndStopReason(t *testing.T) {
 	}
 	if !foundCompleted {
 		t.Fatalf("expected loop.completed event in %+v", events)
+	}
+}
+
+func TestPersistAgentLoopRuntimeKeepsResumeSegmentsAndEventsDistinct(t *testing.T) {
+	store := &recordingLoopRuntimeStore{}
+	service := (&Service{}).WithLoopRuntimeStore(store)
+
+	request := Request{
+		TaskID: "task_loop_runtime",
+		RunID:  "run_loop_runtime",
+		Intent: map[string]any{"name": defaultAgentLoopIntentName},
+	}
+	initialStart := time.Date(2026, 4, 19, 12, 0, 0, 0, time.UTC)
+	firstResumeStart := initialStart.Add(2 * time.Minute)
+	secondResumeStart := firstResumeStart.Add(2 * time.Minute)
+
+	for _, segment := range []struct {
+		kind    string
+		started time.Time
+	}{
+		{kind: "initial", started: initialStart},
+		{kind: "resume", started: firstResumeStart},
+		{kind: "resume", started: secondResumeStart},
+	} {
+		completedAt := segment.started.Add(15 * time.Second)
+		service.persistAgentLoopRuntime(request, agentloop.Result{
+			StopReason: agentloop.StopReasonCompleted,
+			Rounds: []agentloop.PersistedRound{{
+				StepID:        "step_loop_01",
+				RunID:         request.RunID,
+				TaskID:        request.TaskID,
+				AttemptIndex:  1,
+				SegmentKind:   segment.kind,
+				LoopRound:     1,
+				Name:          "agent_loop_round",
+				Status:        "completed",
+				InputSummary:  "planner input",
+				OutputSummary: "planner output",
+				StartedAt:     segment.started,
+				CompletedAt:   completedAt,
+				StopReason:    agentloop.StopReasonCompleted,
+			}},
+			Events: []agentloop.LifecycleEvent{{
+				Type:      "loop.round.completed",
+				Level:     "info",
+				StepID:    "step_loop_01",
+				Payload:   map[string]any{"attempt_index": 1, "segment_kind": segment.kind, "loop_round": 1},
+				CreatedAt: completedAt,
+			}},
+		})
+	}
+
+	if len(store.steps) != 3 {
+		t.Fatalf("expected three persisted step rows, got %+v", store.steps)
+	}
+	if len(store.events) != 3 {
+		t.Fatalf("expected three persisted event rows, got %+v", store.events)
+	}
+
+	seenStepIDs := map[string]struct{}{}
+	for _, record := range store.steps {
+		if _, exists := seenStepIDs[record.StepID]; exists {
+			t.Fatalf("expected unique step ids across persisted segments, got duplicate %q", record.StepID)
+		}
+		seenStepIDs[record.StepID] = struct{}{}
+	}
+
+	seenEventIDs := map[string]struct{}{}
+	for index, record := range store.events {
+		if _, exists := seenEventIDs[record.EventID]; exists {
+			t.Fatalf("expected unique event ids across persisted segments, got duplicate %q", record.EventID)
+		}
+		seenEventIDs[record.EventID] = struct{}{}
+		if record.StepID != store.steps[index].StepID {
+			t.Fatalf("expected event step id %q to link to persisted step %q", record.StepID, store.steps[index].StepID)
+		}
 	}
 }
 

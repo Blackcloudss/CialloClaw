@@ -4891,6 +4891,15 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 }
 
 func executionAttemptIndex(previousTask, processingTask runengine.TaskRecord) int {
+	if processingTask.ExecutionAttempt > 0 {
+		return processingTask.ExecutionAttempt
+	}
+	if previousTask.ExecutionAttempt > 0 {
+		if strings.TrimSpace(previousTask.RunID) == "" || previousTask.RunID == processingTask.RunID {
+			return previousTask.ExecutionAttempt
+		}
+		return previousTask.ExecutionAttempt + 1
+	}
 	if strings.TrimSpace(previousTask.RunID) == "" || previousTask.RunID == processingTask.RunID {
 		return 1
 	}
