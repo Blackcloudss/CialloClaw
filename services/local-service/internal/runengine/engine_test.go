@@ -2,6 +2,7 @@
 package runengine
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -258,6 +259,55 @@ func TestEngineAppendAuditDataPersistsAuditAndTokenUsage(t *testing.T) {
 
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
+	}
+}
+
+func TestEngineDefaultSettingsIncludeBudgetPolicy(t *testing.T) {
+	engine := NewEngine()
+	settings := engine.Settings()
+	dataLog := settings["data_log"].(map[string]any)
+	policy := dataLog["budget_policy"].(map[string]any)
+	if dataLog["budget_auto_downgrade"] != true {
+		t.Fatalf("expected budget_auto_downgrade default to remain true, got %+v", dataLog)
+	}
+	if policy["planner_retry_budget"] != 1 || policy["failure_signal_window"] != 2 || policy["token_pressure_threshold"] != 64 {
+		t.Fatalf("expected default budget policy thresholds, got %+v", policy)
+	}
+	categories := policy["expensive_tool_categories"].([]string)
+	if len(categories) != 3 || categories[0] != "command" {
+		t.Fatalf("expected default expensive tool categories, got %+v", policy)
+	}
+}
+
+func TestEngineUpdateSettingsMergesNestedBudgetPolicy(t *testing.T) {
+	engine := NewEngine()
+	effective, updatedKeys, applyMode, needRestart := engine.UpdateSettings(map[string]any{
+		"data_log": map[string]any{
+			"budget_policy": map[string]any{
+				"failure_signal_window":     3,
+				"planner_retry_budget":      2,
+				"expensive_tool_categories": []any{"command", "browser_mutation", "media_heavy"},
+			},
+		},
+	})
+	if applyMode != "immediate" || needRestart {
+		t.Fatalf("expected budget policy update to stay immediate, got applyMode=%s needRestart=%v", applyMode, needRestart)
+	}
+	if len(updatedKeys) != 1 || updatedKeys[0] != "data_log.budget_policy" {
+		t.Fatalf("expected nested budget policy update key, got %+v", updatedKeys)
+	}
+	policyPatch := effective["data_log"].(map[string]any)["budget_policy"].(map[string]any)
+	if policyPatch["failure_signal_window"] != 3 || policyPatch["planner_retry_budget"] != 2 {
+		t.Fatalf("expected effective settings to expose nested budget policy patch, got %+v", effective)
+	}
+	settings := engine.Settings()
+	policy := settings["data_log"].(map[string]any)["budget_policy"].(map[string]any)
+	if policy["failure_signal_window"] != 3 || policy["planner_retry_budget"] != 2 {
+		t.Fatalf("expected nested budget policy merge to persist, got %+v", policy)
+	}
+	categories := policy["expensive_tool_categories"].([]any)
+	if len(categories) != 3 {
+		t.Fatalf("expected updated expensive tool categories, got %+v", categories)
 	}
 }
 
@@ -1198,6 +1248,89 @@ func TestEngineControlTaskRestartResetsFinishedOutputs(t *testing.T) {
 	}
 	if restarted.LoopStopReason != "" {
 		t.Fatalf("expected restart to clear loop stop reason, got %q", restarted.LoopStopReason)
+	}
+	if restarted.ExecutionAttempt != 2 {
+		t.Fatalf("expected first restart to increment attempt to 2, got %d", restarted.ExecutionAttempt)
+	}
+
+	completedAgain, ok := engine.CompleteTask(task.TaskID, deliveryResult, map[string]any{"task_id": task.TaskID, "type": "result"}, artifacts)
+	if !ok || completedAgain.Status != "completed" {
+		t.Fatalf("expected task to complete again before second restart, got %#v ok=%v", completedAgain, ok)
+	}
+	restartedAgain, err := engine.ControlTask(task.TaskID, "restart", map[string]any{"task_id": task.TaskID, "type": "status"})
+	if err != nil {
+		t.Fatalf("expected second restart to succeed: %v", err)
+	}
+	if restartedAgain.ExecutionAttempt != 3 {
+		t.Fatalf("expected second restart to increment attempt to 3, got %d", restartedAgain.ExecutionAttempt)
+	}
+}
+
+func TestEngineRestartPersistsExecutionAttemptAcrossReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-run-attempts.db")
+	store, err := storage.NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+	engine, err := NewEngineWithStore(store)
+	if err != nil {
+		t.Fatalf("NewEngineWithStore returned error: %v", err)
+	}
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_restart_attempts",
+		Title:       "restart attempts",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Timeline:    []TaskStepRecord{{Name: "generate_output", Status: "running", OrderIndex: 1}},
+	})
+	completed, ok := engine.CompleteTask(task.TaskID, map[string]any{"type": "bubble"}, map[string]any{"task_id": task.TaskID, "type": "result"}, nil)
+	if !ok || completed.Status != "completed" {
+		t.Fatalf("expected initial completion before restart, got %#v ok=%v", completed, ok)
+	}
+	restarted, err := engine.ControlTask(task.TaskID, "restart", map[string]any{"task_id": task.TaskID, "type": "status"})
+	if err != nil {
+		t.Fatalf("first restart failed: %v", err)
+	}
+	completedAgain, ok := engine.CompleteTask(restarted.TaskID, map[string]any{"type": "bubble"}, map[string]any{"task_id": restarted.TaskID, "type": "result"}, nil)
+	if !ok || completedAgain.Status != "completed" {
+		t.Fatalf("expected second completion before restart, got %#v ok=%v", completedAgain, ok)
+	}
+	restartedAgain, err := engine.ControlTask(completedAgain.TaskID, "restart", map[string]any{"task_id": completedAgain.TaskID, "type": "status"})
+	if err != nil {
+		t.Fatalf("second restart failed: %v", err)
+	}
+	if restartedAgain.ExecutionAttempt != 3 {
+		t.Fatalf("expected in-memory execution attempt to reach 3, got %d", restartedAgain.ExecutionAttempt)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close sqlite store before reload: %v", err)
+	}
+	reloadStore, err := storage.NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("reopen sqlite task run store: %v", err)
+	}
+	defer func() { _ = reloadStore.Close() }()
+	records, err := reloadStore.LoadTaskRuns(context.Background())
+	if err != nil {
+		t.Fatalf("load task runs before engine reload: %v", err)
+	}
+	if len(records) != 1 || records[0].ExecutionAttempt != 3 {
+		t.Fatalf("expected persisted store attempt to be 3 before engine reload, got %+v", records)
+	}
+
+	reloaded, err := NewEngineWithStore(reloadStore)
+	if err != nil {
+		t.Fatalf("reloading engine failed: %v", err)
+	}
+	persisted, ok := reloaded.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected task to reload from store")
+	}
+	if persisted.ExecutionAttempt != 3 {
+		t.Fatalf("expected persisted execution attempt to stay 3 after reload, got %d", persisted.ExecutionAttempt)
 	}
 }
 

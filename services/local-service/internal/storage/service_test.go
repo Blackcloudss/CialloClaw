@@ -169,7 +169,7 @@ func TestCapabilitiesReturnsConfiguredStructuredStorageOnly(t *testing.T) {
 	if capabilities.MemoryRetrievalBackend != memoryRetrievalBackendSQLite {
 		t.Fatalf("unexpected retrieval backend: %+v", capabilities)
 	}
-	if capabilities.SecretStoreBackend != memoryStoreBackendSQLite {
+	if capabilities.SecretStoreBackend != "stronghold_sqlite_fallback" {
 		t.Fatalf("unexpected secret backend: %+v", capabilities)
 	}
 }
@@ -507,6 +507,8 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 		RunID:         "run_loop_001",
 		TaskID:        "task_loop_001",
 		OrderIndex:    1,
+		AttemptIndex:  1,
+		SegmentKind:   "initial",
 		LoopRound:     1,
 		Name:          "agent_loop_round",
 		Status:        "completed",
@@ -553,6 +555,33 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	}
 	assertTableCount(t, sqliteStore.db, "runs", 1)
 	assertTableCount(t, sqliteStore.db, "steps", 1)
+	var attemptIndex int
+	var segmentKind string
+	if err := sqliteStore.db.QueryRow(`SELECT attempt_index, segment_kind FROM steps WHERE step_id = ?`, "step_loop_001").Scan(&attemptIndex, &segmentKind); err != nil {
+		t.Fatalf("query step attempt/segment failed: %v", err)
+	}
+	if attemptIndex != 1 || segmentKind != "initial" {
+		t.Fatalf("expected step attempt/segment to persist, got attempt=%d segment=%s", attemptIndex, segmentKind)
+	}
+	if err := service.loopRuntimeStore.SaveSteps(context.Background(), []StepRecord{{
+		StepID:        "task_loop_001_attempt_01_resume_step_loop_001",
+		RunID:         "run_loop_001",
+		TaskID:        "task_loop_001",
+		OrderIndex:    1,
+		AttemptIndex:  1,
+		SegmentKind:   "resume",
+		LoopRound:     1,
+		Name:          "agent_loop_round",
+		Status:        "completed",
+		InputSummary:  "resume planner input",
+		OutputSummary: "resume planner output",
+		StopReason:    "completed",
+		StartedAt:     "2026-04-17T10:00:02Z",
+		CompletedAt:   "2026-04-17T10:00:03Z",
+	}}); err != nil {
+		t.Fatalf("SaveSteps for resume segment returned error: %v", err)
+	}
+	assertTableCount(t, sqliteStore.db, "steps", 2)
 	assertTableCount(t, sqliteStore.db, "events", 1)
 	assertTableCount(t, sqliteStore.db, "delivery_results", 1)
 
@@ -866,6 +895,22 @@ func TestResolveModelAPIKeyReturnsAccessFailureWhenStoreClosed(t *testing.T) {
 	_, err := service.ResolveModelAPIKey("openai_responses")
 	if !errors.Is(err, ErrSecretStoreAccessFailed) {
 		t.Fatalf("expected ErrSecretStoreAccessFailed, got %v", err)
+	}
+}
+
+func TestServiceUsesUnavailableSecretStoreWhenStrongholdCannotOpen(t *testing.T) {
+	service := NewService(stubAdapter{databasePath: ""})
+	defer func() { _ = service.Close() }()
+	if service.Stronghold() != nil {
+		t.Fatalf("expected no Stronghold provider when secret path missing, got %+v", service.Stronghold().Descriptor())
+	}
+	if err := service.SecretStore().PutSecret(context.Background(), SecretRecord{Namespace: "model", Key: "openai_responses_api_key", Value: "secret", UpdatedAt: "2026-04-15T10:00:00Z"}); err != nil {
+		t.Fatalf("expected in-memory fallback store when Stronghold path missing, got %v", err)
+	}
+
+	store := SecretStore(UnavailableSecretStore{})
+	if err := store.PutSecret(context.Background(), SecretRecord{Namespace: "model", Key: "openai_responses_api_key", Value: "secret", UpdatedAt: "2026-04-15T10:00:00Z"}); !errors.Is(err, ErrStrongholdUnavailable) {
+		t.Fatalf("expected unavailable formal store to reject writes, got %v", err)
 	}
 }
 

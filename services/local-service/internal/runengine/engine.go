@@ -32,6 +32,7 @@ type TaskRecord struct {
 	TaskID            string
 	SessionID         string
 	RunID             string
+	ExecutionAttempt  int
 	Title             string
 	SourceType        string
 	Status            string
@@ -238,6 +239,7 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 		TaskID:            taskID,
 		SessionID:         firstNonEmpty(input.SessionID, e.nextIdentifier("sess")),
 		RunID:             runID,
+		ExecutionAttempt:  1,
 		Title:             input.Title,
 		SourceType:        input.SourceType,
 		Status:            input.Status,
@@ -516,7 +518,10 @@ func (e *Engine) ReopenIntentConfirmation(taskID, title string, intent map[strin
 	record.MemoryReadPlans = nil
 	record.MemoryWritePlans = nil
 	record.MirrorReferences = nil
-	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary))
+	record.SecuritySummary = mergePreservedSecuritySummary(
+		buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary)),
+		record.SecuritySummary,
+	)
 	record.Timeline = advanceTimeline(record.Timeline, "confirming_intent", "pending", "等待人工复核后的新方案确认")
 	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
 	record.LatestEvent = e.buildEvent(record, "task.updated")
@@ -735,12 +740,12 @@ func (e *Engine) FailTaskExecution(taskID, stepName, securityStatus, outputSumma
 	if len(latestRestorePoint) > 0 && len(latestRestorePoint[0]) > 0 {
 		restorePoint = cloneMap(latestRestorePoint[0])
 	}
-	record.SecuritySummary = map[string]any{
+	record.SecuritySummary = mergePreservedSecuritySummary(map[string]any{
 		"security_status":        firstNonEmpty(securityStatus, "execution_error"),
 		"risk_level":             record.RiskLevel,
 		"pending_authorizations": 0,
 		"latest_restore_point":   restorePoint,
-	}
+	}, record.SecuritySummary)
 	record.Timeline = advanceTimeline(record.Timeline, record.CurrentStep, "failed", firstNonEmpty(outputSummary, "执行失败"))
 	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
 	record.LatestEvent = e.buildEvent(record, "task.updated")
@@ -778,12 +783,12 @@ func (e *Engine) BlockTaskByPolicy(taskID, riskLevel, outputSummary string, impa
 	if riskLevel != "" {
 		record.RiskLevel = riskLevel
 	}
-	record.SecuritySummary = map[string]any{
+	record.SecuritySummary = mergePreservedSecuritySummary(map[string]any{
 		"security_status":        "intercepted",
 		"risk_level":             record.RiskLevel,
 		"pending_authorizations": 0,
 		"latest_restore_point":   latestRestorePointFromSummary(record.SecuritySummary),
-	}
+	}, record.SecuritySummary)
 	record.Timeline = advanceTimeline(record.Timeline, "risk_blocked", "cancelled", firstNonEmpty(outputSummary, "高风险操作已被策略拦截"))
 	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
 	record.LatestEvent = e.buildEvent(record, "task.updated")
@@ -826,7 +831,10 @@ func (e *Engine) CompleteTask(taskID string, deliveryResult map[string]any, bubb
 	if len(latestRestorePoint) > 0 && len(latestRestorePoint[0]) > 0 {
 		restorePoint = cloneMap(latestRestorePoint[0])
 	}
-	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, restorePoint)
+	record.SecuritySummary = mergePreservedSecuritySummary(
+		buildSecuritySummary(record.RiskLevel, restorePoint),
+		record.SecuritySummary,
+	)
 	record.LatestEvent = e.buildEvent(record, "delivery.ready")
 	record.queueNotification("task.updated", map[string]any{
 		"task_id": record.TaskID,
@@ -868,12 +876,12 @@ func (e *Engine) ApplyRecoveryOutcome(taskID, taskStatus, securityStatus string,
 	record.BubbleMessage = cloneMap(bubbleMessage)
 	record.PendingExecution = nil
 	record.ApprovalRequest = nil
-	record.SecuritySummary = map[string]any{
+	record.SecuritySummary = mergePreservedSecuritySummary(map[string]any{
 		"security_status":        firstNonEmpty(securityStatus, "recovered"),
 		"risk_level":             record.RiskLevel,
 		"pending_authorizations": 0,
 		"latest_restore_point":   cloneMap(recoveryPoint),
-	}
+	}, record.SecuritySummary)
 	eventType := "recovery.failed"
 	if securityStatus == "recovered" {
 		eventType = "recovery.applied"
@@ -936,7 +944,10 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		record.FinishedAt = &now
 		record.ApprovalRequest = nil
 		record.PendingExecution = nil
-		record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary))
+		record.SecuritySummary = mergePreservedSecuritySummary(
+			buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary)),
+			record.SecuritySummary,
+		)
 		record.Timeline = advanceTimeline(record.Timeline, "task_cancelled", "cancelled", "任务已取消")
 		record.CurrentStep = "task_cancelled"
 	case "restart":
@@ -946,6 +957,7 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		// Restart begins a fresh execution attempt for the same task, so it must
 		// allocate a new run identifier before any loop/runtime rows are emitted.
 		record.RunID = e.nextIdentifier("run")
+		record.ExecutionAttempt++
 		record.Status = "processing"
 		record.FinishedAt = nil
 		record.CurrentStep = "generate_output"
@@ -962,7 +974,10 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		record.MemoryWritePlans = nil
 		record.MirrorReferences = nil
 		record.LoopStopReason = ""
-		record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary))
+		record.SecuritySummary = mergePreservedSecuritySummary(
+			buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary)),
+			record.SecuritySummary,
+		)
 		record.Timeline = advanceTimeline(record.Timeline, "generate_output", "running", "任务已重新开始")
 	default:
 		return TaskRecord{}, ErrTaskStatusInvalid
@@ -1017,12 +1032,12 @@ func (e *Engine) MarkWaitingApprovalWithPlan(taskID string, approvalRequest map[
 	}
 	record.BubbleMessage = cloneMap(bubbleMessage)
 	latestRestorePoint := latestRestorePointFromSummary(record.SecuritySummary)
-	record.SecuritySummary = map[string]any{
+	record.SecuritySummary = mergePreservedSecuritySummary(map[string]any{
 		"security_status":        "pending_confirmation",
 		"risk_level":             record.RiskLevel,
 		"pending_authorizations": 1,
 		"latest_restore_point":   latestRestorePoint,
-	}
+	}, record.SecuritySummary)
 	record.Timeline = advanceTimeline(record.Timeline, "waiting_authorization", "running", "等待用户授权")
 	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
 	record.LatestEvent = e.buildEvent(record, "approval.pending")
@@ -1060,7 +1075,10 @@ func (e *Engine) ResolveAuthorization(taskID string, authorization map[string]an
 	if existingRestorePoint, ok := record.SecuritySummary["latest_restore_point"].(map[string]any); ok {
 		latestRestorePoint = cloneMap(existingRestorePoint)
 	}
-	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePoint)
+	record.SecuritySummary = mergePreservedSecuritySummary(
+		buildSecuritySummary(record.RiskLevel, latestRestorePoint),
+		record.SecuritySummary,
+	)
 	e.persistTaskLocked(record)
 	return record.clone(), true
 }
@@ -1089,7 +1107,10 @@ func (e *Engine) ResumeAfterApproval(taskID string, authorization map[string]any
 	record.ImpactScope = cloneMap(impactScope)
 	record.ApprovalRequest = nil
 	record.BubbleMessage = cloneMap(bubbleMessage)
-	record.SecuritySummary = buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary))
+	record.SecuritySummary = mergePreservedSecuritySummary(
+		buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary)),
+		record.SecuritySummary,
+	)
 	record.Timeline = advanceTimeline(record.Timeline, "authorized_execution", "running", "授权通过，继续执行")
 	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
 	record.LatestEvent = e.buildEvent(record, "task.updated")
@@ -1126,12 +1147,12 @@ func (e *Engine) DenyAfterApproval(taskID string, authorization map[string]any, 
 	record.ApprovalRequest = nil
 	record.PendingExecution = nil
 	record.BubbleMessage = cloneMap(bubbleMessage)
-	record.SecuritySummary = map[string]any{
+	record.SecuritySummary = mergePreservedSecuritySummary(map[string]any{
 		"security_status":        "intercepted",
 		"risk_level":             record.RiskLevel,
 		"pending_authorizations": 0,
 		"latest_restore_point":   latestRestorePointFromSummary(record.SecuritySummary),
-	}
+	}, record.SecuritySummary)
 	record.Timeline = advanceTimeline(record.Timeline, "authorization_denied", "cancelled", "用户拒绝授权，任务已结束")
 	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
 	record.LatestEvent = e.buildEvent(record, "task.updated")
@@ -1755,6 +1776,23 @@ func (e *Engine) AppendAuditData(taskID string, auditRecords []map[string]any, t
 	return record.clone(), true
 }
 
+// UpdateSecuritySummary writes task-facing governance metadata back into the
+// runtime record before later state transitions rebuild the base summary.
+func (e *Engine) UpdateSecuritySummary(taskID string, securitySummary map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	record.UpdatedAt = e.now()
+	record.SecuritySummary = cloneMap(securitySummary)
+	e.persistTaskLocked(record)
+	return record.clone(), true
+}
+
 // buildEvent creates one compatibility-layer event record for the task.
 func (e *Engine) buildEvent(record *TaskRecord, eventType string) map[string]any {
 	return e.buildEventWithPayload(record, eventType, map[string]any{"status": record.Status})
@@ -2032,7 +2070,7 @@ func isSessionBusyTask(record *TaskRecord) bool {
 func advanceTimeline(timeline []TaskStepRecord, stepName, status, outputSummary string) []TaskStepRecord {
 	if len(timeline) == 0 {
 		return []TaskStepRecord{{
-			StepID:        fmt.Sprintf("step_%s", stepName),
+			StepID:        timelineStepID("", stepName, 1),
 			Name:          stepName,
 			Status:        status,
 			OrderIndex:    1,
@@ -2045,12 +2083,13 @@ func advanceTimeline(timeline []TaskStepRecord, stepName, status, outputSummary 
 	lastIndex := len(updated) - 1
 	if updated[lastIndex].Name != stepName {
 		updated[lastIndex].Status = "completed"
+		nextOrderIndex := updated[lastIndex].OrderIndex + 1
 		updated = append(updated, TaskStepRecord{
-			StepID:        fmt.Sprintf("step_%s", stepName),
+			StepID:        timelineStepID(updated[lastIndex].TaskID, stepName, nextOrderIndex),
 			TaskID:        updated[lastIndex].TaskID,
 			Name:          stepName,
 			Status:        status,
-			OrderIndex:    updated[lastIndex].OrderIndex + 1,
+			OrderIndex:    nextOrderIndex,
 			InputSummary:  updated[lastIndex].OutputSummary,
 			OutputSummary: outputSummary,
 		})
@@ -2062,6 +2101,14 @@ func advanceTimeline(timeline []TaskStepRecord, stepName, status, outputSummary 
 	return updated
 }
 
+func timelineStepID(taskID, stepName string, orderIndex int) string {
+	orderIndex = maxInt(orderIndex, 1)
+	if strings.TrimSpace(taskID) != "" {
+		return fmt.Sprintf("%s_step_%03d_%s", taskID, orderIndex, stepName)
+	}
+	return fmt.Sprintf("step_%03d_%s", orderIndex, stepName)
+}
+
 // buildSecuritySummary creates the minimal security summary shown in task
 // detail views.
 func buildSecuritySummary(riskLevel string, latestRestorePoint map[string]any) map[string]any {
@@ -2071,6 +2118,22 @@ func buildSecuritySummary(riskLevel string, latestRestorePoint map[string]any) m
 		"pending_authorizations": 0,
 		"latest_restore_point":   latestRestorePoint,
 	}
+}
+
+// mergePreservedSecuritySummary keeps governance/runtime metadata that the
+// orchestrator attaches before state-machine transitions rebuild the base
+// security summary for completion, failure, cancellation, or recovery.
+func mergePreservedSecuritySummary(base map[string]any, current map[string]any) map[string]any {
+	merged := cloneMap(base)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	for key, value := range current {
+		if strings.HasPrefix(key, "budget_auto_downgrade_") {
+			merged[key] = value
+		}
+	}
+	return merged
 }
 
 func latestRestorePointFromSummary(summary map[string]any) map[string]any {
@@ -2559,6 +2622,13 @@ func buildDefaultSettings() map[string]any {
 		"data_log": map[string]any{
 			"provider":              "openai",
 			"budget_auto_downgrade": true,
+			"budget_policy": map[string]any{
+				"planner_retry_budget":      1,
+				"failure_signal_window":     2,
+				"token_pressure_threshold":  64,
+				"cost_pressure_threshold":   0.05,
+				"expensive_tool_categories": []string{"command", "browser_mutation", "media_heavy"},
+			},
 		},
 	}
 }
@@ -2568,6 +2638,7 @@ func taskRecordToStorage(record TaskRecord) storage.TaskRunRecord {
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             record.RunID,
+		ExecutionAttempt:  record.ExecutionAttempt,
 		Title:             record.Title,
 		SourceType:        record.SourceType,
 		Status:            record.Status,
@@ -2610,6 +2681,7 @@ func taskRecordFromStorage(record storage.TaskRunRecord) TaskRecord {
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             record.RunID,
+		ExecutionAttempt:  maxInt(record.ExecutionAttempt, 1),
 		Title:             record.Title,
 		SourceType:        record.SourceType,
 		Status:            record.Status,
@@ -2730,6 +2802,13 @@ func cloneTimePointer(value *time.Time) *time.Time {
 
 	cloned := *value
 	return &cloned
+}
+
+func maxInt(primary, fallback int) int {
+	if primary > 0 {
+		return primary
+	}
+	return fallback
 }
 
 func cloneContextSnapshot(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
