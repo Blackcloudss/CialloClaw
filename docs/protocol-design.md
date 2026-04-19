@@ -509,6 +509,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.settings.get`
 - `agent.settings.update`
 
+#### E. 插件运行态
+
+- `agent.plugin.runtime.list`
+
 ### 7.2 planned
 
 - `agent.mirror.memory.manage`
@@ -1567,7 +1571,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：任务详情页、任务巡检页或调试入口需要查看正式运行时事件时
 - **系统处理**：按 `task_id` 返回归一化后的 `events` 记录，覆盖 `loop.*`、`task.steered` 等兼容运行时事件
-- **入参**：任务 ID、分页参数
+- **入参**：任务 ID、可选事件过滤条件、分页参数
 - **出参**：事件列表、分页信息
 
 ### agent.task.events.list 入参说明
@@ -1577,6 +1581,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `task_id` | 目标任务 ID |
 | `run_id`  | 可选，用于只看某一次执行的事件 |
 | `type`    | 可选，用于按事件类型过滤，如 `loop.failed` |
+| `created_at_from` | 可选，按开始时间过滤，使用 RFC3339 时间戳 |
+| `created_at_to` | 可选，按结束时间过滤，使用 RFC3339 时间戳 |
 | `limit`   | 每页条数    |
 | `offset`  | 偏移量      |
 
@@ -1595,6 +1601,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "task_id": "task_201",
     "run_id": "run_201",
     "type": "loop.round.completed",
+    "created_at_from": "2026-04-18T09:43:00+08:00",
+    "created_at_to": "2026-04-18T10:43:00+08:00",
     "limit": 20,
     "offset": 0
   }
@@ -3321,6 +3329,88 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "server_time": "2026-04-07T11:06:01+08:00"
     },
     "warnings": []
+  }
+}
+```
+
+---
+
+### 8.4.3 `agent.plugin.runtime.list`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：仪表盘或工作台需要查看插件运行态时
+- **系统处理**：返回当前 worker / sidecar 的运行态、指标快照和最近事件
+- **入参**：当前阶段可为空对象
+- **出参**：插件运行态列表、指标快照、最近事件
+
+### agent.plugin.runtime.list 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_plugin_runtime_list_001",
+  "method": "agent.plugin.runtime.list",
+  "params": {}
+}
+```
+
+### agent.plugin.runtime.list 出参说明
+
+| 字段 | 中文说明 |
+| --- | --- |
+| `data.items` | 插件运行态列表，包含 `name / kind / status / transport / health / last_seen_at / last_error / capabilities` |
+| `data.metrics` | 插件指标快照列表，包含 `start_count / success_count / failure_count / last_started_at / last_failed_at / last_seen_at` |
+| `data.events` | 最近运行态事件，包含 `event_type / payload / created_at` |
+
+### agent.plugin.runtime.list 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_plugin_runtime_list_001",
+  "result": {
+    "data": {
+      "items": [
+        {
+          "name": "playwright_sidecar",
+          "kind": "sidecar",
+          "status": "running",
+          "transport": "named_pipe",
+          "health": "healthy",
+          "last_seen_at": "2026-04-19T20:18:01Z",
+          "last_error": "",
+          "capabilities": [
+            "page_read",
+            "page_search",
+            "page_interact",
+            "structured_dom"
+          ]
+        }
+      ],
+      "metrics": [
+        {
+          "name": "playwright_sidecar",
+          "kind": "sidecar",
+          "start_count": 1,
+          "success_count": 1,
+          "failure_count": 0,
+          "last_started_at": "2026-04-19T20:18:00Z",
+          "last_failed_at": "",
+          "last_seen_at": "2026-04-19T20:18:01Z"
+        }
+      ],
+      "events": [
+        {
+          "name": "playwright_sidecar",
+          "kind": "sidecar",
+          "event_type": "plugin.runtime.healthy",
+          "payload": {
+            "health": "healthy"
+          },
+          "created_at": "2026-04-19T20:18:01Z"
+        }
+      ]
+    }
   }
 }
 ```

@@ -1954,6 +1954,46 @@ func TestServiceTaskControlResumeExecutesHumanLoopTask(t *testing.T) {
 	}
 }
 
+func TestExecutionSegmentKindClassifiesInitialResumeAndRestart(t *testing.T) {
+	initialTask := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
+	initialProcessing := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
+	if segment := executionSegmentKind(initialTask, initialProcessing); segment != executionSegmentInitial {
+		t.Fatalf("expected initial segment, got %s", segment)
+	}
+	if attempt := executionAttemptIndex(initialTask, initialProcessing); attempt != 1 {
+		t.Fatalf("expected initial attempt index 1, got %d", attempt)
+	}
+
+	resumedTask := runengine.TaskRecord{RunID: "run_same", Status: "paused", ExecutionAttempt: 1}
+	resumedProcessing := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
+	if segment := executionSegmentKind(resumedTask, resumedProcessing); segment != executionSegmentResume {
+		t.Fatalf("expected resume segment, got %s", segment)
+	}
+	if attempt := executionAttemptIndex(resumedTask, resumedProcessing); attempt != 1 {
+		t.Fatalf("expected resume to stay in first attempt, got %d", attempt)
+	}
+
+	restartedTask := runengine.TaskRecord{RunID: "run_before_restart", Status: "completed", ExecutionAttempt: 1}
+	restartedProcessing := runengine.TaskRecord{RunID: "run_after_restart", Status: "processing", ExecutionAttempt: 2}
+	if segment := executionSegmentKind(restartedTask, restartedProcessing); segment != executionSegmentRestart {
+		t.Fatalf("expected restart segment, got %s", segment)
+	}
+	if attempt := executionAttemptIndex(restartedTask, restartedProcessing); attempt != 2 {
+		t.Fatalf("expected restart to increment attempt index, got %d", attempt)
+	}
+
+	restartedAgainTask := runengine.TaskRecord{RunID: "run_after_restart", Status: "completed", ExecutionAttempt: 2}
+	restartedAgainProcessing := runengine.TaskRecord{RunID: "run_after_restart_2", Status: "processing", ExecutionAttempt: 3}
+	if attempt := executionAttemptIndex(restartedAgainTask, restartedAgainProcessing); attempt != 3 {
+		t.Fatalf("expected second restart to reach attempt index 3, got %d", attempt)
+	}
+
+	legacyRestartProcessing := runengine.TaskRecord{RunID: "run_after_restart_3", Status: "processing"}
+	if attempt := executionAttemptIndex(restartedAgainTask, legacyRestartProcessing); attempt != 3 {
+		t.Fatalf("expected fallback attempt inference to reach 3, got %d", attempt)
+	}
+}
+
 func TestServiceTaskControlResumeConsumesHumanLoopPendingPayload(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Recovered after review.")
 	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
@@ -7702,6 +7742,20 @@ func TestSettingsGetIncludesSecretConfigurationAvailability(t *testing.T) {
 	}
 }
 
+func TestSettingsGetWithoutStorageStillReturnsStrongholdStatus(t *testing.T) {
+	service := newTestService()
+	service.storage = nil
+	result, err := service.SettingsGet(map[string]any{"scope": "all"})
+	if err != nil {
+		t.Fatalf("settings get failed: %v", err)
+	}
+	dataLog := result["settings"].(map[string]any)["data_log"].(map[string]any)
+	stronghold := dataLog["stronghold"].(map[string]any)
+	if stronghold["backend"] != "none" || stronghold["available"] != false || stronghold["formal_store"] != false {
+		t.Fatalf("expected degraded settings get to still expose stronghold defaults, got %+v", stronghold)
+	}
+}
+
 func TestSettingsGetReturnsStrongholdErrorWhenSecretStoreUnreadable(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "settings secret error")
 	if service.storage == nil {
@@ -7713,6 +7767,24 @@ func TestSettingsGetReturnsStrongholdErrorWhenSecretStoreUnreadable(t *testing.T
 	_, err := service.SettingsGet(map[string]any{"scope": "all"})
 	if !errors.Is(err, ErrStrongholdAccessFailed) {
 		t.Fatalf("expected ErrStrongholdAccessFailed, got %v", err)
+	}
+}
+
+func TestSettingsGetUnrelatedScopeIgnoresSecretStoreOutage(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings general scope")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := service.storage.Close(); err != nil {
+		t.Fatalf("close storage failed: %v", err)
+	}
+	result, err := service.SettingsGet(map[string]any{"scope": "general"})
+	if err != nil {
+		t.Fatalf("expected unrelated settings scope to ignore secret outage, got %v", err)
+	}
+	settings := result["settings"].(map[string]any)
+	if _, ok := settings["general"].(map[string]any); !ok {
+		t.Fatalf("expected general scope payload, got %+v", settings)
 	}
 }
 
@@ -7859,6 +7931,81 @@ func TestSettingsUpdateReturnsStrongholdErrorWithoutStorage(t *testing.T) {
 	})
 	if !errors.Is(err, ErrStrongholdAccessFailed) {
 		t.Fatalf("expected ErrStrongholdAccessFailed, got %v", err)
+	}
+}
+
+func TestSettingsUpdateUnrelatedScopeIgnoresSecretStoreOutage(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings unrelated update")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := service.storage.Close(); err != nil {
+		t.Fatalf("close storage failed: %v", err)
+	}
+	result, err := service.SettingsUpdate(map[string]any{
+		"general": map[string]any{
+			"language": "zh-CN",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected unrelated settings update to ignore secret outage, got %v", err)
+	}
+	effectiveSettings := result["effective_settings"].(map[string]any)
+	if _, ok := effectiveSettings["general"].(map[string]any); !ok {
+		t.Fatalf("expected general effective settings payload, got %+v", effectiveSettings)
+	}
+	if _, exists := effectiveSettings["data_log"]; exists {
+		t.Fatalf("expected unrelated settings update to avoid attaching data_log metadata, got %+v", effectiveSettings)
+	}
+}
+
+func TestServicePluginRuntimeListReturnsStructuredState(t *testing.T) {
+	service := newTestService()
+	service.plugin.MarkRuntimeStarting(plugin.RuntimeKindWorker, "ocr_worker")
+	service.plugin.MarkRuntimeHealthy(plugin.RuntimeKindWorker, "ocr_worker")
+	service.plugin.MarkRuntimeFailed(plugin.RuntimeKindSidecar, "playwright_sidecar", errors.New("sidecar failed"))
+	result, err := service.PluginRuntimeList(map[string]any{})
+	if err != nil {
+		t.Fatalf("plugin runtime list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	metrics := result["metrics"].([]map[string]any)
+	events := result["events"].([]map[string]any)
+	if len(items) == 0 || len(metrics) == 0 || len(events) == 0 {
+		t.Fatalf("expected runtime query to return items/metrics/events, got %+v", result)
+	}
+	foundFailedSidecar := false
+	for _, item := range items {
+		if item["name"] == "playwright_sidecar" && fmt.Sprint(item["health"]) == string(plugin.RuntimeHealthFailed) {
+			foundFailedSidecar = true
+			break
+		}
+	}
+	if !foundFailedSidecar {
+		t.Fatalf("expected runtime query to expose failed sidecar state, got %+v", items)
+	}
+}
+
+func TestServiceSnapshotUsesStablePrimaryWorker(t *testing.T) {
+	service := newTestService()
+	snapshot := service.Snapshot()
+	if snapshot["primary_worker"] != "playwright_worker" {
+		t.Fatalf("expected snapshot primary_worker to use stable declaration order, got %+v", snapshot)
+	}
+}
+
+func TestDashboardModuleGetIncludesPluginRuntimeSummary(t *testing.T) {
+	service := newTestService()
+	service.plugin.MarkRuntimeHealthy(plugin.RuntimeKindWorker, "ocr_worker")
+	service.plugin.MarkRuntimeUnavailable(plugin.RuntimeKindWorker, "media_worker", "missing")
+	service.plugin.MarkRuntimeFailed(plugin.RuntimeKindSidecar, "playwright_sidecar", errors.New("boom"))
+	result, err := service.DashboardModuleGet(map[string]any{"module": "mirror", "tab": "daily_summary"})
+	if err != nil {
+		t.Fatalf("dashboard module get failed: %v", err)
+	}
+	summary := result["summary"].(map[string]any)["plugin_runtime"].(map[string]any)
+	if summary["healthy"] != 1 || summary["failed"] != 1 || summary["unavailable"] != 1 {
+		t.Fatalf("expected dashboard module summary to expose plugin runtime counts, got %+v", summary)
 	}
 }
 
@@ -8043,6 +8190,34 @@ func TestServiceTaskEventsListSupportsRunAndTypeFilters(t *testing.T) {
 	items := result["items"].([]map[string]any)
 	if len(items) != 1 || items[0]["run_id"] != "run_loop_filter_b" || items[0]["type"] != "loop.failed" {
 		t.Fatalf("expected filtered loop event, got %+v", items)
+	}
+}
+
+func TestServiceTaskEventsListSupportsTimeWindowFilters(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "loop event time filters")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime store to be wired")
+	}
+	if err := service.storage.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{
+		{EventID: "evt_loop_time_001", RunID: "run_loop_time_a", TaskID: "task_loop_time_001", StepID: "step_a", Type: "loop.round.started", Level: "info", PayloadJSON: `{}`, CreatedAt: "2026-04-17T10:00:00Z"},
+		{EventID: "evt_loop_time_002", RunID: "run_loop_time_b", TaskID: "task_loop_time_001", StepID: "step_b", Type: "loop.failed", Level: "error", PayloadJSON: `{}`, CreatedAt: "2026-04-17T10:05:00Z"},
+	}); err != nil {
+		t.Fatalf("save loop time filter events failed: %v", err)
+	}
+
+	result, err := service.TaskEventsList(map[string]any{
+		"task_id":         "task_loop_time_001",
+		"created_at_from": "2026-04-17T10:04:00Z",
+		"created_at_to":   "2026-04-17T10:06:00Z",
+		"limit":           20,
+		"offset":          0,
+	})
+	if err != nil {
+		t.Fatalf("task events list with time filters failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["run_id"] != "run_loop_time_b" {
+		t.Fatalf("expected time-filtered loop event, got %+v", items)
 	}
 }
 
