@@ -73,7 +73,7 @@ export const INPUT_TYPES = ["text", "text_selection", "file", "error"] as const;
 export const INPUT_MODES = ["voice", "text"] as const;
 
 // TASK_SOURCE_TYPES 定义共享常量。
-export const TASK_SOURCE_TYPES = ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal"] as const;
+export const TASK_SOURCE_TYPES = ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal", "screen_capture"] as const;
 
 // BUBBLE_MESSAGE_TYPES 定义共享常量。
 export const BUBBLE_MESSAGE_TYPES = ["status", "intent_confirm", "result"] as const;
@@ -486,7 +486,7 @@ export interface Run {
   run_id: string;
   task_id: string;
   session_id: string;
-  source_type: Extract<TaskSourceType, "selected_text" | "dragged_file" | "voice" | "hover_input" | "todo" | "error_signal">;
+  source_type: Extract<TaskSourceType, "selected_text" | "dragged_file" | "voice" | "hover_input" | "todo" | "error_signal" | "screen_capture">;
   status: RunStatus;
   started_at: string | null;
   finished_at: string | null;

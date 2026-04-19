@@ -42,7 +42,7 @@ export const REQUEST_TRIGGERS = [
 ] as const;
 export const INPUT_TYPES = ["text", "text_selection", "file", "error"] as const;
 export const INPUT_MODES = ["voice", "text"] as const;
-export const TASK_SOURCE_TYPES = ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal"] as const;
+export const TASK_SOURCE_TYPES = ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal", "screen_capture"] as const;
 export const BUBBLE_MESSAGE_TYPES = ["status", "intent_confirm", "result"] as const;
 export const APPROVAL_DECISIONS = ["allow_once", "deny_once"] as const;
 export const APPROVAL_STATUSES = ["pending", "approved", "denied"] as const;
