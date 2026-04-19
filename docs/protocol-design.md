@@ -218,6 +218,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `processing`：任务正在执行。
 - `waiting_auth`：命中高风险动作，等待授权。
 - `waiting_input`：等待用户补充必要输入。
+- `confirming_intent`：系统已识别出候选意图，等待用户确认或纠偏。
 - `paused`：任务被用户或系统主动暂停。
 - `blocked`：任务因依赖、环境或外部条件未满足而阻塞。
 - `failed`：任务执行失败。
@@ -481,6 +482,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.task.list`
 - `agent.task.detail.get`
 - `agent.task.control`
+- `agent.task.events.list`
+- `agent.task.steer`
 - `agent.task.artifact.list`
 - `agent.task.artifact.open`
 - `agent.delivery.open`
@@ -536,6 +539,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **任务成果列表、产物打开与最终交付打开** 统一使用 `agent.task.artifact.*` 与 `agent.delivery.open`。
 - 长结果自动分流：由交付内核决定，不新增方法
 - 一键中断：复用 `agent.task.control`
+- **运行中补充 follow-up 指令** 统一使用 `agent.task.steer`，用于向当前任务追加 steering 信息。
+- **运行时事件查看与调试观察** 统一使用 `agent.task.events.list`，用于补充查看正式事件流，不替代 `task` 主对象查询。
 - **插件、多模型、技能安装** 当前阶段先通过 `agent.settings.get / update` 与仪表盘模块承接，待对象、权限与来源字段完全冻结后再升级为独立正式接口。
 - **任务巡检、事项转任务** 统一使用 `agent.task_inspector.*` 与 `agent.notepad.*`。
 - **仪表盘首页、镜子、安全卫士** 统一使用 `agent.dashboard.*`、`agent.mirror.*`、`agent.security.*`。
@@ -678,24 +683,25 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### agent.task.start 入参说明
 
-| 字段                          | 中文说明                           |
-| ----------------------------- | ---------------------------------- |
-| `request_meta.trace_id`       | 请求链路追踪 ID                    |
-| `request_meta.client_time`    | 前端发起时间                       |
-| `session_id`                  | 当前会话 ID                        |
-| `source`                      | 来源位置                           |
-| `trigger`                     | 触发动作，如文本选中点击、文件拖拽 |
-| `input.type`                  | 输入对象类型                       |
-| `input.text`                  | 文本内容                           |
-| `input.files`                 | 文件列表                           |
-| `input.error_message`         | 错误信息内容                       |
-| `input.page_context`          | 页面上下文                         |
-| `context.selection.text`      | 当前选区补充文本                   |
-| `context.files`               | 补充文件上下文                     |
-| `delivery.preferred`          | 优先交付方式                       |
-| `delivery.fallback`           | 兜底交付方式                       |
+| 字段                       | 中文说明 |
+| -------------------------- | -------- |
+| `request_meta.trace_id`    | 请求链路追踪 ID |
+| `request_meta.client_time` | 前端发起时间 |
+| `session_id`               | 当前会话 ID |
+| `source`                   | 来源位置，取值来自 `request_source` |
+| `trigger`                  | 触发动作，取值来自 `request_trigger` |
+| `input.type`               | 输入对象类型，取值来自 `input_type` |
+| `input.text`               | 当 `input.type = text_selection` 时传入，表示选中文本内容 |
+| `input.files`              | 当 `input.type = file` 时传入，表示拖入文件列表 |
+| `input.page_context`       | 与输入对象关联的页面上下文，按需传入 |
+| `context.selection.text`   | 当前选区补充文本，按需传入 |
+| `context.files`            | 补充文件上下文，按需传入 |
+| `delivery.preferred`       | 优先交付方式 |
+| `delivery.fallback`        | 兜底交付方式 |
 
 ### agent.task.start 入参示例
+
+以下示例展示“文本选中后点击悬浮球”的 `text_selection` 场景。
 
 ```json
 {
@@ -735,13 +741,16 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### agent.task.start 出参说明
 
-| 字段                   | 中文说明     |
-| ---------------------- | ------------ |
-| `data.task`            | 任务主对象   |
-| `data.task.status`     | 当前任务状态 |
-| `data.bubble_message`  | 当前气泡内容 |
-| `data.delivery_result` | 正式交付结果 |
-| `warnings`             | 弱提示信息   |
+| 字段                     | 中文说明                         |
+| ------------------------ | -------------------------------- |
+| `data.task.task_id`      | 新建任务 ID                      |
+| `data.task.title`        | 任务标题                         |
+| `data.task.source_type`  | 任务来源类型                     |
+| `data.task.status`       | 当前任务状态                     |
+| `data.task.current_step` | 当前步骤                         |
+| `data.bubble_message`    | 气泡承接内容                     |
+| `data.delivery_result`   | 若后端已直接完成，可返回正式交付 |
+| `meta.server_time`       | 服务端响应时间                   |
 
 ### agent.task.start 出参示例
 
@@ -1263,7 +1272,6 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   }
 }
 ```
-
 
 ## 8.2 任务状态 / 任务巡检
 
