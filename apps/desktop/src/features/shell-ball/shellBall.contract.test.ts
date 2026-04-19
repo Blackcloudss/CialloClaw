@@ -296,6 +296,7 @@ function withWindowControllerRuntime<T>(runtime: {
 function withHideOnCloseRequestRuntime<T>(
   currentWindow: {
     __calls__?: string[];
+    destroy?: () => Promise<void> | void;
     label?: string;
     hide: () => Promise<void> | void;
     onCloseRequested: (handler: (event: { preventDefault: () => void }) => Promise<void> | void) => unknown;
@@ -835,6 +836,10 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
       windows: string[];
       permissions: string[];
     };
+    "control-panel-destroy": {
+      windows: string[];
+      permissions: string[];
+    };
   };
 
   assert.deepEqual(generatedCapabilitySchema.default.windows, parsedCapabilityConfig.windows);
@@ -869,6 +874,8 @@ test("shell-ball pinned window labels and capabilities stay deterministic", () =
   assert.equal(capabilityConfig.windows.includes("shell-ball-bubble-pinned-*"), true);
   assert.deepEqual(generatedCapabilitySchema.default.windows, capabilityConfig.windows);
   assert.equal(generatedCapabilitySchema.default.windows.includes("shell-ball-bubble-pinned-*"), true);
+  assert.deepEqual(generatedCapabilitySchema["control-panel-destroy"].windows, ["control-panel"]);
+  assert.deepEqual(generatedCapabilitySchema["control-panel-destroy"].permissions, ["core:window:allow-destroy"]);
 });
 
 test("shell-ball window controller caches helper handles for drag-time updates", () => {
@@ -902,7 +909,7 @@ test("shell-ball drag sync keeps geometry publishes coalesced and visibility-awa
   assert.match(appSource, /helperVisibility: snapshot\.visibility/);
 });
 
-test("dashboard and control-panel stay hidden on cold launch until explicitly opened", () => {
+test("dashboard stays hidden on cold launch while control-panel is created on demand", () => {
   const tauriConfig = JSON.parse(
     readFileSync(resolve(desktopRoot, "src-tauri/tauri.conf.json"), "utf8"),
   ) as {
@@ -914,16 +921,12 @@ test("dashboard and control-panel stay hidden on cold launch until explicitly op
       }>;
     };
   };
-
   const dashboardWindow = tauriConfig.app.windows.find((window) => window.label === "dashboard");
   const controlPanelWindow = tauriConfig.app.windows.find((window) => window.label === "control-panel");
-
   assert.ok(dashboardWindow);
-  assert.ok(controlPanelWindow);
+  assert.equal(controlPanelWindow, undefined);
   assert.equal(dashboardWindow.visible, false);
-  assert.equal(controlPanelWindow.visible, false);
   assert.equal(dashboardWindow.decorations, false);
-  assert.equal(controlPanelWindow.decorations, false);
 });
 
 test("shell-ball entries opt into transparent window mode", () => {
@@ -1107,9 +1110,15 @@ test("window controller focuses an existing labeled desktop window", async () =>
   const capabilityConfig = JSON.parse(
     readFileSync(resolve(desktopRoot, "src-tauri/capabilities/default.json"), "utf8"),
   ) as { permissions: string[] };
+  const controlPanelCapabilityConfig = JSON.parse(
+    readFileSync(resolve(desktopRoot, "src-tauri/capabilities/control-panel-destroy.json"), "utf8"),
+  ) as { permissions: string[]; windows: string[] };
 
   assert.equal(capabilityConfig.permissions.includes("core:window:allow-unminimize"), true);
   assert.equal(capabilityConfig.permissions.includes("core:window:allow-set-fullscreen"), true);
+  assert.equal(capabilityConfig.permissions.includes("core:window:allow-destroy"), false);
+  assert.deepEqual(controlPanelCapabilityConfig.windows, ["control-panel"]);
+  assert.equal(controlPanelCapabilityConfig.permissions.includes("core:window:allow-destroy"), true);
 
   await withWindowControllerRuntime({
     getByLabel(label) {
@@ -1227,7 +1236,7 @@ test("hide-on-close helper waits for the dashboard close transition only in the 
     },
     {
       label: "control-panel",
-      expectedCalls: ["onCloseRequested", "preventDefault", "hide"],
+      expectedCalls: ["onCloseRequested", "preventDefault", "destroy"],
     },
   ] as const) {
     const calls: string[] = [];
@@ -1240,6 +1249,9 @@ test("hide-on-close helper waits for the dashboard close transition only in the 
         calls.push("onCloseRequested");
         closeHandler = handler;
         return "unlisten";
+      },
+      async destroy() {
+        calls.push("destroy");
       },
       async hide() {
         calls.push("hide");
@@ -1255,6 +1267,71 @@ test("hide-on-close helper waits for the dashboard close transition only in the 
 
     assert.deepEqual(calls, scenario.expectedCalls);
   }
+});
+
+test("hide-on-close helper lets a destroy-triggered second close continue without prevention", async () => {
+  const calls: string[] = [];
+  let closeHandler: ((event: { preventDefault: () => void }) => Promise<void> | void) | null = null;
+
+  await withHideOnCloseRequestRuntime({
+    __calls__: calls,
+    label: "control-panel",
+    onCloseRequested(handler) {
+      closeHandler = handler;
+      return "unlisten";
+    },
+    async destroy() {
+      calls.push("destroy");
+      await closeHandler?.({
+        preventDefault() {
+          calls.push("preventDefault:second-close");
+        },
+      });
+    },
+    async hide() {
+      calls.push("hide");
+    },
+  }, async ({ installHideOnCloseRequest }) => {
+    installHideOnCloseRequest();
+    await closeHandler?.({
+      preventDefault() {
+        calls.push("preventDefault:first-close");
+      },
+    });
+  });
+
+  assert.deepEqual(calls, ["preventDefault:first-close", "destroy"]);
+});
+
+test("hide-on-close helper still prevents repeated close requests for hide-on-close windows", async () => {
+  const calls: string[] = [];
+  let closeHandler: ((event: { preventDefault: () => void }) => Promise<void> | void) | null = null;
+
+  await withHideOnCloseRequestRuntime({
+    __calls__: calls,
+    label: "dashboard",
+    onCloseRequested(handler) {
+      closeHandler = handler;
+      return "unlisten";
+    },
+    async hide() {
+      calls.push("hide");
+      await closeHandler?.({
+        preventDefault() {
+          calls.push("preventDefault:second-close");
+        },
+      });
+    },
+  }, async ({ installHideOnCloseRequest }) => {
+    installHideOnCloseRequest();
+    await closeHandler?.({
+      preventDefault() {
+        calls.push("preventDefault:first-close");
+      },
+    });
+  });
+
+  assert.deepEqual(calls, ["preventDefault:first-close", "requestShellBallDashboardCloseTransition", "hide", "preventDefault:second-close"]);
 });
 
 test("dashboard and control-panel entrypoints install hide-on-close handling", () => {

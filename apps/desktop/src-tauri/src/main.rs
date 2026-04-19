@@ -15,7 +15,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use tauri::ipc::Channel;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg(windows)]
 use once_cell::sync::Lazy;
@@ -363,6 +363,34 @@ fn focus_webview_window(app: &tauri::AppHandle, label: &str) -> Result<(), Strin
     Ok(())
 }
 
+fn open_or_focus_control_panel_window(app: &tauri::AppHandle) {
+    if app.get_webview_window(CONTROL_PANEL_WINDOW_LABEL).is_some() {
+        if let Err(error) = focus_webview_window(app, CONTROL_PANEL_WINDOW_LABEL) {
+            eprintln!("failed to focus control panel from tray: {error}");
+        }
+        return;
+    }
+
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let create_result = WebviewWindowBuilder::new(
+            &handle,
+            CONTROL_PANEL_WINDOW_LABEL,
+            WebviewUrl::App("control-panel.html".into()),
+        )
+        .title("CialloClaw Control Panel")
+        .inner_size(1080.0, 760.0)
+        .decorations(false)
+        .visible(true)
+        .focused(true)
+        .build();
+
+        if let Err(error) = create_result {
+            eprintln!("failed to create control panel from tray: {error}");
+        }
+    });
+}
+
 fn request_shell_ball_dashboard_open_transition(app: &tauri::AppHandle) -> Result<(), String> {
     app.emit_to(
         SHELL_BALL_WINDOW_LABEL,
@@ -643,9 +671,7 @@ fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
                 }
             }
             TRAY_MENU_OPEN_CONTROL_PANEL_ID => {
-                if let Err(error) = focus_webview_window(app, CONTROL_PANEL_WINDOW_LABEL) {
-                    eprintln!("failed to open control panel from tray: {error}");
-                }
+                open_or_focus_control_panel_window(app);
             }
             TRAY_MENU_QUIT_ID => {
                 app.exit(0);
