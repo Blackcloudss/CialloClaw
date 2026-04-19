@@ -532,6 +532,14 @@ func mutateRuntimeTask(t *testing.T, engine *runengine.Engine, taskID string, mu
 	mutate(record)
 }
 
+func replaceRuntimeClock(t *testing.T, engine *runengine.Engine, clock func() time.Time) {
+	t.Helper()
+
+	engineValue := reflect.ValueOf(engine).Elem()
+	field := engineValue.FieldByName("now")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(clock))
+}
+
 func replaceTaskRunStore(t *testing.T, service *storage.Service, store storage.TaskRunStore) {
 	t.Helper()
 
@@ -3848,6 +3856,17 @@ func TestServiceSecurityRespondAllowOnceReturnsStructuredRecoveryFailure(t *test
 // TestServiceTaskListSupportsSortParams verifies task list sorting parameters.
 func TestServiceTaskListSupportsSortParams(t *testing.T) {
 	service := newTestService()
+	baseTime := time.Date(2026, 4, 19, 9, 0, 0, 0, time.UTC)
+	times := []time.Time{baseTime, baseTime.Add(10 * time.Millisecond)}
+	index := 0
+	replaceRuntimeClock(t, service.runEngine, func() time.Time {
+		if index >= len(times) {
+			return times[len(times)-1]
+		}
+		current := times[index]
+		index++
+		return current
+	})
 
 	firstResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_demo",
@@ -3867,7 +3886,6 @@ func TestServiceTaskListSupportsSortParams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start first task failed: %v", err)
 	}
-	time.Sleep(5 * time.Millisecond)
 
 	secondResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_demo",
