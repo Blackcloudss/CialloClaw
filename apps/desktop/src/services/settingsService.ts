@@ -81,11 +81,25 @@ function createDefaultSettings(): DesktopSettings {
         provider: "openai",
         budget_auto_downgrade: true,
         provider_api_key_configured: false,
+        stronghold: {
+          backend: "stronghold_sqlite_fallback",
+          available: true,
+          fallback: true,
+          initialized: true,
+          formal_store: false,
+        },
       },
       models: {
         provider: "openai",
         budget_auto_downgrade: true,
         provider_api_key_configured: false,
+        stronghold: {
+          backend: "stronghold_sqlite_fallback",
+          available: true,
+          fallback: true,
+          initialized: true,
+          formal_store: false,
+        },
         base_url: "https://api.openai.com/v1",
         model: "gpt-3.5-turbo",
       },
@@ -117,6 +131,7 @@ function normalizeSettingsSnapshot(
       storedDataLog?.provider_api_key_configured ??
       storedModels?.provider_api_key_configured ??
       defaults.settings.data_log.provider_api_key_configured,
+    stronghold: storedDataLog?.stronghold ?? storedModels?.stronghold ?? defaults.settings.data_log.stronghold,
   };
   const normalizedModels: DesktopModelSettings = {
     ...defaults.settings.models,
@@ -126,6 +141,7 @@ function normalizeSettingsSnapshot(
     provider: normalizedDataLog.provider,
     budget_auto_downgrade: normalizedDataLog.budget_auto_downgrade,
     provider_api_key_configured: normalizedDataLog.provider_api_key_configured,
+    stronghold: normalizedDataLog.stronghold,
   };
 
   return {

@@ -794,6 +794,39 @@
   gap: 0.75rem;
 }
 
+.task-detail-runtime-filters {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 0.9rem;
+}
+
+.task-detail-runtime-filters__field {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.task-detail-runtime-filters__field span {
+  color: rgba(95, 84, 75, 0.62);
+  font-size: 0.76rem;
+}
+
+.task-detail-runtime-filters__input {
+  background: rgba(255, 252, 247, 0.82);
+  border: 1px solid color-mix(in srgb, var(--task-line, rgba(156, 133, 113, 0.18)) 76%, var(--task-accent, #9fb7d8) 24%);
+  border-radius: 0.92rem;
+  color: var(--task-ink, #5f544b);
+  font: inherit;
+  min-height: 2.65rem;
+  padding: 0.65rem 0.8rem;
+}
+
+.task-detail-runtime-filters__actions {
+  align-items: end;
+  display: flex;
+  gap: 0.65rem;
+}
+
 .task-detail-runtime-item {
   background: rgba(255, 252, 247, 0.82);
   border: 1px solid color-mix(in srgb, var(--task-line, rgba(156, 133, 113, 0.18)) 76%, var(--task-accent, #9fb7d8) 24%);
@@ -951,7 +984,8 @@
 
   .task-detail-context-grid,
   .task-detail-current-grid,
-  .task-detail-shell__meta-grid {
+  .task-detail-shell__meta-grid,
+  .task-detail-runtime-filters {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -982,7 +1016,8 @@
 
   .task-detail-context-grid,
   .task-detail-current-grid,
-  .task-detail-shell__meta-grid {
+  .task-detail-shell__meta-grid,
+  .task-detail-runtime-filters {
     grid-template-columns: 1fr;
   }
 
