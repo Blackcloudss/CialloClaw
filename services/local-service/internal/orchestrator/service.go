@@ -2601,7 +2601,13 @@ func (s *Service) deleteModelSecret(provider string) error {
 
 func strongholdStatusFromStorage(store *storage.Service) map[string]any {
 	if store == nil || store.Stronghold() == nil {
-		return nil
+		return map[string]any{
+			"backend":      "none",
+			"available":    false,
+			"fallback":     false,
+			"initialized":  false,
+			"formal_store": false,
+		}
 	}
 	descriptor := store.Stronghold().Descriptor()
 	return map[string]any{
