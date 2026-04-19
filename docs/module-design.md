@@ -75,7 +75,7 @@
 
 在 owner-5 的当前后端实现中，`budget_auto_downgrade` 已进入 Harness 主链路：编排层在执行前依据 token/cost、provider 可用性和 failure signal window 评估预算策略，执行层在模型或 provider 失败后转入 lightweight delivery fallback，并对高成本工具类别执行阻断；命中结果统一回流到 audit / event / trace 链路，而不只是停留在设置项展示。
 
-插件运行态当前也已进入 Harness 主链路可见层：plugin service 不再只返回静态 worker/sidecar 名称，而是维护 `PluginRuntimeState / PluginMetricSnapshot` 最小后端读模型；bootstrap 在 sidecar/worker 启动、失败、停止时回写运行态缓存，orchestrator 通过 `agent.plugin.runtime.list` 提供查询出口，并把摘要回流到 dashboard module 读侧，便于后续仪表盘接入。
+插件运行态当前也已进入 Harness 主链路可见层：plugin service 不再只返回静态 worker/sidecar 名称，而是维护 `PluginRuntimeState / PluginMetricSnapshot` 最小后端读模型；bootstrap 在 sidecar/worker 启动、失败、停止时回写运行态缓存，orchestrator 通过 `agent.plugin.runtime.list` 提供查询出口，并把摘要回流到 dashboard module 读侧，便于后续仪表盘接入。任务详情的 runtime 观察链也已继续收口为正式查询：`agent.task.events.list` 当前支持按 `run_id / type / created_at_from / created_at_to` 过滤兼容事件流，前端不再需要自行猜测时间窗口或执行分段。
 
 5. **平台层必须抽象，不得反向污染业务层**  
    文件、路径、通知、快捷键、执行后端等能力必须经抽象层暴露，业务层不能依赖具体平台实现名和平台路径。
