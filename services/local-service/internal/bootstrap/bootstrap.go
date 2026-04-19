@@ -39,6 +39,10 @@ type App struct {
 	media        *sidecarclient.MediaWorkerRuntime
 }
 
+type runtimeStarter interface {
+	Start() error
+}
+
 // New 创建并返回当前能力。
 func New(cfg config.Config) (*App, error) {
 	pathPolicy, err := platform.NewLocalPathPolicy(cfg.WorkspaceRoot)
@@ -54,31 +58,19 @@ func New(cfg config.Config) (*App, error) {
 	osCapability := platform.NewLocalOSCapabilityAdapter()
 	pluginService := plugin.NewService()
 	playwrightRuntime, err := sidecarclient.NewPlaywrightSidecarRuntime(pluginService, osCapability)
-	if err != nil {
-		playwrightRuntime = sidecarclient.NewUnavailablePlaywrightSidecarRuntime(pluginService, osCapability)
-	} else {
-		if err := playwrightRuntime.Start(); err != nil {
-			playwrightRuntime = sidecarclient.NewUnavailablePlaywrightSidecarRuntime(pluginService, osCapability)
-		}
-	}
+	playwrightRuntime = chooseRuntimeOnStart(playwrightRuntime, err, func() *sidecarclient.PlaywrightSidecarRuntime {
+		return sidecarclient.NewUnavailablePlaywrightSidecarRuntime(pluginService, osCapability)
+	})
 	playwrightClient := playwrightRuntime.Client()
 	ocrRuntime, err := sidecarclient.NewOCRWorkerRuntime(pluginService, osCapability)
-	if err != nil {
-		ocrRuntime = sidecarclient.NewUnavailableOCRWorkerRuntime(pluginService, osCapability)
-	} else {
-		if err := ocrRuntime.Start(); err != nil {
-			ocrRuntime = sidecarclient.NewUnavailableOCRWorkerRuntime(pluginService, osCapability)
-		}
-	}
+	ocrRuntime = chooseRuntimeOnStart(ocrRuntime, err, func() *sidecarclient.OCRWorkerRuntime {
+		return sidecarclient.NewUnavailableOCRWorkerRuntime(pluginService, osCapability)
+	})
 	ocrClient := ocrRuntime.Client()
 	mediaRuntime, err := sidecarclient.NewMediaWorkerRuntime(pluginService, osCapability)
-	if err != nil {
-		mediaRuntime = sidecarclient.NewUnavailableMediaWorkerRuntime(pluginService, osCapability)
-	} else {
-		if err := mediaRuntime.Start(); err != nil {
-			mediaRuntime = sidecarclient.NewUnavailableMediaWorkerRuntime(pluginService, osCapability)
-		}
-	}
+	mediaRuntime = chooseRuntimeOnStart(mediaRuntime, err, func() *sidecarclient.MediaWorkerRuntime {
+		return sidecarclient.NewUnavailableMediaWorkerRuntime(pluginService, osCapability)
+	})
 	mediaClient := mediaRuntime.Client()
 	screenClient := sidecarclient.NewLocalScreenCaptureClient(fileSystem)
 	toolRegistry := tools.NewRegistry()
@@ -171,4 +163,17 @@ func (a *App) Close() error {
 	}
 
 	return a.storage.Close()
+}
+
+// chooseRuntimeOnStart keeps a runtime instance after Start fails so the shared
+// plugin runtime cache preserves the concrete failure state instead of being
+// overwritten by a generic unavailable placeholder.
+func chooseRuntimeOnStart[T runtimeStarter](runtime T, buildErr error, unavailable func() T) T {
+	if buildErr != nil {
+		return unavailable()
+	}
+	if err := runtime.Start(); err != nil {
+		return runtime
+	}
+	return runtime
 }
