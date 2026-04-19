@@ -1379,6 +1379,7 @@ func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request,
 	}
 	if boolValue(toolResult.RawOutput, "fallback") && boolValue(request.BudgetDowngrade, "applied") {
 		auditRecord := mapValue(toolResult.RawOutput, "audit_record")
+		failureReason := stringValue(toolResult.RawOutput, "fallback_reason", model.ErrClientNotConfigured.Error())
 		return generationTrace{
 			OutputText: budgetDowngradeFallbackText(request, inputText),
 			ToolCalls:  []tools.ToolCallRecord{toolResult.ToolCall},
@@ -1391,7 +1392,7 @@ func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request,
 			},
 			AuditRecord:      cloneMap(auditRecord),
 			GenerationOutput: cloneMap(toolResult.RawOutput),
-			BudgetFailure:    budgetFailureSignal(request, model.ErrClientNotConfigured),
+			BudgetFailure:    budgetFailureSignal(request, errors.New(failureReason)),
 		}, nil
 	}
 
@@ -1420,9 +1421,6 @@ func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request,
 // The loop stops when the model returns a final answer or when the turn budget
 // is exhausted, in which case the normal fallback output is returned.
 func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Request, inputText string) (generationTrace, bool, error) {
-	if budgetDowngradeDisablesToolCalls(request) {
-		return generationTrace{}, false, nil
-	}
 	if !isAgentLoopIntent(request.Intent) || s.model == nil || !s.model.SupportsToolCalling() || s.loop == nil {
 		return generationTrace{}, false, nil
 	}
@@ -1441,7 +1439,9 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		ResultTitle:     request.ResultTitle,
 		FallbackOutput:  fallbackOutput(request, inputText),
 		ToolDefinitions: s.agentLoopToolDefinitions(),
-		AllowedTool:     s.isAllowedAgentLoopTool,
+		AllowedTool: func(name string) bool {
+			return s.isAllowedAgentLoopTool(name) && !budgetDowngradeDisallowsDirectTool(request, name)
+		},
 		PollSteering: func(_ context.Context, taskID string) []string {
 			if s.steeringPoller == nil {
 				return nil
@@ -1551,7 +1551,17 @@ func invocationRecordMap(record *model.InvocationRecord) map[string]any {
 }
 
 func budgetDowngradeDisablesToolCalls(request Request) bool {
-	return boolValue(request.BudgetDowngrade, "applied") && containsExecutionString(stringSliceValue(request.BudgetDowngrade, "degrade_actions"), "skip_expensive_tools")
+	return boolValue(request.BudgetDowngrade, "applied") && containsExecutionString(stringSliceValue(request.BudgetDowngrade, "degrade_actions"), "skip_expensive_tools") && budgetDowngradeBlocksAgentLoopTools(request)
+}
+
+func budgetDowngradeBlocksAgentLoopTools(request Request) bool {
+	for _, category := range budgetExpensiveToolCategories(request) {
+		switch category {
+		case "filesystem_mutation", "browser_mutation", "command", "media_heavy":
+			return true
+		}
+	}
+	return false
 }
 
 func budgetDowngradeDisallowsDirectTool(request Request, toolName string) bool {
@@ -1592,6 +1602,8 @@ func budgetToolCategory(toolName string) string {
 	switch strings.TrimSpace(toolName) {
 	case "exec_command":
 		return "command"
+	case "write_file":
+		return "filesystem_mutation"
 	case "page_interact":
 		return "browser_mutation"
 	case "transcode_media", "normalize_recording", "extract_frames":
@@ -1630,15 +1642,34 @@ func budgetFailureSignal(request Request, generationErr error) map[string]any {
 	if !boolValue(request.BudgetDowngrade, "applied") || generationErr == nil {
 		return nil
 	}
-	if !errors.Is(generationErr, model.ErrClientNotConfigured) && !errors.Is(generationErr, model.ErrToolCallingNotSupported) && !errors.Is(generationErr, model.ErrModelProviderUnsupported) && !errors.Is(generationErr, model.ErrSecretNotFound) && !errors.Is(generationErr, model.ErrSecretSourceFailed) {
+	reason := strings.TrimSpace(generationErr.Error())
+	if !errors.Is(generationErr, model.ErrClientNotConfigured) && !errors.Is(generationErr, model.ErrToolCallingNotSupported) && !errors.Is(generationErr, model.ErrModelProviderUnsupported) && !errors.Is(generationErr, model.ErrSecretNotFound) && !errors.Is(generationErr, model.ErrSecretSourceFailed) && !isBudgetFailureReason(reason) {
 		return nil
 	}
 	return map[string]any{
 		"category": "budget_auto_downgrade",
 		"action":   "budget_auto_downgrade.failure_signal",
 		"result":   "failed",
-		"reason":   generationErr.Error(),
+		"reason":   normalizeBudgetFailureReason(reason),
 	}
+}
+
+func isBudgetFailureReason(reason string) bool {
+	trimmed := strings.TrimSpace(reason)
+	switch trimmed {
+	case model.ErrClientNotConfigured.Error(), model.ErrToolCallingNotSupported.Error(), model.ErrModelProviderUnsupported.Error(), model.ErrSecretNotFound.Error(), model.ErrSecretSourceFailed.Error():
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeBudgetFailureReason(reason string) string {
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
+		return "execution fallback"
+	}
+	return trimmed
 }
 
 func budgetDowngradeFallbackText(request Request, inputText string) string {

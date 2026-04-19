@@ -572,53 +572,55 @@ func TestExecuteBudgetDowngradeFallsBackWhenModelClientUnavailable(t *testing.T)
 	if len(result.ToolCalls) != 1 || result.ToolCalls[0].ToolName != "generate_text" {
 		t.Fatalf("expected fallback execution to preserve generate_text tool call, got %+v", result.ToolCalls)
 	}
-	if result.ToolOutput["token_usage"] == nil {
-		t.Fatalf("expected fallback execution to preserve token usage trace, got %+v", result.ToolOutput)
+	if result.ToolCalls[0].Output["token_usage"] == nil {
+		t.Fatalf("expected fallback execution to preserve token usage trace in tool call output, got %+v", result.ToolCalls[0].Output)
 	}
 	if result.BudgetFailure == nil || result.BudgetFailure["action"] != "budget_auto_downgrade.failure_signal" {
 		t.Fatalf("expected fallback execution to expose budget failure signal, got %+v", result.BudgetFailure)
 	}
 }
 
-func TestExecuteBudgetDowngradeSkipsToolCallingAgentLoop(t *testing.T) {
+func TestExecuteBudgetDowngradeAllowsReadOnlyAgentLoopTools(t *testing.T) {
 	modelClient := &stubModelClient{
 		toolCalls: []model.ToolCallResult{{
-			RequestID: "req_loop_should_not_run",
+			RequestID: "req_loop_readonly_allowed",
 			Provider:  "openai_responses",
 			ModelID:   "gpt-5.4",
 			ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "."}}},
+		}, {
+			RequestID:  "req_loop_readonly_answer",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "Read-only loop completed without downgrade fallback.",
 		}},
 	}
 	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
 	result, err := service.Execute(context.Background(), Request{
-		TaskID:       "task_budget_skip_tools",
-		RunID:        "run_budget_skip_tools",
-		Title:        "Budget skip tools",
+		TaskID:       "task_budget_allow_readonly_loop",
+		RunID:        "run_budget_allow_readonly_loop",
+		Title:        "Budget allow readonly loop",
 		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
 		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Inspect the workspace and answer."},
 		DeliveryType: "bubble",
-		ResultTitle:  "Budget skip tools result",
+		ResultTitle:  "Budget readonly loop result",
 		BudgetDowngrade: map[string]any{
 			"applied":         true,
-			"trigger_reason":  "provider_unavailable",
+			"trigger_reason":  "failure_pressure",
 			"degrade_actions": []string{"skip_expensive_tools", "lightweight_delivery"},
 			"summary":         "Budget downgrade fallback applied.",
+			"trace": map[string]any{
+				"expensive_tool_categories": []string{"command", "browser_mutation", "media_heavy"},
+			},
 		},
 	})
 	if err != nil {
 		t.Fatalf("execute returned error: %v", err)
 	}
-	if modelClient.generateToolCallsCount != 0 {
-		t.Fatalf("expected tool-calling planner to be skipped, got %d calls", modelClient.generateToolCallsCount)
+	if modelClient.generateToolCallsCount == 0 {
+		t.Fatalf("expected read-only agent loop tools to remain available under downgrade")
 	}
-	if result.DeliveryResult["type"] != "bubble" {
-		t.Fatalf("expected skip-tools downgrade to keep bubble delivery, got %+v", result.DeliveryResult)
-	}
-	if !strings.Contains(result.Content, "Budget downgrade fallback applied.") {
-		t.Fatalf("expected skip-tools downgrade to use budget fallback output, got %q", result.Content)
-	}
-	if result.ModelInvocation["provider"] != "budget_downgrade_fallback" {
-		t.Fatalf("expected skip-tools downgrade to record fallback invocation, got %+v", result.ModelInvocation)
+	if result.ModelInvocation["provider"] == "budget_downgrade_fallback" {
+		t.Fatalf("expected read-only loop to avoid hard fallback when cheap tools are allowed, got %+v", result.ModelInvocation)
 	}
 }
 
@@ -679,6 +681,31 @@ func TestExecuteBudgetDowngradeFallbackCarriesStructuredTrace(t *testing.T) {
 	}
 	if result.ModelInvocation["reason"] != "failure_pressure" {
 		t.Fatalf("expected fallback invocation reason to remain structured, got %+v", result.ModelInvocation)
+	}
+}
+
+func TestExecuteBudgetDowngradePreservesFallbackReason(t *testing.T) {
+	service, _ := newTestExecutionServiceWithModelClient(t, nil)
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_budget_fallback_reason",
+		RunID:        "run_budget_fallback_reason",
+		Title:        "Budget fallback reason",
+		Intent:       map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please summarize this content."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Budget fallback reason result",
+		BudgetDowngrade: map[string]any{
+			"applied":         true,
+			"trigger_reason":  "provider_unavailable",
+			"degrade_actions": []string{"lightweight_delivery"},
+			"summary":         "Budget downgrade fallback applied.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute returned error: %v", err)
+	}
+	if result.BudgetFailure == nil || result.BudgetFailure["reason"] != model.ErrClientNotConfigured.Error() {
+		t.Fatalf("expected budget failure reason to preserve actual fallback reason, got %+v", result.BudgetFailure)
 	}
 }
 

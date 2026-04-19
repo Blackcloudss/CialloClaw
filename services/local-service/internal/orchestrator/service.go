@@ -5427,6 +5427,16 @@ func (s *Service) recordBudgetDowngradeEvent(task runengine.TaskRecord, decision
 	if !decision.Applied {
 		return task
 	}
+	s.publishRuntimeNotification(task.TaskID, "budget.downgrade.applied", map[string]any{
+		"task_id":          task.TaskID,
+		"run_id":           task.RunID,
+		"trigger_reason":   decision.TriggerReason,
+		"trigger_stage":    decision.TriggerStage,
+		"degrade_actions":  append([]string(nil), decision.DegradeActions...),
+		"summary":          decision.Summary,
+		"trace":            cloneMap(decision.Trace),
+		"budget_auto_down": true,
+	})
 	updatedTask, ok := s.runEngine.EmitRuntimeNotification(task.TaskID, "budget.downgrade.applied", map[string]any{
 		"task_id":          task.TaskID,
 		"run_id":           task.RunID,
