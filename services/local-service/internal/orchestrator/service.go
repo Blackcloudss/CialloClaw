@@ -946,7 +946,9 @@ func normalizeEventTimeFilter(value string) (string, error) {
 	if parsed.IsZero() {
 		return "", fmt.Errorf("invalid time %q", trimmed)
 	}
-	return parsed.UTC().Format(time.RFC3339Nano), nil
+	// Loop runtime events persist UTC RFC3339 timestamps, so keeping filters in
+	// the same lexical format preserves the task_id/created_at index usage.
+	return parsed.UTC().Format(time.RFC3339), nil
 }
 
 func parseEventTimeFilter(value string) time.Time {

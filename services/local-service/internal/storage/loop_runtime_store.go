@@ -234,11 +234,11 @@ func (s *SQLiteLoopRuntimeStore) ListEvents(ctx context.Context, taskID, runID, 
 		filterArgs = append(filterArgs, eventType)
 	}
 	if strings.TrimSpace(createdAtFrom) != "" {
-		filters = append(filters, `datetime(created_at) >= datetime(?)`)
+		filters = append(filters, `created_at >= ?`)
 		filterArgs = append(filterArgs, createdAtFrom)
 	}
 	if strings.TrimSpace(createdAtTo) != "" {
-		filters = append(filters, `datetime(created_at) <= datetime(?)`)
+		filters = append(filters, `created_at <= ?`)
 		filterArgs = append(filterArgs, createdAtTo)
 	}
 	countQuery := `SELECT COUNT(1) FROM events`

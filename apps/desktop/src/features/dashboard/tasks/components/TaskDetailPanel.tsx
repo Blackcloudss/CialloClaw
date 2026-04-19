@@ -12,6 +12,7 @@ import { TaskActionBar } from "./TaskActionBar";
 import { TaskContextBlock } from "./TaskContextBlock";
 import { TaskProgressTimeline } from "./TaskProgressTimeline";
 import type { TaskEventFilters, TaskEventTimeRange } from "../taskPage.types";
+import { DEFAULT_TASK_EVENT_FILTERS } from "../taskPage.service";
 
 type TaskDetailPanelProps = {
   artifactActionPendingId: string | null;
@@ -116,6 +117,7 @@ export function TaskDetailPanel({
   }
 
   function handleResetEventFilters() {
+    setEventFilterDraft(DEFAULT_TASK_EVENT_FILTERS);
     onResetEventFilters();
   }
 

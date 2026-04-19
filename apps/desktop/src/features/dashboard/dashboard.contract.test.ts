@@ -1909,6 +1909,7 @@ test("TaskDetailPanel exposes formal runtime event filters and applies them expl
   assert.match(panelSource, /Run ID/);
   assert.match(panelSource, /最近 24 小时/);
   assert.match(panelSource, /应用筛选/);
+  assert.match(panelSource, /setEventFilterDraft\(DEFAULT_TASK_EVENT_FILTERS\)/);
   assert.match(panelSource, /typing does not trigger[\s\S]*RPC refetch per keystroke/);
 });
 
