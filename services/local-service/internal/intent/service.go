@@ -70,6 +70,9 @@ func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitInten
 	if !intentConfirmed {
 		requiresConfirm = true
 	}
+	if intentName == "screen_analyze" {
+		requiresConfirm = false
+	}
 	if !requiresConfirm && len(explicitIntent) == 0 {
 		requiresConfirm = requiresConfirmation(snapshot, intentName)
 	}
@@ -95,6 +98,9 @@ func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitInten
 // free-form requests into summarize / translate / explain via keyword matching.
 // Instead, non-trivial inputs fall back to the generic agent loop path.
 func (s *Service) defaultIntent(snapshot contextsvc.TaskContextSnapshot) map[string]any {
+	if screenIntent, ok := screenAnalyzeIntent(snapshot); ok {
+		return screenIntent
+	}
 	if shouldConfirmTextGoal(snapshot) {
 		return map[string]any{}
 	}
@@ -111,6 +117,8 @@ func (s *Service) buildTaskTitle(snapshot contextsvc.TaskContextSnapshot, intent
 		return "确认处理方式：" + subject
 	case defaultAgentLoopIntent:
 		return "处理：" + subject
+	case "screen_analyze":
+		return "查看屏幕：" + screenSubjectText(snapshot)
 	case "rewrite":
 		return "改写：" + subject
 	case "translate":
@@ -138,6 +146,8 @@ func (s *Service) buildResultTitle(intentName string) string {
 		return "待确认处理方式"
 	case defaultAgentLoopIntent:
 		return "处理结果"
+	case "screen_analyze":
+		return "屏幕分析结果"
 	case "rewrite":
 		return "改写结果"
 	case "translate":
@@ -157,6 +167,8 @@ func (s *Service) buildResultBubbleText(intentName string) string {
 		return "请先告诉我希望如何处理这段内容。"
 	case defaultAgentLoopIntent:
 		return "结果已经生成，可直接查看。"
+	case "screen_analyze":
+		return "已准备查看当前屏幕，等待授权后继续分析。"
 	case "rewrite":
 		return "内容已经按要求改写完成，可直接查看。"
 	case "translate":
@@ -245,6 +257,8 @@ func directDeliveryTypeForSnapshot(snapshot contextsvc.TaskContextSnapshot, inte
 		if len(snapshot.Files) > 0 {
 			return "workspace_document"
 		}
+	case "screen_analyze":
+		return "bubble"
 	}
 	return "bubble"
 }
@@ -282,6 +296,14 @@ func intentPayload(name string) map[string]any {
 			"name":      "explain",
 			"arguments": map[string]any{},
 		}
+	case "screen_analyze":
+		return map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"language":      "eng",
+				"evidence_role": "error_evidence",
+			},
+		}
 	default:
 		return map[string]any{
 			"name": "summarize",
@@ -304,9 +326,81 @@ func subjectText(snapshot contextsvc.TaskContextSnapshot) string {
 		return truncateText(snapshot.ErrorText, 18)
 	case strings.TrimSpace(snapshot.PageTitle) != "":
 		return truncateText(snapshot.PageTitle, 18)
+	case strings.TrimSpace(snapshot.WindowTitle) != "":
+		return truncateText(snapshot.WindowTitle, 18)
 	default:
 		return "当前内容"
 	}
+}
+
+func screenSubjectText(snapshot contextsvc.TaskContextSnapshot) string {
+	switch {
+	case strings.TrimSpace(snapshot.PageTitle) != "":
+		return truncateText(snapshot.PageTitle, 18)
+	case strings.TrimSpace(snapshot.WindowTitle) != "":
+		return truncateText(snapshot.WindowTitle, 18)
+	default:
+		return subjectText(snapshot)
+	}
+}
+
+func screenAnalyzeIntent(snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+	if !shouldUseScreenAnalyze(snapshot) {
+		return nil, false
+	}
+	intent := intentPayload("screen_analyze")
+	arguments := map[string]any{
+		"language":      "eng",
+		"evidence_role": screenEvidenceRole(snapshot),
+	}
+	if strings.TrimSpace(snapshot.PageTitle) != "" {
+		arguments["page_title"] = snapshot.PageTitle
+	}
+	if strings.TrimSpace(snapshot.WindowTitle) != "" {
+		arguments["window_title"] = snapshot.WindowTitle
+	}
+	if strings.TrimSpace(snapshot.VisibleText) != "" {
+		arguments["visible_text"] = snapshot.VisibleText
+	}
+	if strings.TrimSpace(snapshot.ScreenSummary) != "" {
+		arguments["screen_summary"] = snapshot.ScreenSummary
+	}
+	intent["arguments"] = arguments
+	return intent, true
+}
+
+func shouldUseScreenAnalyze(snapshot contextsvc.TaskContextSnapshot) bool {
+	if snapshot.InputType != "text" {
+		return false
+	}
+	text := strings.TrimSpace(strings.ToLower(snapshot.Text))
+	if text == "" {
+		return false
+	}
+	hasVisualTarget := strings.TrimSpace(snapshot.PageTitle) != "" || strings.TrimSpace(snapshot.WindowTitle) != "" || strings.TrimSpace(snapshot.VisibleText) != "" || strings.TrimSpace(snapshot.ScreenSummary) != ""
+	if !hasVisualTarget {
+		return false
+	}
+	visualIntentMarkers := []string{"screen", "page", "window", "ui", "screenshot", "页面", "屏幕", "界面", "窗口", "报错", "错误"}
+	analysisMarkers := []string{"look", "see", "check", "analyze", "inspect", "review", "看看", "查看", "分析", "检查", "识别", "定位", "解释"}
+	return containsAny(text, visualIntentMarkers...) && containsAny(text, analysisMarkers...)
+}
+
+func screenEvidenceRole(snapshot contextsvc.TaskContextSnapshot) string {
+	combined := strings.ToLower(strings.Join([]string{snapshot.Text, snapshot.ErrorText, snapshot.VisibleText, snapshot.ScreenSummary}, " "))
+	if containsAny(combined, "error", "warning", "exception", "报错", "错误", "异常", "warning") {
+		return "error_evidence"
+	}
+	return "page_context"
+}
+
+func containsAny(text string, markers ...string) bool {
+	for _, marker := range markers {
+		if marker != "" && strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func isQuestionText(text string) bool {

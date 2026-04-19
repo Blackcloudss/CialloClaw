@@ -24,6 +24,8 @@ import type {
   SecurityStatus,
   Session,
   SettingsSnapshot,
+  PluginMetricSnapshot,
+  PluginRuntimeState,
   Task,
   TaskControlAction,
   TaskListGroup,
@@ -68,6 +70,7 @@ export const RPC_METHODS_STABLE = {
   AGENT_DELIVERY_OPEN: "agent.delivery.open",
   AGENT_SETTINGS_GET: "agent.settings.get",
   AGENT_SETTINGS_UPDATE: "agent.settings.update",
+  AGENT_PLUGIN_RUNTIME_LIST: "agent.plugin.runtime.list",
 } as const;
 
 // RPC_METHODS_PLANNED reserves method names that are still documented as
@@ -120,20 +123,68 @@ export interface JsonRpcPage {
   has_more: boolean;
 }
 
-// PageContext 定义当前模块的接口约束。
+// PageContext defines the stable page-level metadata that task entrypoints can
+// carry into backend context capture.
 export interface PageContext {
-  title: string;
-  app_name: string;
-  url: string;
+  title?: string;
+  app_name?: string;
+  url?: string;
+  window_title?: string;
+  visible_text?: string;
+  hover_target?: string;
 }
 
-// InputContext 定义当前模块的接口约束。
+// ScreenContext defines the stable screen-derived signals that can help infer
+// controlled visual tasks without introducing a parallel RPC entrypoint.
+export interface ScreenContext {
+  summary?: string;
+  screen_summary?: string;
+  visible_text?: string;
+  window_title?: string;
+  hover_target?: string;
+}
+
+// BehaviorContext defines lightweight interaction signals that stay attached to
+// formal task entry requests.
+export interface BehaviorContext {
+  last_action?: string;
+  dwell_millis?: number;
+  copy_count?: number;
+  window_switch_count?: number;
+  page_switch_count?: number;
+}
+
+export interface ErrorContext {
+  message?: string;
+}
+
+export interface ClipboardContext {
+  text?: string;
+}
+
+// InputContext defines the stable request-context envelope shared by
+// `agent.input.submit` and `agent.task.start`.
 export interface InputContext {
   page?: PageContext;
+  screen?: ScreenContext;
+  behavior?: BehaviorContext;
   selection?: {
     text: string;
   };
+  error?: ErrorContext;
+  clipboard?: ClipboardContext;
+  text?: string;
+  selection_text?: string;
   files?: string[];
+  file_paths?: string[];
+  screen_summary?: string;
+  clipboard_text?: string;
+  hover_target?: string;
+  last_action?: string;
+  dwell_millis?: number;
+  copy_count?: number;
+  window_switch_count?: number;
+  page_switch_count?: number;
 }
 
 // VoiceMeta 定义当前模块的接口约束。
@@ -318,6 +369,8 @@ export interface AgentTaskEventsListParams {
   task_id: string;
   run_id?: string;
   type?: string;
+  created_at_from?: string;
+  created_at_to?: string;
   limit?: number;
   offset?: number;
 }
@@ -696,6 +749,27 @@ export interface AgentSettingsUpdateResult {
   effective_settings: Partial<SettingsSnapshot["settings"]>;
   apply_mode: ApplyMode;
   need_restart: boolean;
+}
+
+// AgentPluginRuntimeListParams defines the stable plugin runtime query params.
+export interface AgentPluginRuntimeListParams {
+  request_meta?: RequestMeta;
+}
+
+// PluginRuntimeEvent mirrors the backend runtime event query payload.
+export interface PluginRuntimeEvent {
+  name: string;
+  kind: PluginRuntimeState["kind"];
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+// AgentPluginRuntimeListResult defines the plugin runtime query result.
+export interface AgentPluginRuntimeListResult {
+  items: PluginRuntimeState[];
+  metrics: PluginMetricSnapshot[];
+  events: PluginRuntimeEvent[];
 }
 
 // TaskUpdatedNotification 定义当前模块的接口约束。

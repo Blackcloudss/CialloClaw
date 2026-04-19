@@ -175,6 +175,67 @@ type EvalStore interface {
 	ListEvalSnapshots(ctx context.Context, taskID string, limit, offset int) ([]EvalSnapshotRecord, int, error)
 }
 
+// SkillManifestRecord reserves the formal skill_manifests table without turning
+// on any marketplace or installation flow ahead of the current roadmap.
+type SkillManifestRecord struct {
+	SkillManifestID string
+	Name            string
+	Version         string
+	Source          string
+	Summary         string
+	ManifestJSON    string
+	CreatedAt       string
+	UpdatedAt       string
+}
+
+// BlueprintDefinitionRecord reserves the formal blueprint_definitions table for
+// future execution assets without expanding blueprint product behavior yet.
+type BlueprintDefinitionRecord struct {
+	BlueprintDefinitionID string
+	Name                  string
+	Version               string
+	Source                string
+	Summary               string
+	DefinitionJSON        string
+	CreatedAt             string
+	UpdatedAt             string
+}
+
+// PromptTemplateVersionRecord reserves the formal prompt_template_versions
+// table so future prompt assets can attach to traceable versioned records.
+type PromptTemplateVersionRecord struct {
+	PromptTemplateVersionID string
+	TemplateName            string
+	Version                 string
+	Source                  string
+	Summary                 string
+	TemplateBody            string
+	VariablesJSON           string
+	CreatedAt               string
+	UpdatedAt               string
+}
+
+// SkillManifestStore persists versioned skill manifest assets.
+type SkillManifestStore interface {
+	WriteSkillManifest(ctx context.Context, record SkillManifestRecord) error
+	GetSkillManifest(ctx context.Context, skillManifestID string) (SkillManifestRecord, error)
+	ListSkillManifests(ctx context.Context, limit, offset int) ([]SkillManifestRecord, int, error)
+}
+
+// BlueprintDefinitionStore persists versioned blueprint definition assets.
+type BlueprintDefinitionStore interface {
+	WriteBlueprintDefinition(ctx context.Context, record BlueprintDefinitionRecord) error
+	GetBlueprintDefinition(ctx context.Context, blueprintDefinitionID string) (BlueprintDefinitionRecord, error)
+	ListBlueprintDefinitions(ctx context.Context, limit, offset int) ([]BlueprintDefinitionRecord, int, error)
+}
+
+// PromptTemplateVersionStore persists versioned prompt template assets.
+type PromptTemplateVersionStore interface {
+	WritePromptTemplateVersion(ctx context.Context, record PromptTemplateVersionRecord) error
+	GetPromptTemplateVersion(ctx context.Context, promptTemplateVersionID string) (PromptTemplateVersionRecord, error)
+	ListPromptTemplateVersions(ctx context.Context, limit, offset int) ([]PromptTemplateVersionRecord, int, error)
+}
+
 // SecretRecord captures one secret value persisted outside the normal settings path.
 type SecretRecord struct {
 	Namespace string
@@ -207,7 +268,7 @@ type StrongholdDescriptor struct {
 	Initialized bool
 }
 
-// TaskStepSnapshot 描述 task timeline 在存储层的快照格式。
+// TaskStepSnapshot describes the storage snapshot for one task timeline entry.
 type TaskStepSnapshot struct {
 	StepID        string
 	TaskID        string
@@ -218,18 +279,19 @@ type TaskStepSnapshot struct {
 	OutputSummary string
 }
 
-// NotificationSnapshot 描述待发送通知在存储层的快照格式。
+// NotificationSnapshot describes one pending notification snapshot in storage.
 type NotificationSnapshot struct {
 	Method    string
 	Params    map[string]any
 	CreatedAt time.Time
 }
 
-// TaskRunRecord 描述 task/run 主状态在存储层的完整快照。
+// TaskRunRecord captures the full task/run snapshot persisted by storage.
 type TaskRunRecord struct {
 	TaskID            string
 	SessionID         string
 	RunID             string
+	ExecutionAttempt  int
 	Title             string
 	SourceType        string
 	Status            string
@@ -266,7 +328,7 @@ type TaskRunRecord struct {
 	CurrentStepStatus string
 }
 
-// TaskRunStore 定义 task/run 主状态的持久化契约。
+// TaskRunStore defines persistence for the task/run primary state snapshot.
 type TaskRunStore interface {
 	AllocateIdentifier(ctx context.Context, prefix string) (string, error)
 	DeleteTaskRun(ctx context.Context, taskID string) error
@@ -328,21 +390,21 @@ type LoopRuntimeStore interface {
 	SaveSteps(ctx context.Context, records []StepRecord) error
 	SaveEvents(ctx context.Context, records []EventRecord) error
 	SaveDeliveryResult(ctx context.Context, record DeliveryResultRecord) error
-	ListEvents(ctx context.Context, taskID, runID, eventType string, limit, offset int) ([]EventRecord, int, error)
+	ListEvents(ctx context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]EventRecord, int, error)
 }
 
-// ToolCallStore 定义 tool_call 持久化契约。
+// ToolCallStore defines persistence for tool_call records.
 type ToolCallStore interface {
 	SaveToolCall(ctx context.Context, record tools.ToolCallRecord) error
 }
 
-// AuditStore 定义 audit 记录持久化契约。
+// AuditStore defines persistence for audit records.
 type AuditStore interface {
 	WriteAuditRecord(ctx context.Context, record audit.Record) error
 	ListAuditRecords(ctx context.Context, taskID string, limit, offset int) ([]audit.Record, int, error)
 }
 
-// RecoveryPointStore 定义恢复点持久化契约。
+// RecoveryPointStore defines persistence for recovery points.
 type RecoveryPointStore interface {
 	WriteRecoveryPoint(ctx context.Context, point checkpoint.RecoveryPoint) error
 	ListRecoveryPoints(ctx context.Context, taskID string, limit, offset int) ([]checkpoint.RecoveryPoint, int, error)

@@ -99,6 +99,14 @@ export type TaskEventItem = TaskEvent & {
   payload: Record<string, unknown> | null;
 };
 
+export type TaskEventTimeRange = "all" | "1h" | "24h" | "7d";
+
+export type TaskEventFilters = {
+  runId: string;
+  eventType: string;
+  timeRange: TaskEventTimeRange;
+};
+
 export type TaskEventPageData = {
   items: TaskEventItem[];
   page: JsonRpcPage;

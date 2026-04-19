@@ -1901,6 +1901,42 @@ test("TaskDetailPanel keeps runtime sections visible for ended tasks and preserv
   assert.match(taskPageSource, /invalidateSelectedTaskDetail\(selectedTaskId\)/);
 });
 
+test("TaskDetailPanel exposes formal runtime event filters and applies them explicitly", () => {
+  const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
+
+  assert.match(panelSource, /agent\.task\.events\.list/);
+  assert.match(panelSource, /事件类型/);
+  assert.match(panelSource, /Run ID/);
+  assert.match(panelSource, /最近 24 小时/);
+  assert.match(panelSource, /应用筛选/);
+  assert.match(panelSource, /setEventFilterDraft\(DEFAULT_TASK_EVENT_FILTERS\)/);
+  assert.match(panelSource, /typing does not trigger[\s\S]*RPC refetch per keystroke/);
+});
+
+test("task runtime event queries key and service include filter dimensions and time bounds", () => {
+  const querySource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.query.ts"), "utf8");
+  const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+  const serviceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.service.ts"), "utf8");
+
+  assert.match(querySource, /buildDashboardTaskEventQueryKey/);
+  assert.match(taskPageSource, /buildDashboardTaskEventQueryKey\(dataMode, selectedTaskId \?\? "", taskEventFilters\)/);
+  assert.match(serviceSource, /created_at_from/);
+  assert.match(serviceSource, /created_at_to/);
+  assert.match(serviceSource, /timeRange: "all"/);
+});
+
+test("dashboard home consumes task module runtime summaries for focus-task visibility", () => {
+  const serviceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts"), "utf8");
+
+  assert.match(serviceSource, /focus_runtime_summary/);
+  assert.match(serviceSource, /focus_task_id/);
+  assert.match(serviceSource, /最近运行事件/);
+  assert.match(serviceSource, /待消费追加要求/);
+  assert.match(serviceSource, /waiting_auth_tasks/);
+  assert.match(serviceSource, /focusTaskId === expectedFocusTaskId/);
+  assert.match(serviceSource, /runtimeSummary\.latest_event_type === "loop\.retrying"/);
+});
+
 test("dashboard validators read enum truth sources from protocol exports", () => {
   const validatorSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardContractValidators.ts"), "utf8");
 

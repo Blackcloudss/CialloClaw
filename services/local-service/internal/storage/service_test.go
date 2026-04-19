@@ -172,6 +172,33 @@ func TestCapabilitiesReturnsConfiguredStructuredStorageOnly(t *testing.T) {
 	if capabilities.SecretStoreBackend != "stronghold_sqlite_fallback" {
 		t.Fatalf("unexpected secret backend: %+v", capabilities)
 	}
+	if service.SkillManifestStore() == nil || service.BlueprintDefinitionStore() == nil || service.PromptTemplateVersionStore() == nil {
+		t.Fatalf("expected config asset stores to be wired: %+v", capabilities)
+	}
+}
+
+func TestServiceConfigAssetStoresPersistRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config-assets-service.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+	if err := service.SkillManifestStore().WriteSkillManifest(context.Background(), SkillManifestRecord{SkillManifestID: "skill_001", Name: "skill", Version: "v1", Source: "builtin", Summary: "summary", ManifestJSON: `{}`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write skill manifest failed: %v", err)
+	}
+	if err := service.BlueprintDefinitionStore().WriteBlueprintDefinition(context.Background(), BlueprintDefinitionRecord{BlueprintDefinitionID: "blueprint_001", Name: "blueprint", Version: "v1", Source: "builtin", Summary: "summary", DefinitionJSON: `{}`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write blueprint definition failed: %v", err)
+	}
+	if err := service.PromptTemplateVersionStore().WritePromptTemplateVersion(context.Background(), PromptTemplateVersionRecord{PromptTemplateVersionID: "prompt_001", TemplateName: "default", Version: "v1", Source: "builtin", Summary: "summary", TemplateBody: "body", VariablesJSON: `[]`, CreatedAt: "2026-04-19T10:00:00Z", UpdatedAt: "2026-04-19T10:00:00Z"}); err != nil {
+		t.Fatalf("write prompt template version failed: %v", err)
+	}
+	if _, err := service.SkillManifestStore().GetSkillManifest(context.Background(), "skill_001"); err != nil {
+		t.Fatalf("get skill manifest failed: %v", err)
+	}
+	if _, err := service.BlueprintDefinitionStore().GetBlueprintDefinition(context.Background(), "blueprint_001"); err != nil {
+		t.Fatalf("get blueprint definition failed: %v", err)
+	}
+	if _, err := service.PromptTemplateVersionStore().GetPromptTemplateVersion(context.Background(), "prompt_001"); err != nil {
+		t.Fatalf("get prompt template version failed: %v", err)
+	}
 }
 
 // TestCapabilitiesReturnsUnconfiguredSnapshotWhenPathMissing 验证CapabilitiesReturnsUnconfiguredSnapshotWhenPathMissing。
@@ -507,6 +534,8 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 		RunID:         "run_loop_001",
 		TaskID:        "task_loop_001",
 		OrderIndex:    1,
+		AttemptIndex:  1,
+		SegmentKind:   "initial",
 		LoopRound:     1,
 		Name:          "agent_loop_round",
 		Status:        "completed",
@@ -553,10 +582,37 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	}
 	assertTableCount(t, sqliteStore.db, "runs", 1)
 	assertTableCount(t, sqliteStore.db, "steps", 1)
+	var attemptIndex int
+	var segmentKind string
+	if err := sqliteStore.db.QueryRow(`SELECT attempt_index, segment_kind FROM steps WHERE step_id = ?`, "step_loop_001").Scan(&attemptIndex, &segmentKind); err != nil {
+		t.Fatalf("query step attempt/segment failed: %v", err)
+	}
+	if attemptIndex != 1 || segmentKind != "initial" {
+		t.Fatalf("expected step attempt/segment to persist, got attempt=%d segment=%s", attemptIndex, segmentKind)
+	}
+	if err := service.loopRuntimeStore.SaveSteps(context.Background(), []StepRecord{{
+		StepID:        "task_loop_001_attempt_01_resume_step_loop_001",
+		RunID:         "run_loop_001",
+		TaskID:        "task_loop_001",
+		OrderIndex:    1,
+		AttemptIndex:  1,
+		SegmentKind:   "resume",
+		LoopRound:     1,
+		Name:          "agent_loop_round",
+		Status:        "completed",
+		InputSummary:  "resume planner input",
+		OutputSummary: "resume planner output",
+		StopReason:    "completed",
+		StartedAt:     "2026-04-17T10:00:02Z",
+		CompletedAt:   "2026-04-17T10:00:03Z",
+	}}); err != nil {
+		t.Fatalf("SaveSteps for resume segment returned error: %v", err)
+	}
+	assertTableCount(t, sqliteStore.db, "steps", 2)
 	assertTableCount(t, sqliteStore.db, "events", 1)
 	assertTableCount(t, sqliteStore.db, "delivery_results", 1)
 
-	events, total, err := store.ListEvents(context.Background(), "task_loop_001", "", "", 20, 0)
+	events, total, err := store.ListEvents(context.Background(), "task_loop_001", "", "", "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("ListEvents returned error: %v", err)
 	}
@@ -627,7 +683,7 @@ func TestLoopRuntimeStoreKeepsAppendOnlyEventsAcrossRuns(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("save second event failed: %v", err)
 	}
-	events, total, err := store.ListEvents(context.Background(), "task_001", "", "", 20, 0)
+	events, total, err := store.ListEvents(context.Background(), "task_001", "", "", "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("list append-only events failed: %v", err)
 	}
@@ -635,7 +691,7 @@ func TestLoopRuntimeStoreKeepsAppendOnlyEventsAcrossRuns(t *testing.T) {
 		t.Fatalf("expected append-only events from multiple runs, got total=%d items=%+v", total, events)
 	}
 
-	filteredByRun, totalByRun, err := store.ListEvents(context.Background(), "task_001", "run_002", "", 20, 0)
+	filteredByRun, totalByRun, err := store.ListEvents(context.Background(), "task_001", "run_002", "", "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("list events by run failed: %v", err)
 	}
@@ -643,12 +699,20 @@ func TestLoopRuntimeStoreKeepsAppendOnlyEventsAcrossRuns(t *testing.T) {
 		t.Fatalf("expected one run-scoped event, got total=%d items=%+v", totalByRun, filteredByRun)
 	}
 
-	filteredByType, totalByType, err := store.ListEvents(context.Background(), "task_001", "", "loop.round.completed", 20, 0)
+	filteredByType, totalByType, err := store.ListEvents(context.Background(), "task_001", "", "loop.round.completed", "", "", 20, 0)
 	if err != nil {
 		t.Fatalf("list events by type failed: %v", err)
 	}
 	if totalByType != 2 || len(filteredByType) != 2 {
 		t.Fatalf("expected two type-scoped events, got total=%d items=%+v", totalByType, filteredByType)
+	}
+
+	filteredByTime, totalByTime, err := store.ListEvents(context.Background(), "task_001", "", "", "2026-04-17T10:00:30Z", "2026-04-17T10:01:30Z", 20, 0)
+	if err != nil {
+		t.Fatalf("list events by time failed: %v", err)
+	}
+	if totalByTime != 1 || len(filteredByTime) != 1 || filteredByTime[0].RunID != "run_002" {
+		t.Fatalf("expected one time-scoped event, got total=%d items=%+v", totalByTime, filteredByTime)
 	}
 }
 

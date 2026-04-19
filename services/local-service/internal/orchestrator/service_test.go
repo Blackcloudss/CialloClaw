@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -64,6 +65,8 @@ type stubPlaywrightClient struct {
 	err              error
 }
 
+type localHTTPPlaywrightClient struct{}
+
 type stubOCRWorkerClient struct {
 	result tools.OCRTextResult
 	err    error
@@ -91,6 +94,46 @@ func (s stubPlaywrightClient) ReadPage(_ context.Context, url string) (tools.Bro
 		result.URL = url
 	}
 	return result, nil
+}
+
+func (localHTTPPlaywrightClient) ReadPage(_ context.Context, url string) (tools.BrowserPageReadResult, error) {
+	response, err := http.Get(url)
+	if err != nil {
+		return tools.BrowserPageReadResult{}, err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return tools.BrowserPageReadResult{}, err
+	}
+	text := string(body)
+	title := ""
+	lower := strings.ToLower(text)
+	start := strings.Index(lower, "<title>")
+	end := strings.Index(lower, "</title>")
+	if start >= 0 && end > start+len("<title>") {
+		title = text[start+len("<title>") : end]
+	}
+	return tools.BrowserPageReadResult{
+		URL:         url,
+		Title:       title,
+		TextContent: text,
+		MIMEType:    response.Header.Get("Content-Type"),
+		TextType:    "html",
+		Source:      "local_http_playwright_client",
+	}, nil
+}
+
+func (localHTTPPlaywrightClient) SearchPage(_ context.Context, url, query string, _ int) (tools.BrowserPageSearchResult, error) {
+	return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) InteractPage(_ context.Context, _ string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
+	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) StructuredDOM(_ context.Context, _ string) (tools.BrowserStructuredDOMResult, error) {
+	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
 func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, limit int) (tools.BrowserPageSearchResult, error) {
@@ -487,6 +530,14 @@ func mutateRuntimeTask(t *testing.T, engine *runengine.Engine, taskID string, mu
 	}
 	record := recordValue.Interface().(*runengine.TaskRecord)
 	mutate(record)
+}
+
+func replaceRuntimeClock(t *testing.T, engine *runengine.Engine, clock func() time.Time) {
+	t.Helper()
+
+	engineValue := reflect.ValueOf(engine).Elem()
+	field := engineValue.FieldByName("now")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(clock))
 }
 
 func replaceTaskRunStore(t *testing.T, service *storage.Service, store storage.TaskRunStore) {
@@ -1951,6 +2002,46 @@ func TestServiceTaskControlResumeExecutesHumanLoopTask(t *testing.T) {
 	record, ok := service.runEngine.GetTask(taskID)
 	if !ok || record.PendingExecution != nil {
 		t.Fatalf("expected resumed task to clear pending execution, got %+v", record)
+	}
+}
+
+func TestExecutionSegmentKindClassifiesInitialResumeAndRestart(t *testing.T) {
+	initialTask := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
+	initialProcessing := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
+	if segment := executionSegmentKind(initialTask, initialProcessing); segment != executionSegmentInitial {
+		t.Fatalf("expected initial segment, got %s", segment)
+	}
+	if attempt := executionAttemptIndex(initialTask, initialProcessing); attempt != 1 {
+		t.Fatalf("expected initial attempt index 1, got %d", attempt)
+	}
+
+	resumedTask := runengine.TaskRecord{RunID: "run_same", Status: "paused", ExecutionAttempt: 1}
+	resumedProcessing := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
+	if segment := executionSegmentKind(resumedTask, resumedProcessing); segment != executionSegmentResume {
+		t.Fatalf("expected resume segment, got %s", segment)
+	}
+	if attempt := executionAttemptIndex(resumedTask, resumedProcessing); attempt != 1 {
+		t.Fatalf("expected resume to stay in first attempt, got %d", attempt)
+	}
+
+	restartedTask := runengine.TaskRecord{RunID: "run_before_restart", Status: "completed", ExecutionAttempt: 1}
+	restartedProcessing := runengine.TaskRecord{RunID: "run_after_restart", Status: "processing", ExecutionAttempt: 2}
+	if segment := executionSegmentKind(restartedTask, restartedProcessing); segment != executionSegmentRestart {
+		t.Fatalf("expected restart segment, got %s", segment)
+	}
+	if attempt := executionAttemptIndex(restartedTask, restartedProcessing); attempt != 2 {
+		t.Fatalf("expected restart to increment attempt index, got %d", attempt)
+	}
+
+	restartedAgainTask := runengine.TaskRecord{RunID: "run_after_restart", Status: "completed", ExecutionAttempt: 2}
+	restartedAgainProcessing := runengine.TaskRecord{RunID: "run_after_restart_2", Status: "processing", ExecutionAttempt: 3}
+	if attempt := executionAttemptIndex(restartedAgainTask, restartedAgainProcessing); attempt != 3 {
+		t.Fatalf("expected second restart to reach attempt index 3, got %d", attempt)
+	}
+
+	legacyRestartProcessing := runengine.TaskRecord{RunID: "run_after_restart_3", Status: "processing"}
+	if attempt := executionAttemptIndex(restartedAgainTask, legacyRestartProcessing); attempt != 3 {
+		t.Fatalf("expected fallback attempt inference to reach 3, got %d", attempt)
 	}
 }
 
@@ -3765,6 +3856,17 @@ func TestServiceSecurityRespondAllowOnceReturnsStructuredRecoveryFailure(t *test
 // TestServiceTaskListSupportsSortParams verifies task list sorting parameters.
 func TestServiceTaskListSupportsSortParams(t *testing.T) {
 	service := newTestService()
+	baseTime := time.Date(2026, 4, 19, 9, 0, 0, 0, time.UTC)
+	times := []time.Time{baseTime, baseTime.Add(10 * time.Millisecond)}
+	index := 0
+	replaceRuntimeClock(t, service.runEngine, func() time.Time {
+		if index >= len(times) {
+			return times[len(times)-1]
+		}
+		current := times[index]
+		index++
+		return current
+	})
 
 	firstResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_demo",
@@ -3784,7 +3886,6 @@ func TestServiceTaskListSupportsSortParams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start first task failed: %v", err)
 	}
-	time.Sleep(5 * time.Millisecond)
 
 	secondResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_demo",
@@ -5080,6 +5181,182 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 	}
 	if payload["screen_session_id"] == "" || payload["capture_mode"] != "screenshot" || payload["retention_policy"] == "" || payload["evidence_role"] != "error_evidence" {
 		t.Fatalf("expected persisted artifact payload to retain screen metadata, got %+v", payload)
+	}
+}
+
+func TestServiceStartTaskInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_infer_start",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我看看这个页面的报错",
+			"page_context": map[string]any{
+				"title":        "Build Dashboard",
+				"url":          "https://example.com/build",
+				"app_name":     "Chrome",
+				"window_title": "Browser - Build Dashboard",
+				"visible_text": "Fatal build error: missing release asset",
+			},
+		},
+		"context": map[string]any{
+			"screen_summary": "release validation failed on current screen",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start inferred screen analyze task failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["source_type"] != "screen_capture" {
+		t.Fatalf("expected screen_capture source type, got %+v", task)
+	}
+	if task["status"] != "waiting_auth" {
+		t.Fatalf("expected inferred screen analyze task to wait for auth, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "screen_analyze" {
+		t.Fatalf("expected screen_analyze intent, got %+v", intentValue)
+	}
+	arguments := intentValue["arguments"].(map[string]any)
+	if arguments["evidence_role"] != "error_evidence" || arguments["page_title"] != "Build Dashboard" {
+		t.Fatalf("expected inferred visual arguments to be preserved, got %+v", arguments)
+	}
+	record, exists := service.runEngine.GetTask(task["task_id"].(string))
+	if !exists || record.PendingExecution == nil {
+		t.Fatalf("expected runtime task to keep pending execution for inferred screen task, got %+v", record)
+	}
+	if stringValue(record.PendingExecution, "source_path", "") != "" {
+		t.Fatalf("expected inferred screen task to authorize current screen instead of an existing file, got %+v", record.PendingExecution)
+	}
+	if stringValue(record.PendingExecution, "target_object", "") != "Build Dashboard" {
+		t.Fatalf("expected inferred screen target to use page context, got %+v", record.PendingExecution)
+	}
+}
+
+func TestServiceSubmitInputInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_screen_infer_submit",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "看看当前屏幕上的报错",
+			"input_mode": "text",
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"title":        "Release Checklist",
+				"url":          "https://example.com/release",
+				"app_name":     "Chrome",
+				"window_title": "Browser - Release Checklist",
+				"visible_text": "Warning: release notes are incomplete.",
+			},
+			"screen_summary": "release checklist shows blocking warning",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit inferred screen analyze task failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["status"] != "waiting_auth" || task["source_type"] != "screen_capture" {
+		t.Fatalf("expected submit input to route into waiting screen authorization, got %+v", task)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "status" {
+		t.Fatalf("expected waiting authorization status bubble, got %+v", bubble)
+	}
+}
+
+func TestServiceStartTaskFallsBackWhenScreenCapabilityUnavailable(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_capability_fallback",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我看看这个页面的报错",
+			"page_context": map[string]any{
+				"title":        "Build Dashboard",
+				"window_title": "Browser - Build Dashboard",
+				"visible_text": "Fatal build error: missing release asset",
+			},
+		},
+		"context": map[string]any{
+			"screen_summary": "release validation failed on current screen",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task with unavailable screen capability failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["source_type"] == "screen_capture" {
+		t.Fatalf("expected unavailable screen capability to avoid screen_capture task, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected fallback to agent_loop, got %+v", intentValue)
+	}
+	if task["status"] != "completed" {
+		t.Fatalf("expected fallback task to continue through normal flow, got %+v", task)
+	}
+	if task["current_step"] == "waiting_authorization" {
+		t.Fatalf("expected fallback task to avoid visual waiting_auth flow, got %+v", task)
+	}
+}
+
+func TestServiceSubmitInputFallbackKeepsExplicitConfirmationWhenScreenCapabilityUnavailable(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_screen_capability_confirm_fallback",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "帮我看看这个页面的报错",
+			"input_mode": "text",
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"title":        "Build Dashboard",
+				"window_title": "Browser - Build Dashboard",
+				"visible_text": "Fatal build error: missing release asset",
+			},
+			"screen_summary": "release validation failed on current screen",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input with unavailable screen capability failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected fallback task to preserve confirming_intent, got %+v", task)
+	}
+	if task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected fallback task to wait for confirmation, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected unavailable screen capability to downgrade into agent_loop, got %+v", intentValue)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected confirming fallback to skip direct delivery, got %+v", result["delivery_result"])
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "intent_confirm" {
+		t.Fatalf("expected confirmation bubble for downgraded task, got %+v", bubble)
 	}
 }
 
@@ -7702,6 +7979,20 @@ func TestSettingsGetIncludesSecretConfigurationAvailability(t *testing.T) {
 	}
 }
 
+func TestSettingsGetWithoutStorageStillReturnsStrongholdStatus(t *testing.T) {
+	service := newTestService()
+	service.storage = nil
+	result, err := service.SettingsGet(map[string]any{"scope": "all"})
+	if err != nil {
+		t.Fatalf("settings get failed: %v", err)
+	}
+	dataLog := result["settings"].(map[string]any)["data_log"].(map[string]any)
+	stronghold := dataLog["stronghold"].(map[string]any)
+	if stronghold["backend"] != "none" || stronghold["available"] != false || stronghold["formal_store"] != false {
+		t.Fatalf("expected degraded settings get to still expose stronghold defaults, got %+v", stronghold)
+	}
+}
+
 func TestSettingsGetReturnsStrongholdErrorWhenSecretStoreUnreadable(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "settings secret error")
 	if service.storage == nil {
@@ -7713,6 +8004,24 @@ func TestSettingsGetReturnsStrongholdErrorWhenSecretStoreUnreadable(t *testing.T
 	_, err := service.SettingsGet(map[string]any{"scope": "all"})
 	if !errors.Is(err, ErrStrongholdAccessFailed) {
 		t.Fatalf("expected ErrStrongholdAccessFailed, got %v", err)
+	}
+}
+
+func TestSettingsGetUnrelatedScopeIgnoresSecretStoreOutage(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings general scope")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := service.storage.Close(); err != nil {
+		t.Fatalf("close storage failed: %v", err)
+	}
+	result, err := service.SettingsGet(map[string]any{"scope": "general"})
+	if err != nil {
+		t.Fatalf("expected unrelated settings scope to ignore secret outage, got %v", err)
+	}
+	settings := result["settings"].(map[string]any)
+	if _, ok := settings["general"].(map[string]any); !ok {
+		t.Fatalf("expected general scope payload, got %+v", settings)
 	}
 }
 
@@ -7859,6 +8168,142 @@ func TestSettingsUpdateReturnsStrongholdErrorWithoutStorage(t *testing.T) {
 	})
 	if !errors.Is(err, ErrStrongholdAccessFailed) {
 		t.Fatalf("expected ErrStrongholdAccessFailed, got %v", err)
+	}
+}
+
+func TestSettingsUpdateUnrelatedScopeIgnoresSecretStoreOutage(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings unrelated update")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := service.storage.Close(); err != nil {
+		t.Fatalf("close storage failed: %v", err)
+	}
+	result, err := service.SettingsUpdate(map[string]any{
+		"general": map[string]any{
+			"language": "zh-CN",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected unrelated settings update to ignore secret outage, got %v", err)
+	}
+	effectiveSettings := result["effective_settings"].(map[string]any)
+	if _, ok := effectiveSettings["general"].(map[string]any); !ok {
+		t.Fatalf("expected general effective settings payload, got %+v", effectiveSettings)
+	}
+	if _, exists := effectiveSettings["data_log"]; exists {
+		t.Fatalf("expected unrelated settings update to avoid attaching data_log metadata, got %+v", effectiveSettings)
+	}
+}
+
+func TestServicePluginRuntimeListReturnsStructuredState(t *testing.T) {
+	service := newTestService()
+	service.plugin.MarkRuntimeStarting(plugin.RuntimeKindWorker, "ocr_worker")
+	service.plugin.MarkRuntimeHealthy(plugin.RuntimeKindWorker, "ocr_worker")
+	service.plugin.MarkRuntimeFailed(plugin.RuntimeKindSidecar, "playwright_sidecar", errors.New("sidecar failed"))
+	result, err := service.PluginRuntimeList(map[string]any{})
+	if err != nil {
+		t.Fatalf("plugin runtime list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	metrics := result["metrics"].([]map[string]any)
+	events := result["events"].([]map[string]any)
+	if len(items) == 0 || len(metrics) == 0 || len(events) == 0 {
+		t.Fatalf("expected runtime query to return items/metrics/events, got %+v", result)
+	}
+	foundFailedSidecar := false
+	for _, item := range items {
+		if item["name"] == "playwright_sidecar" && fmt.Sprint(item["health"]) == string(plugin.RuntimeHealthFailed) {
+			foundFailedSidecar = true
+			break
+		}
+	}
+	if !foundFailedSidecar {
+		t.Fatalf("expected runtime query to expose failed sidecar state, got %+v", items)
+	}
+}
+
+func TestServiceSnapshotUsesStablePrimaryWorker(t *testing.T) {
+	service := newTestService()
+	snapshot := service.Snapshot()
+	if snapshot["primary_worker"] != "playwright_worker" {
+		t.Fatalf("expected snapshot primary_worker to use stable declaration order, got %+v", snapshot)
+	}
+}
+
+func TestDashboardModuleGetIncludesPluginRuntimeSummary(t *testing.T) {
+	service := newTestService()
+	service.plugin.MarkRuntimeHealthy(plugin.RuntimeKindWorker, "ocr_worker")
+	service.plugin.MarkRuntimeUnavailable(plugin.RuntimeKindWorker, "media_worker", "missing")
+	service.plugin.MarkRuntimeFailed(plugin.RuntimeKindSidecar, "playwright_sidecar", errors.New("boom"))
+	result, err := service.DashboardModuleGet(map[string]any{"module": "mirror", "tab": "daily_summary"})
+	if err != nil {
+		t.Fatalf("dashboard module get failed: %v", err)
+	}
+	summary := result["summary"].(map[string]any)["plugin_runtime"].(map[string]any)
+	if summary["healthy"] != 1 || summary["failed"] != 1 || summary["unavailable"] != 1 {
+		t.Fatalf("expected dashboard module summary to expose plugin runtime counts, got %+v", summary)
+	}
+}
+
+func TestDashboardModuleGetTasksIncludesFocusRuntimeSummary(t *testing.T) {
+	service := newTestService()
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_dashboard_tasks_runtime",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "dashboard task runtime summary",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, ok := service.runEngine.AppendSteeringMessage(taskID, "Also include a one-line recap.", nil); !ok {
+		t.Fatal("expected steering message to persist for dashboard focus task")
+	}
+	if _, ok := service.runEngine.RecordLoopLifecycle(taskID, "loop.retrying", "planner_timeout", map[string]any{"stop_reason": "planner_timeout"}); !ok {
+		t.Fatal("expected loop lifecycle to update focus task")
+	}
+
+	moduleResult, err := service.DashboardModuleGet(map[string]any{
+		"module": "tasks",
+		"tab":    "focus",
+	})
+	if err != nil {
+		t.Fatalf("dashboard module get failed: %v", err)
+	}
+
+	summary := moduleResult["summary"].(map[string]any)
+	if summary["waiting_auth_tasks"] != 1 {
+		t.Fatalf("expected one waiting_auth task in summary, got %+v", summary)
+	}
+	focusRuntimeSummary, ok := summary["focus_runtime_summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected focus_runtime_summary map, got %+v", summary["focus_runtime_summary"])
+	}
+	if focusRuntimeSummary["latest_event_type"] != "loop.retrying" {
+		t.Fatalf("expected latest_event_type loop.retrying, got %+v", focusRuntimeSummary)
+	}
+	if focusRuntimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected active steering count 1, got %+v", focusRuntimeSummary)
+	}
+
+	highlights := moduleResult["highlights"].([]string)
+	joined := strings.Join(highlights, " ")
+	if !strings.Contains(joined, "最近运行事件：loop.retrying") {
+		t.Fatalf("expected runtime event highlight, got %+v", highlights)
+	}
+	if !strings.Contains(joined, "当前仍有 1 条追加要求待消费") {
+		t.Fatalf("expected steering highlight, got %+v", highlights)
 	}
 }
 
@@ -8043,6 +8488,34 @@ func TestServiceTaskEventsListSupportsRunAndTypeFilters(t *testing.T) {
 	items := result["items"].([]map[string]any)
 	if len(items) != 1 || items[0]["run_id"] != "run_loop_filter_b" || items[0]["type"] != "loop.failed" {
 		t.Fatalf("expected filtered loop event, got %+v", items)
+	}
+}
+
+func TestServiceTaskEventsListSupportsTimeWindowFilters(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "loop event time filters")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime store to be wired")
+	}
+	if err := service.storage.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{
+		{EventID: "evt_loop_time_001", RunID: "run_loop_time_a", TaskID: "task_loop_time_001", StepID: "step_a", Type: "loop.round.started", Level: "info", PayloadJSON: `{}`, CreatedAt: "2026-04-17T10:00:00Z"},
+		{EventID: "evt_loop_time_002", RunID: "run_loop_time_b", TaskID: "task_loop_time_001", StepID: "step_b", Type: "loop.failed", Level: "error", PayloadJSON: `{}`, CreatedAt: "2026-04-17T10:05:00Z"},
+	}); err != nil {
+		t.Fatalf("save loop time filter events failed: %v", err)
+	}
+
+	result, err := service.TaskEventsList(map[string]any{
+		"task_id":         "task_loop_time_001",
+		"created_at_from": "2026-04-17T10:04:00Z",
+		"created_at_to":   "2026-04-17T10:06:00Z",
+		"limit":           20,
+		"offset":          0,
+	})
+	if err != nil {
+		t.Fatalf("task events list with time filters failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["run_id"] != "run_loop_time_b" {
+		t.Fatalf("expected time-filtered loop event, got %+v", items)
 	}
 }
 
@@ -8521,17 +8994,7 @@ func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
 		_ = server.Serve(listener)
 	}()
 
-	osCapability := platform.NewLocalOSCapabilityAdapter()
-	runtime, err := sidecarclient.NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
-	if err != nil {
-		t.Fatalf("NewPlaywrightSidecarRuntime returned error: %v", err)
-	}
-	if err := runtime.Start(); err != nil {
-		t.Skipf("playwright runtime unavailable in test environment: %v", err)
-	}
-	defer runtime.Stop()
-
-	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, runtime.Client())
+	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, localHTTPPlaywrightClient{})
 	result, err := service.StartTask(map[string]any{
 		"session_id": "sess_real_page_read",
 		"source":     "floating_ball",
@@ -8579,6 +9042,36 @@ func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
 	}
 	if record.LatestEvent["type"] != "delivery.ready" {
 		t.Fatalf("expected delivery.ready latest event, got %+v", record.LatestEvent)
+	}
+}
+
+func TestLocalHTTPPlaywrightClientReadPageFetchesLocalHTML(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen failed: %v", err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html><html><head><title>Local Acceptance Page</title></head><body><p>Local acceptance page verifies direct local http page reads.</p></body></html>`))
+	})}
+	defer server.Close()
+	go func() {
+		_ = server.Serve(listener)
+	}()
+
+	client := localHTTPPlaywrightClient{}
+	result, err := client.ReadPage(context.Background(), "http://"+listener.Addr().String())
+	if err != nil {
+		t.Fatalf("ReadPage returned error: %v", err)
+	}
+	if result.Title != "Local Acceptance Page" {
+		t.Fatalf("expected local title to be parsed, got %+v", result)
+	}
+	if !strings.Contains(result.TextContent, "direct local http page reads") {
+		t.Fatalf("expected local page content to be captured, got %+v", result)
+	}
+	if result.Source != "local_http_playwright_client" {
+		t.Fatalf("expected local http source marker, got %+v", result)
 	}
 }
 

@@ -73,7 +73,7 @@ export const INPUT_TYPES = ["text", "text_selection", "file", "error"] as const;
 export const INPUT_MODES = ["voice", "text"] as const;
 
 // TASK_SOURCE_TYPES 定义共享常量。
-export const TASK_SOURCE_TYPES = ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal"] as const;
+export const TASK_SOURCE_TYPES = ["voice", "hover_input", "selected_text", "dragged_file", "todo", "error_signal", "screen_capture"] as const;
 
 // BUBBLE_MESSAGE_TYPES 定义共享常量。
 export const BUBBLE_MESSAGE_TYPES = ["status", "intent_confirm", "result"] as const;
@@ -486,7 +486,7 @@ export interface Run {
   run_id: string;
   task_id: string;
   session_id: string;
-  source_type: Extract<TaskSourceType, "selected_text" | "dragged_file" | "voice" | "hover_input" | "todo" | "error_signal">;
+  source_type: Extract<TaskSourceType, "selected_text" | "dragged_file" | "voice" | "hover_input" | "todo" | "error_signal" | "screen_capture">;
   status: RunStatus;
   started_at: string | null;
   finished_at: string | null;
@@ -581,20 +581,26 @@ export interface PluginManifest {
 
 // PluginRuntimeState 定义当前模块的接口约束。
 export interface PluginRuntimeState {
-  plugin_id: string;
-  healthy: boolean;
-  last_heartbeat_at: string | null;
-  current_task_id: string | null;
+  name: string;
+  kind: "worker" | "sidecar";
+  status: "declared" | "starting" | "running" | "stopped" | "unavailable" | "failed";
+  transport: string;
+  health: "unknown" | "healthy" | "degraded" | "failed" | "stopped" | "unavailable";
+  last_seen_at: string;
   last_error: string | null;
+  capabilities: string[];
 }
 
 // PluginMetricSnapshot 定义当前模块的接口约束。
 export interface PluginMetricSnapshot {
-  plugin_id: string;
-  call_count: number;
-  error_count: number;
-  average_duration_ms: number;
-  artifact_count: number;
+  name: string;
+  kind: "worker" | "sidecar";
+  start_count: number;
+  success_count: number;
+  failure_count: number;
+  last_started_at: string;
+  last_failed_at: string;
+  last_seen_at: string;
 }
 
 // RpcResponseMeta 定义当前模块的接口约束。

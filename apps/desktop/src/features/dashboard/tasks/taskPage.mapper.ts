@@ -15,6 +15,7 @@ export function formatTaskSourceLabel(sourceType: Task["source_type"]) {
     dragged_file: "拖入文件",
     error_signal: "错误信号",
     hover_input: "悬浮输入",
+    screen_capture: "屏幕感知",
     selected_text: "选中文本",
     todo: "待办触发",
     voice: "语音提交",
