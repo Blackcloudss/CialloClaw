@@ -400,14 +400,14 @@
 
 当前桌面端控制面板中的“模型与路由”需要同时承接两类数据：
 
-- 正式共享字段：`settings.data_log.provider`、`settings.data_log.budget_auto_downgrade`、`settings.data_log.provider_api_key_configured`
-- 桌面本地兼容字段：`settings.models.base_url`、`settings.models.model`
+- 正式共享字段：`settings.models.provider`
+- 正式凭证字段：`settings.models.credentials.budget_auto_downgrade`、`settings.models.credentials.provider_api_key_configured`、`settings.models.credentials.base_url`、`settings.models.credentials.model`
 
 约束如下：
 
-- `provider`、`budget_auto_downgrade`、`provider_api_key_configured` 仍以正式 `data_log` 为准，不允许被桌面本地快照反向覆盖。
-- `base_url` 与 `model` 只在桌面端本地快照中持久化，用于兼容当前 UI，不代表后端正式协议已经新增这两个字段。
-- 控制面板读取 RPC 设置后，应先以正式 `data_log` 同步共享字段，再把共享字段镜像到桌面 `models` 视图，避免本地陈旧别名覆盖后端返回。
+- `provider`、`budget_auto_downgrade`、`provider_api_key_configured`、`base_url` 与 `model` 都以正式 `models / models.credentials` 为准，不允许再以旧的 `data_log` 兼容字段反向覆盖。
+- `API Key` 仍只返回是否已配置的布尔状态，不回传明文。
+- 控制面板读取 RPC 设置后，应直接以正式 `models` 结构渲染，不再把共享字段镜像到旧的 `data_log` 兼容视图。
 
 #### 7.2.2 页面表达建议
 

@@ -273,7 +273,7 @@ flowchart TB
 | --- | --- | --- | --- |
 | `agent.input.submit` | 承接语音和轻量文本输入 | `session_id`、`source`、`trigger`、`input`、`context` | `task`、`bubble_message` |
 | `agent.task.start` | 发起对象型任务 | `session_id`、`input`、`intent`、`delivery` | `task`、`bubble_message`、`delivery_result` |
-| `agent.task.confirm` | 推进意图确认后的执行 | `task_id`、`confirmed`、`corrected_intent` | 更新后的 `task`、`bubble_message` |
+| `agent.task.confirm` | 推进意图确认后的执行 | `task_id`、`confirmed`、`corrected_content` | 更新后的 `task`、`bubble_message` |
 | `agent.task.list` | 获取任务列表 | `group`、分页和排序参数 | `items`、`page` |
 | `agent.task.detail.get` | 获取任务详情 | `task_id` | `task`、`timeline`、`artifacts`、`security_summary` |
 | `agent.task.control` | 暂停、继续、取消、重启 | `task_id`、`action`、`arguments` | 更新后的 `task`、`bubble_message` |
@@ -715,7 +715,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | `agent.input.submit` | 长按语音提交、轻量文本提交 | `session_id`、`source`、`trigger`、`input`、`context`、`options` | `task`、`bubble_message` |
 | `agent.task.start` | 文本选中、错误对象承接、文件附件手动发送后起任务 | `session_id`、`source`、`trigger`、`input`、`intent`、`delivery` | `task`、`bubble_message`、`delivery_result` |
-| `agent.task.confirm` | 用户确认或修正意图后继续执行 | `task_id`、`confirmed`、`corrected_intent` | 更新后的 `task`、`bubble_message` |
+| `agent.task.confirm` | 用户确认或修正意图后继续执行 | `task_id`、`confirmed`、`corrected_content` | 更新后的 `task`、`bubble_message` |
 
 这些方法共同组成主动输入闭环：先承接对象，再确认意图，最后推进正式执行。
 
