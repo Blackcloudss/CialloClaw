@@ -703,7 +703,7 @@ export interface AgentSettingsUpdateResult {
 
 // AgentPluginRuntimeListParams defines the stable plugin runtime query params.
 export interface AgentPluginRuntimeListParams {
-  request_meta: RequestMeta;
+  request_meta?: RequestMeta;
 }
 
 // PluginRuntimeEvent mirrors the backend runtime event query payload.
