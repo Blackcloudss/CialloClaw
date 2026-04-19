@@ -81,21 +81,22 @@ type MediaWorkerRuntime struct {
 }
 
 func NewMediaWorkerRuntime(pluginService *plugin.Service, osCapability platform.OSCapabilityAdapter) (*MediaWorkerRuntime, error) {
-	entryPath, err := resolveRelativePathFromRoots(mediaWorkerRelativePath, workerSearchRoots())
-	if err != nil {
-		markPluginRuntimeFailed(pluginService, plugin.RuntimeKindWorker, "media_worker", err)
-		return nil, err
-	}
-	markPluginRuntimeStarting(pluginService, plugin.RuntimeKindWorker, "media_worker")
 	runtime := &MediaWorkerRuntime{
 		plugins:   pluginService,
 		os:        osCapability,
 		ready:     false,
-		available: true,
-		invoker:   newCommandWorkerInvoker(entryPath),
+		available: false,
 		name:      "media_worker",
 	}
 	runtime.client = runtimeMediaWorkerClient{runtime: runtime}
+	entryPath, err := resolveRelativePathFromRoots(mediaWorkerRelativePath, workerSearchRoots())
+	if err != nil {
+		markPluginRuntimeFailed(pluginService, plugin.RuntimeKindWorker, "media_worker", err)
+		return runtime, err
+	}
+	markPluginRuntimeStarting(pluginService, plugin.RuntimeKindWorker, "media_worker")
+	runtime.available = true
+	runtime.invoker = newCommandWorkerInvoker(entryPath)
 	return runtime, nil
 }
 

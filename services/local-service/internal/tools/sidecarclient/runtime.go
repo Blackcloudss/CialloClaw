@@ -256,20 +256,21 @@ func NewPlaywrightSidecarRuntime(pluginService *plugin.Service, osCapability pla
 		return nil, errors.New("playwright sidecar not declared")
 	}
 	markPluginRuntimeStarting(pluginService, plugin.RuntimeKindSidecar, spec.Name)
-	entryPath, err := resolveWorkerEntryPath()
-	if err != nil {
-		markPluginRuntimeFailed(pluginService, plugin.RuntimeKindSidecar, spec.Name, err)
-		return nil, err
-	}
 	runtime := &PlaywrightSidecarRuntime{
 		plugins:   pluginService,
 		spec:      spec,
 		os:        osCapability,
 		ready:     false,
-		available: true,
-		invoker:   newCommandWorkerInvoker(entryPath),
+		available: false,
 	}
 	runtime.client = runtimePlaywrightClient{runtime: runtime}
+	entryPath, err := resolveWorkerEntryPath()
+	if err != nil {
+		markPluginRuntimeFailed(pluginService, plugin.RuntimeKindSidecar, spec.Name, err)
+		return runtime, err
+	}
+	runtime.available = true
+	runtime.invoker = newCommandWorkerInvoker(entryPath)
 	return runtime, nil
 }
 

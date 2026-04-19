@@ -61,21 +61,22 @@ type OCRWorkerRuntime struct {
 }
 
 func NewOCRWorkerRuntime(pluginService *plugin.Service, osCapability platform.OSCapabilityAdapter) (*OCRWorkerRuntime, error) {
-	entryPath, err := resolveRelativePathFromRoots(ocrWorkerRelativePath, workerSearchRoots())
-	if err != nil {
-		markPluginRuntimeFailed(pluginService, plugin.RuntimeKindWorker, "ocr_worker", err)
-		return nil, err
-	}
-	markPluginRuntimeStarting(pluginService, plugin.RuntimeKindWorker, "ocr_worker")
 	runtime := &OCRWorkerRuntime{
 		plugins:   pluginService,
 		os:        osCapability,
 		ready:     false,
-		available: true,
-		invoker:   newCommandWorkerInvoker(entryPath),
+		available: false,
 		name:      "ocr_worker",
 	}
 	runtime.client = runtimeOCRWorkerClient{runtime: runtime}
+	entryPath, err := resolveRelativePathFromRoots(ocrWorkerRelativePath, workerSearchRoots())
+	if err != nil {
+		markPluginRuntimeFailed(pluginService, plugin.RuntimeKindWorker, "ocr_worker", err)
+		return runtime, err
+	}
+	markPluginRuntimeStarting(pluginService, plugin.RuntimeKindWorker, "ocr_worker")
+	runtime.available = true
+	runtime.invoker = newCommandWorkerInvoker(entryPath)
 	return runtime, nil
 }
 

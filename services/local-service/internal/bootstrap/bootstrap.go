@@ -4,6 +4,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"reflect"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
@@ -167,9 +168,14 @@ func (a *App) Close() error {
 
 // chooseRuntimeOnStart keeps a runtime instance after Start fails so the shared
 // plugin runtime cache preserves the concrete failure state instead of being
-// overwritten by a generic unavailable placeholder.
+// overwritten by a generic unavailable placeholder. Constructor failures may
+// still return a non-nil runtime shell that carries the concrete failure state.
 func chooseRuntimeOnStart[T runtimeStarter](runtime T, buildErr error, unavailable func() T) T {
 	if buildErr != nil {
+		value := reflect.ValueOf(runtime)
+		if value.IsValid() && !(value.Kind() == reflect.Ptr && value.IsNil()) {
+			return runtime
+		}
 		return unavailable()
 	}
 	if err := runtime.Start(); err != nil {

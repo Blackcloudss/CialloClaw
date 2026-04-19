@@ -202,8 +202,14 @@ func TestChooseRuntimeOnStartKeepsFailedRuntimeState(t *testing.T) {
 	selected = chooseRuntimeOnStart[*stubRuntimeStarter](failedRuntime, errors.New("build failed"), func() *stubRuntimeStarter {
 		return unavailableRuntime
 	})
+	if selected != failedRuntime {
+		t.Fatalf("expected build failure with runtime shell to keep original runtime, got %+v", selected)
+	}
+	selected = chooseRuntimeOnStart[*stubRuntimeStarter](nil, errors.New("build failed"), func() *stubRuntimeStarter {
+		return unavailableRuntime
+	})
 	if selected != unavailableRuntime {
-		t.Fatalf("expected build failure to choose unavailable runtime, got %+v", selected)
+		t.Fatalf("expected nil build failure runtime to choose unavailable runtime, got %+v", selected)
 	}
 }
 
