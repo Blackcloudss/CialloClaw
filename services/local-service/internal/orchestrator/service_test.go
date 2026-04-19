@@ -5250,6 +5250,53 @@ func TestServiceStartTaskFallsBackWhenScreenCapabilityUnavailable(t *testing.T) 
 	if task["current_step"] == "waiting_authorization" {
 		t.Fatalf("expected fallback task to avoid visual waiting_auth flow, got %+v", task)
 	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["text"] != "当前环境暂不支持受控屏幕查看，已改为按现有文本和页面上下文继续处理。" {
+		t.Fatalf("expected fallback bubble to preserve screen-unavailable warning, got %+v", bubble)
+	}
+	record, exists := service.runEngine.GetTask(task["task_id"].(string))
+	if !exists || stringValue(record.BubbleMessage, "text", "") != "当前环境暂不支持受控屏幕查看，已改为按现有文本和页面上下文继续处理。" {
+		t.Fatalf("expected runtime task presentation to preserve fallback warning, got %+v", record)
+	}
+}
+
+func TestServiceSubmitInputFallsBackWhenScreenCapabilityUnavailable(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_screen_capability_submit_fallback",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "看看当前屏幕上的警告",
+			"input_mode": "text",
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"title":        "Build Dashboard",
+				"window_title": "Browser - Build Dashboard",
+				"visible_text": "Fatal build error: missing release asset",
+			},
+			"screen_summary": "release validation failed on current screen",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input with unavailable screen capability failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected submit fallback to agent_loop, got %+v", intentValue)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["text"] != "当前环境暂不支持受控屏幕查看，已改为按现有文本和页面上下文继续处理。" {
+		t.Fatalf("expected submit fallback bubble to preserve screen-unavailable warning, got %+v", bubble)
+	}
+	record, exists := service.runEngine.GetTask(task["task_id"].(string))
+	if !exists || stringValue(record.BubbleMessage, "text", "") != "当前环境暂不支持受控屏幕查看，已改为按现有文本和页面上下文继续处理。" {
+		t.Fatalf("expected submit runtime task presentation to preserve fallback warning, got %+v", record)
+	}
 }
 
 func TestSecurityRespondScreenAnalyzeFailureReconcilesTaskState(t *testing.T) {

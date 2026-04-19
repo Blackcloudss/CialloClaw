@@ -367,6 +367,7 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 			if execErr != nil {
 				return nil, execErr
 			}
+			task, bubble = s.preserveScreenFallbackBubble(task, suggestion, bubble, deliveryResult)
 		}
 	} else {
 		if _, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
@@ -462,6 +463,7 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	if execErr != nil {
 		return nil, execErr
 	}
+	task, bubble = s.preserveScreenFallbackBubble(task, suggestion, bubble, deliveryResult)
 	response["task"] = taskMap(task)
 	response["bubble_message"] = bubble
 	response["delivery_result"] = deliveryResult
@@ -541,6 +543,23 @@ func (s *Service) normalizeSuggestedIntentForAvailability(snapshot contextsvc.Ta
 	fallback.ResultPreview = "结果已通过气泡返回"
 	fallback.ResultBubbleText = "当前环境暂不支持受控屏幕查看，已改为按现有文本和页面上下文继续处理。"
 	return fallback
+}
+
+func (s *Service) preserveScreenFallbackBubble(task runengine.TaskRecord, suggestion intent.Suggestion, bubble map[string]any, deliveryResult map[string]any) (runengine.TaskRecord, map[string]any) {
+	if !isScreenCapabilityFallbackSuggestion(suggestion) {
+		return task, bubble
+	}
+	preservedBubble := s.delivery.BuildBubbleMessage(task.TaskID, "result", suggestion.ResultBubbleText, task.UpdatedAt.Format(dateTimeLayout))
+	if updatedTask, ok := s.runEngine.SetPresentation(task.TaskID, preservedBubble, deliveryResult, nil); ok {
+		return updatedTask, preservedBubble
+	}
+	return task, preservedBubble
+}
+
+func isScreenCapabilityFallbackSuggestion(suggestion intent.Suggestion) bool {
+	return stringValue(suggestion.Intent, "name", "") == "agent_loop" &&
+		suggestion.TaskSourceType == "hover_input" &&
+		strings.TrimSpace(suggestion.ResultBubbleText) == "当前环境暂不支持受控屏幕查看，已改为按现有文本和页面上下文继续处理。"
 }
 
 func inferredScreenFallbackSubject(snapshot contextsvc.TaskContextSnapshot) string {
