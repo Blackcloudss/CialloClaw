@@ -20,7 +20,7 @@
 
 .shell-ball-window--input {
   gap: 0.42rem;
-  justify-items: end;
+  justify-items: start;
   overflow: visible;
   width: max-content;
 }
@@ -715,7 +715,7 @@
 
 .shell-ball-input-bar {
   --shell-ball-input-accent: rgba(128, 128, 128, 0.42);
-  align-items: flex-end;
+  align-items: flex-start;
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -727,7 +727,7 @@
   padding: 0.05rem 0 0.22rem 0;
   position: relative;
   overflow: visible;
-  width: max-content;
+  width: 196px;
   transition:
     transform 180ms ease,
     box-shadow 180ms ease,
@@ -743,9 +743,7 @@
 }
 
 .shell-ball-input-bar__field-shell {
-  align-items: flex-end;
   box-sizing: border-box;
-  display: flex;
   min-height: 44px;
   min-width: 196px;
   overflow: visible;
@@ -755,14 +753,14 @@
 }
 
 .shell-ball-input-bar__actions {
-  align-self: flex-end;
+  align-self: flex-start;
   align-items: center;
   box-sizing: border-box;
   display: flex;
   gap: 0.35rem;
   justify-content: flex-end;
   padding-right: 0;
-  width: max-content;
+  width: 196px;
 }
 
 .shell-ball-input-bar__field {
@@ -904,11 +902,11 @@
 }
 
 .shell-ball-input-bar--interactive {
-  align-items: flex-end;
+  align-items: flex-start;
   background: transparent;
   box-shadow: none;
   min-height: 44px;
-  padding: 0.05rem 0.12rem 0.22rem 0.2rem;
+  padding: 0;
 }
 
 .shell-ball-input-bar--interactive:focus-within {
@@ -916,7 +914,7 @@
   border-radius: 0;
   box-shadow: none;
   min-height: 44px;
-  padding: 0.05rem 0.12rem 0.22rem 0.2rem;
+  padding: 0;
   transform: none;
 }
 
@@ -952,7 +950,7 @@
   border: 0;
   box-shadow: none;
   min-height: 44px;
-  padding: 0.05rem 0.12rem 0.22rem 0.2rem;
+  padding: 0;
 }
 
 .shell-ball-input-bar--readonly .shell-ball-input-bar__field {
