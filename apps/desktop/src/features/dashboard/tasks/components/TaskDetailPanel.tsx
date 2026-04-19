@@ -11,6 +11,7 @@ import type { TaskDetailData } from "../taskPage.types";
 import { TaskActionBar } from "./TaskActionBar";
 import { TaskContextBlock } from "./TaskContextBlock";
 import { TaskProgressTimeline } from "./TaskProgressTimeline";
+import type { TaskEventFilters, TaskEventTimeRange } from "../taskPage.types";
 
 type TaskDetailPanelProps = {
   artifactActionPendingId: string | null;
@@ -21,6 +22,7 @@ type TaskDetailPanelProps = {
   detailData: TaskDetailData;
   detailErrorMessage: string | null;
   eventErrorMessage: string | null;
+  eventFilters: TaskEventFilters;
   eventItems: import("../taskPage.types").TaskEventItem[];
   eventLoading: boolean;
   detailState: "loading" | "error" | "ready";
@@ -30,6 +32,8 @@ type TaskDetailPanelProps = {
   onClose: () => void;
   onOpenArtifact: (artifactId: string) => void;
   onOpenLatestDelivery: () => void;
+  onApplyEventFilters: (filters: TaskEventFilters) => void;
+  onResetEventFilters: () => void;
   onRetryDetail: (() => void) | null;
   onSteerTask: (message: string) => void;
   steeringPending: boolean;
@@ -44,6 +48,7 @@ export function TaskDetailPanel({
   detailData,
   detailErrorMessage,
   eventErrorMessage,
+  eventFilters,
   eventItems,
   eventLoading,
   detailState,
@@ -53,12 +58,15 @@ export function TaskDetailPanel({
   onClose,
   onOpenArtifact,
   onOpenLatestDelivery,
+  onApplyEventFilters,
+  onResetEventFilters,
   onRetryDetail,
   onSteerTask,
   steeringPending,
 }: TaskDetailPanelProps) {
   const { detail, experience, task } = detailData;
   const [steeringMessage, setSteeringMessage] = useState("");
+  const [eventFilterDraft, setEventFilterDraft] = useState(eventFilters);
   const progress = getTaskProgress(detail.timeline);
   const stateVoice = getTaskStateVoice(task, experience, detail.timeline);
   const ended = isTaskEnded(task);
@@ -86,11 +94,89 @@ export function TaskDetailPanel({
     setSteeringMessage("");
   }, [feedback, steeringPending]);
 
+  useEffect(() => {
+    // Keep runtime event filters as local draft state so typing does not trigger
+    // one RPC refetch per keystroke before the user explicitly applies changes.
+    setEventFilterDraft(eventFilters);
+  }, [eventFilters]);
+
   function handleSubmitSteering() {
     if (!steeringMessage.trim()) {
       return;
     }
     onSteerTask(steeringMessage);
+  }
+
+  function handleApplyEventFilters() {
+    onApplyEventFilters({
+      eventType: eventFilterDraft.eventType.trim(),
+      runId: eventFilterDraft.runId.trim(),
+      timeRange: eventFilterDraft.timeRange,
+    });
+  }
+
+  function handleResetEventFilters() {
+    onResetEventFilters();
+  }
+
+  function updateEventTimeRange(timeRange: TaskEventTimeRange) {
+    setEventFilterDraft((current) => ({
+      ...current,
+      timeRange,
+    }));
+  }
+
+  function renderRuntimeEventFilters() {
+    return (
+      <div className="task-detail-runtime-filters">
+        <label className="task-detail-runtime-filters__field">
+          <span>事件类型</span>
+          <input
+            className="task-detail-runtime-filters__input"
+            onChange={(event) =>
+              setEventFilterDraft((current) => ({
+                ...current,
+                eventType: event.target.value,
+              }))
+            }
+            placeholder="例如 loop.failed"
+            value={eventFilterDraft.eventType}
+          />
+        </label>
+        <label className="task-detail-runtime-filters__field">
+          <span>Run ID</span>
+          <input
+            className="task-detail-runtime-filters__input"
+            onChange={(event) =>
+              setEventFilterDraft((current) => ({
+                ...current,
+                runId: event.target.value,
+              }))
+            }
+            placeholder="例如 run_001"
+            value={eventFilterDraft.runId}
+          />
+        </label>
+        <label className="task-detail-runtime-filters__field">
+          <span>时间范围</span>
+          <select className="task-detail-runtime-filters__input" onChange={(event) => updateEventTimeRange(event.target.value as TaskEventTimeRange)} value={eventFilterDraft.timeRange}>
+            <option value="all">全部时间</option>
+            <option value="1h">最近 1 小时</option>
+            <option value="24h">最近 24 小时</option>
+            <option value="7d">最近 7 天</option>
+          </select>
+        </label>
+        <div className="task-detail-runtime-filters__actions">
+          <button className="task-detail-card__action" disabled={eventLoading} onClick={handleApplyEventFilters} type="button">
+            <RefreshCcw className="h-4 w-4" />
+            应用筛选
+          </button>
+          <button className="task-detail-card__action" disabled={eventLoading} onClick={handleResetEventFilters} type="button">
+            重置
+          </button>
+        </div>
+      </div>
+    );
   }
 
   function renderRuntimeSummarySection() {
@@ -141,6 +227,8 @@ export function TaskDetailPanel({
           <p className="task-detail-card__eyebrow">Runtime Events</p>
           <h3 className="task-detail-card__title">执行事件与循环回流</h3>
         </div>
+        <p className="task-detail-card__hint">通过正式 `agent.task.events.list` 查询当前任务的运行时事件，可按事件类型、Run ID 与时间范围筛选。</p>
+        {renderRuntimeEventFilters()}
         {eventErrorMessage ? <p className="task-detail-card__hint">{eventErrorMessage}</p> : null}
         {eventLoading && eventItems.length === 0 ? <p className="task-detail-card__empty">正在同步运行时事件...</p> : null}
         {eventItems.length > 0 ? (
