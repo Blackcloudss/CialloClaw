@@ -1,4 +1,15 @@
-import type { AgentTaskDetailGetResult, AgentTaskControlParams, AgentTaskEventsListParams, AgentTaskSteerParams, RequestMeta, Task, TaskControlAction, TaskEvent, TaskListGroup } from "@cialloclaw/protocol";
+import type {
+  AgentTaskDetailGetResult,
+  AgentTaskControlParams,
+  AgentTaskEventsListParams,
+  AgentTaskSteerParams,
+  RequestMeta,
+  Task,
+  TaskControlAction,
+  TaskEvent,
+  TaskListGroup,
+  TaskRuntimeSummary,
+} from "@cialloclaw/protocol";
 import { controlTask, getTaskDetail, listTaskEvents, listTasks, steerTask } from "@/rpc/methods";
 import { isActiveApprovalRequest, isApprovalRequest, isArtifact, isBinaryPendingAuthorizations, isMirrorReference, isRecoveryPoint, isTask, isTaskEvent, isTaskStep, normalizeArray, normalizeNullable } from "../shared/dashboardContractValidators";
 import { RISK_LEVELS, SECURITY_STATUSES, TASK_STEP_STATUSES } from "@/rpc/protocolEnumerations";
