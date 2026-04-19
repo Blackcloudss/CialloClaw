@@ -82,6 +82,8 @@ type RuntimeEvent struct {
 	CreatedAt string
 }
 
+const maxRuntimeEvents = 50
+
 // Service keeps static declarations plus the current runtime state cache.
 type Service struct {
 	mu       sync.Mutex
@@ -285,6 +287,9 @@ func (s *Service) appendEvent(kind RuntimeKind, name string, eventType string, p
 		Payload:   cloneMap(payload),
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	})
+	if len(s.events) > maxRuntimeEvents {
+		s.events = append([]RuntimeEvent(nil), s.events[len(s.events)-maxRuntimeEvents:]...)
+	}
 }
 
 func runtimeKey(kind RuntimeKind, name string) string {

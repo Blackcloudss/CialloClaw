@@ -258,7 +258,7 @@ func NewPlaywrightSidecarRuntime(pluginService *plugin.Service, osCapability pla
 	markPluginRuntimeStarting(pluginService, plugin.RuntimeKindSidecar, spec.Name)
 	entryPath, err := resolveWorkerEntryPath()
 	if err != nil {
-		pluginService.MarkRuntimeFailed(plugin.RuntimeKindSidecar, spec.Name, err)
+		markPluginRuntimeFailed(pluginService, plugin.RuntimeKindSidecar, spec.Name, err)
 		return nil, err
 	}
 	runtime := &PlaywrightSidecarRuntime{
@@ -276,7 +276,7 @@ func NewPlaywrightSidecarRuntime(pluginService *plugin.Service, osCapability pla
 // NewUnavailablePlaywrightSidecarRuntime returns a disabled runtime placeholder.
 func NewUnavailablePlaywrightSidecarRuntime(pluginService *plugin.Service, osCapability platform.OSCapabilityAdapter) *PlaywrightSidecarRuntime {
 	spec, _ := pluginService.SidecarSpec("playwright_sidecar")
-	pluginService.MarkRuntimeUnavailable(plugin.RuntimeKindSidecar, spec.Name, "playwright sidecar unavailable")
+	markPluginRuntimeUnavailable(pluginService, plugin.RuntimeKindSidecar, spec.Name, "playwright sidecar unavailable")
 	runtime := &PlaywrightSidecarRuntime{
 		plugins:   pluginService,
 		spec:      spec,
@@ -319,9 +319,11 @@ func (r *PlaywrightSidecarRuntime) Start() error {
 		return nil
 	}
 	if r.os == nil {
+		markPluginRuntimeFailed(r.plugins, plugin.RuntimeKindSidecar, r.spec.Name, errors.New("os capability adapter is required"))
 		return errors.New("os capability adapter is required")
 	}
 	if err := r.os.EnsureNamedPipe(sidecarPipeName(r.spec.Name)); err != nil {
+		markPluginRuntimeFailed(r.plugins, plugin.RuntimeKindSidecar, r.spec.Name, err)
 		return err
 	}
 	healthCtx, cancel := context.WithTimeout(context.Background(), sidecarHealthTimeout)

@@ -48,6 +48,17 @@ func TestServiceEventPayloadsAreCloned(t *testing.T) {
 	}
 }
 
+func TestServiceRuntimeEventsStayBounded(t *testing.T) {
+	service := NewService()
+	for index := 0; index < maxRuntimeEvents+10; index++ {
+		service.MarkRuntimeFailed(RuntimeKindWorker, "ocr_worker", testError("failure"))
+	}
+	events := service.RuntimeEvents()
+	if len(events) != maxRuntimeEvents {
+		t.Fatalf("expected runtime events to stay bounded at %d, got %d", maxRuntimeEvents, len(events))
+	}
+}
+
 func assertError(message string) error { return testError(message) }
 
 type testError string
