@@ -211,7 +211,7 @@ const StyledInputBar = styled.div`
   .shell-ball-uiverse-inputbox input:focus ~ span,
   &[data-filled="true"] .shell-ball-uiverse-inputbox span {
     color: rgba(128, 128, 128, 0.82);
-    transform: translateX(-10px) translateY(-34px);
+    transform: translateX(-10px) translateY(-26px);
     font-size: 0.75em;
   }
 
