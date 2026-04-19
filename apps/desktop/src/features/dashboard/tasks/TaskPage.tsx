@@ -16,14 +16,16 @@ import {
   buildDashboardTaskArtifactQueryKey,
   buildDashboardTaskBucketQueryKey,
   buildDashboardTaskDetailQueryKey,
+  buildDashboardTaskEventQueryKey,
   getDashboardTaskSecurityRefreshPlan,
   resolveDashboardTaskSafetyOpenPlan,
   shouldEnableDashboardTaskDetailQuery,
 } from "./taskPage.query";
-import { buildFallbackTaskDetailData, controlTaskByAction, loadTaskBucketPage, loadTaskDetailData, loadTaskEventPage, steerTaskByMessage, type TaskPageDataMode } from "./taskPage.service";
+import { buildFallbackTaskDetailData, controlTaskByAction, DEFAULT_TASK_EVENT_FILTERS, loadTaskBucketPage, loadTaskDetailData, loadTaskEventPage, steerTaskByMessage, type TaskPageDataMode } from "./taskPage.service";
 import { describeTaskOpenResultForCurrentTask, loadTaskArtifactPage, openTaskArtifactForTask, openTaskDeliveryForTask, performTaskOpenExecution, resolveTaskOpenExecutionPlan } from "./taskOutput.service";
 import { TaskDetailPanel } from "./components/TaskDetailPanel";
 import { TaskPreviewCard } from "./components/TaskPreviewCard";
+import type { TaskEventFilters } from "./taskPage.types";
 import "./taskPage.css";
 
 export function TaskPage() {
@@ -41,6 +43,7 @@ export function TaskPage() {
   const [dataMode, setDataMode] = useState<TaskPageDataMode>(() => loadDashboardDataMode("tasks") as TaskPageDataMode);
   const [unfinishedLimit, setUnfinishedLimit] = useState(INITIAL_UNFINISHED_LIMIT);
   const [finishedLimit, setFinishedLimit] = useState(INITIAL_FINISHED_LIMIT);
+  const [taskEventFilters, setTaskEventFilters] = useState<TaskEventFilters>(DEFAULT_TASK_EVENT_FILTERS);
   const feedbackTimeoutRef = useRef<number | null>(null);
   const securityRefreshPlan = useMemo(() => getDashboardTaskSecurityRefreshPlan(dataMode), [dataMode]);
 
@@ -84,6 +87,10 @@ export function TaskPage() {
     "--task-ink": "#5f544b",
     "--task-copy": "rgba(95, 84, 75, 0.68)",
   } as CSSProperties;
+
+  useEffect(() => {
+    setTaskEventFilters(DEFAULT_TASK_EVENT_FILTERS);
+  }, [selectedTaskId]);
 
   useEffect(() => {
     if (allTasks.length === 0) {
@@ -135,8 +142,8 @@ export function TaskPage() {
   });
   const taskEventsQuery = useQuery({
     enabled: detailOpen && Boolean(selectedTaskId),
-    queryKey: ["dashboard", "tasks", "events", dataMode, selectedTaskId ?? ""],
-    queryFn: () => loadTaskEventPage(selectedTaskId!, dataMode),
+    queryKey: buildDashboardTaskEventQueryKey(dataMode, selectedTaskId ?? "", taskEventFilters),
+    queryFn: () => loadTaskEventPage(selectedTaskId!, dataMode, taskEventFilters),
     refetchOnMount: securityRefreshPlan.refetchOnMount,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
@@ -166,7 +173,7 @@ export function TaskPage() {
     function invalidateSelectedTaskDetail(taskId: string) {
       void queryClient.invalidateQueries({ queryKey: buildDashboardTaskDetailQueryKey(dataMode, taskId) });
       void queryClient.invalidateQueries({ queryKey: buildDashboardTaskArtifactQueryKey(dataMode, taskId) });
-      void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "events", dataMode, taskId] });
+      void queryClient.invalidateQueries({ queryKey: buildDashboardTaskEventQueryKey(dataMode, taskId, taskEventFilters) });
     }
 
     function invalidateTaskQueries(deliveryTaskId?: string) {
@@ -199,7 +206,7 @@ export function TaskPage() {
       clearTaskSubscription();
       clearRuntimeSubscription();
     };
-  }, [dataMode, queryClient, securityRefreshPlan, selectedTaskId]);
+  }, [dataMode, queryClient, securityRefreshPlan, selectedTaskId, taskEventFilters]);
 
   useEffect(() => {
     return () => {
@@ -273,7 +280,7 @@ export function TaskPage() {
         void queryClient.invalidateQueries({ queryKey });
       }
       void queryClient.invalidateQueries({ queryKey: buildDashboardTaskDetailQueryKey(dataMode, variables.taskId) });
-      void queryClient.invalidateQueries({ queryKey: ["dashboard", "tasks", "events", dataMode, variables.taskId] });
+      void queryClient.invalidateQueries({ queryKey: buildDashboardTaskEventQueryKey(dataMode, variables.taskId, taskEventFilters) });
     },
     onError: (error) => {
       showFeedback(error instanceof Error ? `补充要求提交失败：${error.message}` : "补充要求提交失败，请稍后再试。");
@@ -352,6 +359,14 @@ export function TaskPage() {
         },
       },
     );
+  }
+
+  function handleApplyTaskEventFilters(nextFilters: TaskEventFilters) {
+    setTaskEventFilters(nextFilters);
+  }
+
+  function handleResetTaskEventFilters() {
+    setTaskEventFilters(DEFAULT_TASK_EVENT_FILTERS);
   }
 
   function handleLoadMore(group: "unfinished" | "finished") {
@@ -544,6 +559,7 @@ export function TaskPage() {
                 detailWarningMessage={detailData.detailWarningMessage ?? null}
                 detailErrorMessage={detailErrorMessage}
                 eventErrorMessage={taskEventsQuery.isError ? (taskEventsQuery.error instanceof Error ? taskEventsQuery.error.message : "运行时事件请求失败") : null}
+                eventFilters={taskEventFilters}
                 eventItems={taskEventsQuery.data?.items ?? []}
                 eventLoading={taskEventsQuery.isPending}
                 detailState={detailState}
@@ -553,6 +569,8 @@ export function TaskPage() {
                 onClose={() => setDetailOpen(false)}
                 onOpenArtifact={handleOpenArtifact}
                 onOpenLatestDelivery={handleOpenLatestDelivery}
+                onApplyEventFilters={handleApplyTaskEventFilters}
+                onResetEventFilters={handleResetTaskEventFilters}
                 onRetryDetail={taskDetailQuery.isError ? () => void taskDetailQuery.refetch() : null}
                 onSteerTask={handleSteerTask}
                 steeringPending={taskSteerMutation.isPending}
