@@ -1979,6 +1979,14 @@ func (s *Service) SettingsGet(params map[string]any) (map[string]any, error) {
 // settings patch plus apply-mode metadata.
 func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) {
 	if dataLog := mapValue(params, "data_log"); len(dataLog) > 0 {
+		if deleteAPIKey := boolValue(dataLog, "delete_api_key", false); deleteAPIKey {
+			provider := s.providerForSettingsUpdate(dataLog)
+			if err := s.deleteModelSecret(provider); err != nil {
+				return nil, err
+			}
+			delete(dataLog, "delete_api_key")
+			params["data_log"] = dataLog
+		}
 		if apiKey := stringValue(dataLog, "api_key", ""); apiKey != "" {
 			provider := s.providerForSettingsUpdate(dataLog)
 			if err := s.persistModelSecret(provider, apiKey); err != nil {
@@ -2431,6 +2439,9 @@ func (s *Service) attachSensitiveSettingAvailability(settings map[string]any) (m
 		dataLog["provider"] = provider
 	}
 	dataLog["provider_api_key_configured"] = configured
+	if stronghold := strongholdStatusFromStorage(s.storage); len(stronghold) > 0 {
+		dataLog["stronghold"] = stronghold
+	}
 	cloned["data_log"] = dataLog
 	return cloned, nil
 }
@@ -2450,6 +2461,9 @@ func (s *Service) modelSecretConfigured(provider string) (string, bool, error) {
 	if errors.Is(err, storage.ErrSecretStoreAccessFailed) {
 		return resolvedProvider, false, ErrStrongholdAccessFailed
 	}
+	if errors.Is(err, storage.ErrStrongholdUnavailable) {
+		return resolvedProvider, false, ErrStrongholdAccessFailed
+	}
 	return resolvedProvider, false, err
 }
 
@@ -2464,12 +2478,42 @@ func (s *Service) persistModelSecret(provider, apiKey string) error {
 		Value:     strings.TrimSpace(apiKey),
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
-		if errors.Is(err, storage.ErrSecretStoreAccessFailed) {
+		normalizedErr := storage.NormalizeSecretStoreError(err)
+		if errors.Is(normalizedErr, storage.ErrStrongholdAccessFailed) || errors.Is(normalizedErr, storage.ErrStrongholdUnavailable) || errors.Is(normalizedErr, storage.ErrSecretStoreAccessFailed) {
 			return ErrStrongholdAccessFailed
 		}
-		return err
+		return normalizedErr
 	}
 	return nil
+}
+
+func (s *Service) deleteModelSecret(provider string) error {
+	resolvedProvider := firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider())
+	if s.storage == nil || s.storage.SecretStore() == nil || resolvedProvider == "" {
+		return ErrStrongholdAccessFailed
+	}
+	if err := s.storage.SecretStore().DeleteSecret(context.Background(), "model", resolvedProvider+"_api_key"); err != nil {
+		normalizedErr := storage.NormalizeSecretStoreError(err)
+		if errors.Is(normalizedErr, storage.ErrStrongholdAccessFailed) || errors.Is(normalizedErr, storage.ErrStrongholdUnavailable) || errors.Is(normalizedErr, storage.ErrSecretStoreAccessFailed) {
+			return ErrStrongholdAccessFailed
+		}
+		return normalizedErr
+	}
+	return nil
+}
+
+func strongholdStatusFromStorage(store *storage.Service) map[string]any {
+	if store == nil || store.Stronghold() == nil {
+		return nil
+	}
+	descriptor := store.Stronghold().Descriptor()
+	return map[string]any{
+		"backend":      descriptor.Backend,
+		"available":    descriptor.Available,
+		"fallback":     descriptor.Fallback,
+		"initialized":  descriptor.Initialized,
+		"formal_store": descriptor.Available && !descriptor.Fallback,
+	}
 }
 
 func (s *Service) providerForSettingsUpdate(dataLog map[string]any) string {

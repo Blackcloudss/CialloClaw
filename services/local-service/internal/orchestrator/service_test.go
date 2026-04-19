@@ -441,6 +441,21 @@ func mustNewStoredEngine(t *testing.T, taskStore storage.TaskRunStore) *runengin
 	return engine
 }
 
+type storageTestAdapter struct {
+	databasePath string
+}
+
+func (s storageTestAdapter) DatabasePath() string {
+	return s.databasePath
+}
+
+func (s storageTestAdapter) SecretStorePath() string {
+	if s.databasePath == "" {
+		return ""
+	}
+	return s.databasePath + ".stronghold"
+}
+
 func newTestService() *Service {
 	return NewService(
 		contextsvc.NewService(),
@@ -503,6 +518,14 @@ func replaceAuthorizationRecordStore(t *testing.T, service *storage.Service, sto
 
 	serviceValue := reflect.ValueOf(service).Elem()
 	field := serviceValue.FieldByName("authorizationRecordStore")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
+}
+
+func replaceSecretStore(t *testing.T, service *storage.Service, store storage.SecretStore) {
+	t.Helper()
+
+	serviceValue := reflect.ValueOf(service).Elem()
+	field := serviceValue.FieldByName("secretStore")
 	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(store))
 }
 
@@ -7657,6 +7680,10 @@ func TestSettingsGetIncludesSecretConfigurationAvailability(t *testing.T) {
 	if dataLog["provider_api_key_configured"] != false {
 		t.Fatalf("expected unset provider key flag, got %+v", dataLog)
 	}
+	stronghold := dataLog["stronghold"].(map[string]any)
+	if stronghold["backend"] == "" || stronghold["available"] != true {
+		t.Fatalf("expected stronghold status metadata, got %+v", stronghold)
+	}
 	if err := service.storage.SecretStore().PutSecret(context.Background(), storage.SecretRecord{
 		Namespace: "model",
 		Key:       service.model.Provider() + "_api_key",
@@ -7719,6 +7746,9 @@ func TestSettingsUpdatePersistsSecretOutsideRegularSettings(t *testing.T) {
 	if dataLog["provider_api_key_configured"] != true {
 		t.Fatalf("expected configured flag in settings response, got %+v", dataLog)
 	}
+	if _, exists := dataLog["stronghold"]; !exists {
+		t.Fatalf("expected stronghold status in settings response, got %+v", dataLog)
+	}
 }
 
 func TestSettingsUpdatePersistsSecretForRequestedProvider(t *testing.T) {
@@ -7754,6 +7784,68 @@ func TestSettingsUpdatePersistsSecretForRequestedProvider(t *testing.T) {
 	dataLog := result["settings"].(map[string]any)["data_log"].(map[string]any)
 	if dataLog["provider"] != "anthropic" || dataLog["provider_api_key_configured"] != true {
 		t.Fatalf("expected settings get to reflect anthropic provider secret, got %+v", dataLog)
+	}
+}
+
+func TestSettingsUpdateDeletesProviderSecretWithoutLeakingValue(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings delete secret")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := service.storage.SecretStore().PutSecret(context.Background(), storage.SecretRecord{
+		Namespace: "model",
+		Key:       service.model.Provider() + "_api_key",
+		Value:     "secret-key",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed secret store failed: %v", err)
+	}
+	result, err := service.SettingsUpdate(map[string]any{
+		"data_log": map[string]any{
+			"provider":       "openai",
+			"delete_api_key": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("settings update delete failed: %v", err)
+	}
+	_, err = service.storage.SecretStore().GetSecret(context.Background(), "model", service.model.Provider()+"_api_key")
+	if !errors.Is(err, storage.ErrSecretNotFound) {
+		t.Fatalf("expected secret to be deleted, got %v", err)
+	}
+	dataLog := result["effective_settings"].(map[string]any)["data_log"].(map[string]any)
+	if _, exists := dataLog["api_key"]; exists {
+		t.Fatalf("expected settings delete response to stay redacted, got %+v", dataLog)
+	}
+	if dataLog["provider_api_key_configured"] != false {
+		t.Fatalf("expected delete to clear configured flag, got %+v", dataLog)
+	}
+}
+
+func TestSettingsUpdateReturnsStrongholdErrorWhenStoreUnavailable(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings stronghold unavailable")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStorage := service.storage
+	defer func() {
+		if service.storage != nil {
+			_ = service.storage.Close()
+		}
+	}()
+	if err := originalStorage.Close(); err != nil {
+		t.Fatalf("close original storage failed: %v", err)
+	}
+	service.storage = storage.NewService(nil)
+	replaceSecretStore(t, service.storage, storage.UnavailableSecretStore{})
+	_, err := service.SettingsUpdate(map[string]any{
+		"data_log": map[string]any{
+			"provider": "openai",
+			"api_key":  "secret-key",
+		},
+	})
+	if !errors.Is(err, ErrStrongholdAccessFailed) {
+		t.Fatalf("expected ErrStrongholdAccessFailed, got %v", err)
 	}
 }
 
