@@ -174,6 +174,20 @@ func TestValidateModelConfigRejectsUnsupportedProvider(t *testing.T) {
 	}
 }
 
+func TestRegisteredProviderDescriptorsExposeStableBoundary(t *testing.T) {
+	descriptors := RegisteredProviderDescriptors()
+	if len(descriptors) != 1 {
+		t.Fatalf("expected one supported provider descriptor, got %+v", descriptors)
+	}
+	if descriptors[0].Name != OpenAIResponsesProvider || !descriptors[0].SupportsToolCalling {
+		t.Fatalf("unexpected provider descriptor: %+v", descriptors[0])
+	}
+	descriptor, ok := defaultProviderRegistry.descriptor(OpenAIResponsesProvider)
+	if !ok || descriptor.Name != OpenAIResponsesProvider {
+		t.Fatalf("expected registry descriptor lookup to succeed, got descriptor=%+v ok=%v", descriptor, ok)
+	}
+}
+
 // TestValidateModelConfigTrimsWhitespace 验证ValidateModelConfigTrimsWhitespace。
 func TestValidateModelConfigTrimsWhitespace(t *testing.T) {
 	err := ValidateModelConfig(config.ModelConfig{
