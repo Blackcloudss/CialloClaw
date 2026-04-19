@@ -120,6 +120,7 @@ type Result struct {
 	ModelInvocation map[string]any
 	AuditRecord     map[string]any
 	ToolCalls       []tools.ToolCallRecord
+	BudgetFailure   map[string]any
 	ToolName        string
 	ToolInput       map[string]any
 	ToolOutput      map[string]any
@@ -147,6 +148,7 @@ type generationTrace struct {
 	ModelInvocation  map[string]any
 	AuditRecord      map[string]any
 	GenerationOutput map[string]any
+	BudgetFailure    map[string]any
 }
 
 // NewService 创建执行服务。
@@ -306,6 +308,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		ModelInvocation: cloneMap(trace.ModelInvocation),
 		AuditRecord:     cloneMap(trace.AuditRecord),
 		ToolCalls:       append([]tools.ToolCallRecord(nil), trace.ToolCalls...),
+		BudgetFailure:   cloneMap(trace.BudgetFailure),
 		ToolInput: map[string]any{
 			"intent_name":     effectiveIntentName(request.Intent),
 			"delivery_type":   deliveryType,
@@ -1341,6 +1344,7 @@ func (s *Service) fileSection(filePath string) string {
 func (s *Service) generateOutput(ctx context.Context, request Request, inputText string) (generationTrace, error) {
 	if trace, ok, err := s.generateOutputWithAgentLoop(ctx, request, inputText); err != nil {
 		if fallbackTrace, fallbackOK := budgetDowngradeGenerationFallback(request, inputText, err); fallbackOK {
+			fallbackTrace.BudgetFailure = budgetFailureSignal(request, err)
 			return fallbackTrace, nil
 		}
 		return generationTrace{}, err
@@ -1351,6 +1355,7 @@ func (s *Service) generateOutput(ctx context.Context, request Request, inputText
 	trace, err := s.generateOutputWithPrompt(ctx, request, inputText)
 	if err != nil {
 		if fallbackTrace, fallbackOK := budgetDowngradeGenerationFallback(request, inputText, err); fallbackOK {
+			fallbackTrace.BudgetFailure = budgetFailureSignal(request, err)
 			return fallbackTrace, nil
 		}
 		return generationTrace{}, err
@@ -1373,8 +1378,10 @@ func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request,
 		return generationTrace{}, fmt.Errorf("generate text: %w", err)
 	}
 	if boolValue(toolResult.RawOutput, "fallback") && boolValue(request.BudgetDowngrade, "applied") {
+		auditRecord := mapValue(toolResult.RawOutput, "audit_record")
 		return generationTrace{
 			OutputText: budgetDowngradeFallbackText(request, inputText),
+			ToolCalls:  []tools.ToolCallRecord{toolResult.ToolCall},
 			ModelInvocation: map[string]any{
 				"provider":   "budget_downgrade_fallback",
 				"model_id":   "lightweight_delivery",
@@ -1382,7 +1389,9 @@ func (s *Service) generateOutputWithPrompt(ctx context.Context, request Request,
 				"fallback":   true,
 				"reason":     stringValue(request.BudgetDowngrade, "trigger_reason", "execution_fallback"),
 			},
+			AuditRecord:      cloneMap(auditRecord),
 			GenerationOutput: cloneMap(toolResult.RawOutput),
+			BudgetFailure:    budgetFailureSignal(request, model.ErrClientNotConfigured),
 		}, nil
 	}
 
@@ -1615,6 +1624,21 @@ func budgetDowngradeGenerationFallback(request Request, inputText string, genera
 			"reason":   triggerReason,
 		},
 	}, true
+}
+
+func budgetFailureSignal(request Request, generationErr error) map[string]any {
+	if !boolValue(request.BudgetDowngrade, "applied") || generationErr == nil {
+		return nil
+	}
+	if !errors.Is(generationErr, model.ErrClientNotConfigured) && !errors.Is(generationErr, model.ErrToolCallingNotSupported) && !errors.Is(generationErr, model.ErrModelProviderUnsupported) && !errors.Is(generationErr, model.ErrSecretNotFound) && !errors.Is(generationErr, model.ErrSecretSourceFailed) {
+		return nil
+	}
+	return map[string]any{
+		"category": "budget_auto_downgrade",
+		"action":   "budget_auto_downgrade.failure_signal",
+		"result":   "failed",
+		"reason":   generationErr.Error(),
+	}
 }
 
 func budgetDowngradeFallbackText(request Request, inputText string) string {

@@ -5581,6 +5581,49 @@ func TestServiceFailExecutionTaskAppendsBudgetFailureSignal(t *testing.T) {
 	}
 }
 
+func TestServiceBudgetFallbackSuccessStillAppendsFailureSignal(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "executor-backed fallback success signal")
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_budget_fallback_signal",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": strings.Repeat("fallback signal content ", 12),
+		},
+		"options": map[string]any{
+			"confirm_required": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	mutateRuntimeTask(t, service.runEngine, taskID, func(record *runengine.TaskRecord) {
+		record.AuditRecords = append(record.AuditRecords, map[string]any{
+			"category": "budget_auto_downgrade",
+			"action":   "budget_auto_downgrade.failure_signal",
+			"result":   "failed",
+			"reason":   model.ErrClientNotConfigured.Error(),
+		})
+	})
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime after fallback success")
+	}
+	foundBudgetFailure := false
+	for _, auditRecord := range record.AuditRecords {
+		if stringValue(auditRecord, "action", "") != "budget_auto_downgrade.failure_signal" {
+			continue
+		}
+		foundBudgetFailure = true
+		break
+	}
+	if !foundBudgetFailure {
+		t.Fatalf("expected fallback success path to retain budget failure signal, got %+v", record.AuditRecords)
+	}
+}
+
 func TestServiceBudgetAutoDowngradeUsesConfiguredPolicyThresholds(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed configured thresholds")
 	_, _, _, needRestart := service.runEngine.UpdateSettings(map[string]any{

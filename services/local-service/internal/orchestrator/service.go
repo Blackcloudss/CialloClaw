@@ -5058,6 +5058,9 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		auditDeliveryResult = nil
 	}
 	executionAuditRecords, executionTokenUsage := s.buildExecutionAudit(processingTask, executionResult.ToolCalls, auditDeliveryResult)
+	if len(executionResult.BudgetFailure) > 0 {
+		executionAuditRecords = append(executionAuditRecords, cloneMap(executionResult.BudgetFailure))
+	}
 	executionAuditRecords = append(executionAuditRecords, s.buildBudgetDowngradeAudit(processingTask, budgetDecision))
 	processingTask = s.appendAuditData(processingTask, executionAuditRecords, executionTokenUsage)
 	processingTask = s.recordBudgetDowngradeEvent(processingTask, budgetDecision)

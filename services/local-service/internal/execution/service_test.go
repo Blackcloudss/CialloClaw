@@ -569,6 +569,15 @@ func TestExecuteBudgetDowngradeFallsBackWhenModelClientUnavailable(t *testing.T)
 	if result.ModelInvocation["provider"] != "budget_downgrade_fallback" || result.ModelInvocation["fallback"] != true {
 		t.Fatalf("expected fallback model invocation marker, got %+v", result.ModelInvocation)
 	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].ToolName != "generate_text" {
+		t.Fatalf("expected fallback execution to preserve generate_text tool call, got %+v", result.ToolCalls)
+	}
+	if result.ToolOutput["token_usage"] == nil {
+		t.Fatalf("expected fallback execution to preserve token usage trace, got %+v", result.ToolOutput)
+	}
+	if result.BudgetFailure == nil || result.BudgetFailure["action"] != "budget_auto_downgrade.failure_signal" {
+		t.Fatalf("expected fallback execution to expose budget failure signal, got %+v", result.BudgetFailure)
+	}
 }
 
 func TestExecuteBudgetDowngradeSkipsToolCallingAgentLoop(t *testing.T) {
