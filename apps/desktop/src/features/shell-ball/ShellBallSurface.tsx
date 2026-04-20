@@ -28,7 +28,6 @@ type ShellBallSurfaceProps = {
   onRegionEnter: () => void;
   onRegionLeave: () => void;
   onTextDrop?: (text: string) => void | Promise<void>;
-  onInputProxyClick?: () => void;
   onPressStart: (event: PointerEvent<HTMLButtonElement>) => void;
   onPressMove: (event: PointerEvent<HTMLButtonElement>) => void;
   onPressEnd: (event: PointerEvent<HTMLButtonElement>) => boolean;
@@ -103,14 +102,11 @@ export function ShellBallSurface({
   onRegionEnter,
   onRegionLeave,
   onTextDrop = () => {},
-  onInputProxyClick = () => {},
   onPressStart,
   onPressMove,
   onPressEnd,
   onPressCancel,
 }: ShellBallSurfaceProps) {
-  const showInputProxy = visualState === "hover_input" && !inputFocused;
-
   // Only the armed text target is allowed to consume drag events.
   function handleDragOver(event: DragEvent<HTMLElement>) {
     if (!textDropActive || !shouldAcceptShellBallTextDrop(event.dataTransfer)) {
@@ -189,6 +185,8 @@ export function ShellBallSurface({
                     motionConfig={motionConfig}
                     onPrimaryClick={onPrimaryClick}
                     onDoubleClick={onDoubleClick}
+                    onHotspotEnter={onRegionEnter}
+                    onHotspotLeave={onRegionLeave}
                     onHotspotDragStart={onDragStart}
                     onHotspotDragMove={onDragMove}
                     onHotspotDragEnd={onDragEnd}
@@ -204,15 +202,6 @@ export function ShellBallSurface({
                     <div className="shell-ball-surface__voice-anchor">{overlayContent}</div>
                   </div>
                 ) : null}
-                <button
-                  aria-hidden={!showInputProxy}
-                  className="shell-ball-surface__input-line-proxy"
-                  data-shell-ball-interactive="true"
-                  data-visible={showInputProxy}
-                  onClick={onInputProxyClick}
-                  tabIndex={showInputProxy ? 0 : -1}
-                  type="button"
-                />
               </div>
             </section>
         </div>

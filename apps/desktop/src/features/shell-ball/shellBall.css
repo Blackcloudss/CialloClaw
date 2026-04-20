@@ -78,25 +78,20 @@ body[data-app-window="shell-ball"],
     0 1px 0 rgba(255, 255, 255, 0.82) inset;
 }
 
-.shell-ball-surface[data-file-drop-active="true"] .shell-ball-surface__input-line-proxy[data-visible="true"] {
-  opacity: 1;
-}
-
-.shell-ball-surface[data-file-drop-active="true"] .shell-ball-surface__input-line-proxy::after {
-  background: rgba(160, 205, 255, 0.92);
-  box-shadow: 0 0 12px rgba(106, 145, 200, 0.48);
-}
-
 .shell-ball-surface[data-file-drop-active="true"] .shell-ball-surface__file-drop-overlay {
   opacity: 1;
   transform: translate(-50%, -50%) scale(1);
 }
 
 .shell-ball-surface {
-  --shell-ball-scale: 0.5;
+  --shell-ball-helper-width: min(28rem, calc(100vw - 0.75rem));
+  --shell-ball-scale: 1;
+  --shell-ball-mascot-scale: 0.5;
+  --shell-ball-mascot-shell-height: calc((clamp(16.2rem, 30.6vw, 21.6rem) * var(--shell-ball-mascot-scale)) + 10px);
+  --shell-ball-mascot-shell-width: calc((clamp(14.86rem, 27.9vw, 17.1rem) * var(--shell-ball-mascot-scale)) + 10px);
   --shell-ball-stage-anchor-x: 50%;
   --shell-ball-stage-anchor-y: 50%;
-  --shell-ball-input-anchor-offset-y: 6.35rem;
+  --shell-ball-input-anchor-offset-y: 4rem;
   --shell-ball-input-proxy-offset-y: 5.65rem;
   --shell-ball-voice-frame-size: 15.5rem;
   --shell-ball-transition-scale: 1;
@@ -578,12 +573,13 @@ body[data-app-window="shell-ball"],
 .shell-ball-surface__mascot-shell {
   align-items: center;
   display: flex;
+  height: var(--shell-ball-mascot-shell-height);
   justify-content: center;
   left: var(--shell-ball-stage-anchor-x);
   position: absolute;
   top: var(--shell-ball-stage-anchor-y);
   transform: translate(-50%, -50%);
-  width: max-content;
+  width: var(--shell-ball-mascot-shell-width);
   z-index: 4;
 }
 
@@ -592,40 +588,6 @@ body[data-app-window="shell-ball"],
   pointer-events: none;
   position: absolute;
   z-index: 7;
-}
-
-.shell-ball-surface__input-line-proxy {
-  background: transparent;
-  border: 0;
-  border-bottom: 2px solid rgba(91, 103, 118, 0.34);
-  border-radius: 0;
-  display: block;
-  left: 50%;
-  height: 1.6rem;
-  margin-top: 0;
-  opacity: 0;
-  pointer-events: none;
-  position: absolute;
-  top: calc(var(--shell-ball-stage-anchor-y) + var(--shell-ball-input-proxy-offset-y));
-  transform: translateX(-50%);
-  width: var(--shell-ball-helper-width);
-}
-
-.shell-ball-surface__input-line-proxy[data-visible="true"] {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.shell-ball-surface__input-line-proxy::after {
-  background: rgba(255, 255, 255, 0.62);
-  content: "";
-  height: 2px;
-  inset: auto 0.5rem 0.16rem;
-  position: absolute;
-}
-
-.shell-ball-surface__input-line-proxy:focus-visible {
-  outline: none;
 }
 
 .shell-ball-input-bar,
@@ -910,6 +872,8 @@ body[data-app-window="shell-ball"],
   height: clamp(16.2rem, 30.6vw, 21.6rem);
   justify-content: center;
   position: relative;
+  transform: scale(var(--shell-ball-mascot-scale));
+  transform-origin: center center;
   width: clamp(14.86rem, 27.9vw, 17.1rem);
 }
 

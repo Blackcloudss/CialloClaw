@@ -14,6 +14,8 @@ type ShellBallMascotProps = {
   motionConfig: ShellBallMotionConfig;
   onPrimaryClick?: () => void;
   onDoubleClick?: () => void;
+  onHotspotEnter?: () => void;
+  onHotspotLeave?: () => void;
   onHotspotDragStart?: (event: PointerEvent<HTMLButtonElement>) => void;
   onHotspotDragMove?: (event: PointerEvent<HTMLButtonElement>) => void;
   onHotspotDragEnd?: (event: PointerEvent<HTMLButtonElement>) => void;
@@ -100,6 +102,8 @@ export function ShellBallMascot({
   motionConfig,
   onPrimaryClick = () => {},
   onDoubleClick = () => {},
+  onHotspotEnter = () => {},
+  onHotspotLeave = () => {},
   onHotspotDragStart = () => {},
   onHotspotDragMove = () => {},
   onHotspotDragEnd = () => {},
@@ -403,9 +407,12 @@ export function ShellBallMascot({
         type="button"
         className="shell-ball-mascot__hotspot"
         aria-label="Shell-ball mascot"
+        data-shell-ball-interactive="true"
         data-shell-ball-zone="voice-hotspot"
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
+        onPointerEnter={onHotspotEnter}
+        onPointerLeave={onHotspotLeave}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerEnd}

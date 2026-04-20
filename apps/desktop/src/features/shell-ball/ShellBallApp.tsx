@@ -295,6 +295,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     onAttachFile: handleAttachFile,
     onPrimaryClick: handlePrimaryClick,
   });
+  const shouldRenderInlineInput = snapshot.visibility.input || visualState === "idle";
+  const inlineInputMode = snapshot.inputBarMode === "hidden" ? "interactive" : snapshot.inputBarMode;
   const {
     beginBallWindowPointerDrag,
     endBallWindowPointerDrag,
@@ -722,7 +724,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
         fileDropActive,
       })}
       overlayContent={snapshot.visibility.voice ? <div className="shell-ball-voice-window"><ShellBallVoiceHints hintMode={snapshot.voiceHintMode} voicePreview={snapshot.voicePreview} /></div> : null}
-      bottomContent={snapshot.visibility.input ? (
+      bottomContent={shouldRenderInlineInput ? (
         <div
           className="shell-ball-window shell-ball-window--input"
           data-shell-ball-input-window="true"
@@ -737,7 +739,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
           <ShellBallAttachmentTray paths={pendingFiles} onRemove={handleRemovePendingFile} />
           <ShellBallInputBar
             focusToken={inputFocusToken}
-            mode={snapshot.inputBarMode}
+            mode={inlineInputMode}
             voicePreview={snapshot.voicePreview}
             value={inputValue}
             hasPendingFiles={pendingFiles.length > 0}
@@ -793,9 +795,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       onRegionLeave={handleCoordinatorRegionLeave}
       onTextDrop={handleSurfaceTextDrop}
       inputFocused={inputFocused}
-      onInputProxyClick={() => {
-        focusInlineInputField();
-      }}
       onPressStart={handlePressStart}
       onPressMove={handlePressMove}
       onPressEnd={handlePressEnd}
