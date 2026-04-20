@@ -440,8 +440,11 @@ function createDetail(overrides: Partial<AgentTaskDetailGetResult> = {}): AgentT
     runtime_summary: {
       active_steering_count: 0,
       events_count: 0,
+      latest_failure_code: null,
+      latest_failure_summary: null,
       latest_event_type: null,
       loop_stop_reason: null,
+      observation_signals: [],
     },
     security_summary: {
       latest_restore_point: createRecoveryPoint(),
@@ -1604,8 +1607,11 @@ test("task detail normalization rejects string restore points in rpc mode and ke
     assert.deepEqual(fallback.detail.runtime_summary, {
       active_steering_count: 0,
       events_count: 0,
+      latest_failure_code: null,
+      latest_failure_summary: null,
       latest_event_type: null,
       loop_stop_reason: null,
+      observation_signals: [],
     });
     assert.equal(fallback.detail.security_summary.pending_authorizations, 0);
     assert.equal(fallback.detail.security_summary.security_status, "normal");

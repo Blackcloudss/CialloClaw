@@ -525,8 +525,11 @@ function createDetail(
   runtimeSummary: TaskRuntimeSummary = {
     active_steering_count: 0,
     events_count: timeline.length,
+    latest_failure_code: null,
+    latest_failure_summary: null,
     latest_event_type: timeline[timeline.length - 1]?.status === "completed" ? "step.completed" : "step.updated",
     loop_stop_reason: task.status === "completed" || task.status === "cancelled" || task.status === "ended_unfinished" ? "task_settled" : null,
+    observation_signals: [],
   },
 ) {
   return {
@@ -537,8 +540,11 @@ function createDetail(
     runtime_summary: {
       active_steering_count: 0,
       events_count: 0,
+      latest_failure_code: null,
+      latest_failure_summary: null,
       latest_event_type: null,
       loop_stop_reason: null,
+      observation_signals: [],
     },
     security_summary: securitySummary,
     task,

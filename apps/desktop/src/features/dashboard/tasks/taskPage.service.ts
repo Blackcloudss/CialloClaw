@@ -100,8 +100,11 @@ function createFallbackTaskDetail(task: Task): AgentTaskDetailGetResult {
     runtime_summary: {
       active_steering_count: 0,
       events_count: 0,
+      latest_failure_code: null,
+      latest_failure_summary: null,
       latest_event_type: null,
       loop_stop_reason: null,
+      observation_signals: [],
     },
     security_summary: {
       latest_restore_point: null,
@@ -132,8 +135,11 @@ function createFallbackRuntimeSummary(): AgentTaskDetailGetResult["runtime_summa
   return {
     active_steering_count: 0,
     events_count: 0,
+    latest_failure_code: null,
+    latest_failure_summary: null,
     latest_event_type: null,
     loop_stop_reason: null,
+    observation_signals: [],
   };
 }
 
@@ -146,8 +152,11 @@ function normalizeRuntimeSummary(detail: AgentTaskDetailGetResult): AgentTaskDet
   return {
     active_steering_count: typeof candidate.active_steering_count === "number" ? candidate.active_steering_count : 0,
     events_count: typeof candidate.events_count === "number" ? candidate.events_count : 0,
+    latest_failure_code: typeof candidate.latest_failure_code === "string" ? candidate.latest_failure_code : null,
+    latest_failure_summary: typeof candidate.latest_failure_summary === "string" ? candidate.latest_failure_summary : null,
     latest_event_type: typeof candidate.latest_event_type === "string" ? candidate.latest_event_type : null,
     loop_stop_reason: typeof candidate.loop_stop_reason === "string" ? candidate.loop_stop_reason : null,
+    observation_signals: Array.isArray(candidate.observation_signals) ? candidate.observation_signals.filter((item): item is string => typeof item === "string") : [],
   };
 }
 
@@ -212,8 +221,11 @@ function isValidRuntimeSummary(summary: Partial<TaskRuntimeSummary> | null | und
       Number.isFinite(summary.events_count) &&
       typeof summary.active_steering_count === "number" &&
       Number.isFinite(summary.active_steering_count) &&
+      (typeof summary.latest_failure_code === "string" || summary.latest_failure_code === null || typeof summary.latest_failure_code === "undefined") &&
+      (typeof summary.latest_failure_summary === "string" || summary.latest_failure_summary === null || typeof summary.latest_failure_summary === "undefined") &&
       (typeof summary.latest_event_type === "string" || summary.latest_event_type === null || typeof summary.latest_event_type === "undefined") &&
-      (typeof summary.loop_stop_reason === "string" || summary.loop_stop_reason === null || typeof summary.loop_stop_reason === "undefined"),
+      (typeof summary.loop_stop_reason === "string" || summary.loop_stop_reason === null || typeof summary.loop_stop_reason === "undefined") &&
+      (Array.isArray(summary.observation_signals) ? summary.observation_signals.every((item) => typeof item === "string") : typeof summary.observation_signals === "undefined"),
   );
 }
 
