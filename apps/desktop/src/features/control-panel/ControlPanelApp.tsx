@@ -18,10 +18,12 @@ import {
 import { Button, Heading, SegmentedControl, Slider, Switch, Text, TextArea, TextField } from "@radix-ui/themes";
 import isEqual from "react-fast-compare";
 import {
+  ControlPanelSaveError,
   loadControlPanelData,
   runControlPanelInspection,
   saveControlPanelData,
   type ControlPanelData,
+  type ControlPanelSaveResult,
 } from "@/services/controlPanelService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { requestCurrentDesktopWindowClose, startCurrentDesktopWindowDragging } from "@/platform/desktopWindowFrame";
@@ -272,6 +274,29 @@ function InfoRow({ label, value }: InfoRowProps) {
   );
 }
 
+// applyControlPanelSaveResult keeps unsaved groups intact so partial saves do
+// not accidentally discard the user's remaining local edits.
+function applyControlPanelSaveResult(base: ControlPanelData, result: ControlPanelSaveResult): ControlPanelData {
+  const nextSettings = result.savedSettings || result.savedInspector
+    ? {
+        ...base.settings,
+        ...(result.savedSettings ? result.effectiveSettings : {}),
+        task_automation: {
+          ...base.settings.task_automation,
+          ...(result.effectiveSettings.task_automation ?? {}),
+        },
+      }
+    : base.settings;
+
+  return {
+    ...base,
+    inspector: result.savedInspector ? result.effectiveInspector : base.inspector,
+    providerApiKeyInput: result.savedSettings ? "" : base.providerApiKeyInput,
+    settings: nextSettings,
+    source: result.source,
+  };
+}
+
 /**
  * ControlPanelApp renders the desktop settings surface with a sidebar-driven
  * layout while keeping the current settings data model untouched.
@@ -295,7 +320,6 @@ export function ControlPanelApp() {
   }, []);
 
   const sourceCopy = useMemo(() => (draft ? getSourceCopy(draft.source) : null), [draft]);
-  const hasChanges = !isEqual(draft, panelData);
 
   if (!draft || !panelData || !sourceCopy) {
     return (
@@ -310,6 +334,9 @@ export function ControlPanelApp() {
   }
 
   const activeMeta = SECTION_META[activeSection];
+  const inspectorDirty = !isEqual(draft.inspector, panelData.inspector);
+  const settingsDirty = !isEqual(draft.settings, panelData.settings) || draft.providerApiKeyInput.trim() !== "";
+  const hasChanges = inspectorDirty || settingsDirty;
   const latestRestorePoint = draft.securitySummary.latest_restore_point?.summary ?? "暂无恢复点";
   const inspectionInterval = `${draft.inspector.inspection_interval.value}${draft.inspector.inspection_interval.unit}`;
   const workSummaryCadence = `${draft.settings.memory.work_summary_interval.value}${draft.settings.memory.work_summary_interval.unit}`;
@@ -364,26 +391,29 @@ export function ControlPanelApp() {
   };
 
   const handleSave = async () => {
+    if (!hasChanges || isRunningInspection) {
+      return;
+    }
+
     setIsSaving(true);
     try {
-      const result = await saveControlPanelData(draft);
-      const nextData: ControlPanelData = {
-        ...draft,
-        inspector: result.effectiveInspector,
-        providerApiKeyInput: "",
-        settings: {
-          ...draft.settings,
-          ...result.effectiveSettings,
-          task_automation: {
-            ...draft.settings.task_automation,
-            ...(result.effectiveSettings.task_automation ?? {}),
-          },
-        },
-      };
-      setPanelData(nextData);
-      setDraft(nextData);
+      const result = await saveControlPanelData(draft, {
+        saveInspector: inspectorDirty,
+        saveSettings: settingsDirty,
+      });
+      const nextPanelData = applyControlPanelSaveResult(panelData, result);
+      const nextDraft = applyControlPanelSaveResult(draft, result);
+      setPanelData(nextPanelData);
+      setDraft(nextDraft);
       setSaveFeedback(getApplyModeCopy(result.applyMode, result.needRestart, result.source));
     } catch (error) {
+      if (error instanceof ControlPanelSaveError && error.partialResult) {
+        const nextPanelData = applyControlPanelSaveResult(panelData, error.partialResult);
+        const nextDraft = applyControlPanelSaveResult(draft, error.partialResult);
+        setPanelData(nextPanelData);
+        setDraft(nextDraft);
+      }
+
       setSaveFeedback(error instanceof Error ? error.message : "保存控制面板设置失败。");
     } finally {
       setIsSaving(false);
@@ -391,6 +421,10 @@ export function ControlPanelApp() {
   };
 
   const handleRunInspection = async () => {
+    if (isSaving) {
+      return;
+    }
+
     setIsRunningInspection(true);
     try {
       const result = await runControlPanelInspection(draft);
@@ -917,31 +951,6 @@ export function ControlPanelApp() {
                 {activeMeta.title}
               </Heading>
             </div>
-
-            <div className="control-panel-shell__hero-metrics">
-              <div className="control-panel-shell__metric-card">
-                <Text as="p" size="1" className="control-panel-shell__metric-label">
-                  数据来源
-                </Text>
-                <div className="control-panel-shell__metric-value">{sourceValue}</div>
-              </div>
-
-              <div className="control-panel-shell__metric-card">
-                <Text as="p" size="1" className="control-panel-shell__metric-label">
-                  保存状态
-                </Text>
-                <div className="control-panel-shell__metric-value">{saveStateValue}</div>
-              </div>
-
-              <div className="control-panel-shell__metric-card">
-                <Text as="p" size="1" className="control-panel-shell__metric-label">
-                  最近恢复点
-                </Text>
-                <Text as="p" size="2" className="control-panel-shell__metric-note">
-                  {latestRestorePoint}
-                </Text>
-              </div>
-            </div>
           </header>
 
           <div className="control-panel-shell__cards">{renderSectionContent()}</div>
@@ -956,7 +965,7 @@ export function ControlPanelApp() {
                 className="control-panel-shell__button control-panel-shell__button--secondary"
                 variant="soft"
                 onClick={() => void handleRunInspection()}
-                disabled={isRunningInspection}
+                disabled={isRunningInspection || isSaving}
               >
                 {isRunningInspection ? "巡检执行中…" : "立即巡检"}
               </Button>
@@ -966,7 +975,7 @@ export function ControlPanelApp() {
                 variant="soft"
                 color="gray"
                 onClick={handleReset}
-                disabled={!hasChanges || isSaving}
+                disabled={!hasChanges || isSaving || isRunningInspection}
               >
                 撤销修改
               </Button>
@@ -974,7 +983,7 @@ export function ControlPanelApp() {
               <Button
                 className="control-panel-shell__button control-panel-shell__button--primary"
                 onClick={() => void handleSave()}
-                disabled={!hasChanges || isSaving}
+                disabled={!hasChanges || isSaving || isRunningInspection}
               >
                 {isSaving ? "保存中…" : "保存设置"}
               </Button>
