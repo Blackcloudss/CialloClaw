@@ -1033,20 +1033,24 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 
 func (s *Service) buildTaskRuntimeSummary(task runengine.TaskRecord) map[string]any {
 	summary := map[string]any{
-		"loop_stop_reason":       nil,
-		"events_count":           0,
-		"latest_event_type":      nil,
-		"active_steering_count":  len(task.SteeringMessages),
-		"latest_failure_code":    nil,
-		"latest_failure_summary": nil,
-		"observation_signals":    []string{},
+		"loop_stop_reason":        nil,
+		"events_count":            0,
+		"latest_event_type":       nil,
+		"active_steering_count":   len(task.SteeringMessages),
+		"latest_failure_code":     nil,
+		"latest_failure_category": nil,
+		"latest_failure_summary":  nil,
+		"observation_signals":     []string{},
 	}
 	if strings.TrimSpace(task.LoopStopReason) != "" {
 		summary["loop_stop_reason"] = task.LoopStopReason
 	}
-	if failureCode, failureSummary := latestTaskFailure(task); failureCode != "" || failureSummary != "" {
+	if failureCode, failureCategory, failureSummary := latestTaskFailure(task); failureCode != "" || failureSummary != "" {
 		if failureCode != "" {
 			summary["latest_failure_code"] = failureCode
+		}
+		if failureCategory != "" {
+			summary["latest_failure_category"] = failureCategory
 		}
 		if failureSummary != "" {
 			summary["latest_failure_summary"] = failureSummary
@@ -1071,18 +1075,19 @@ func (s *Service) buildTaskRuntimeSummary(task runengine.TaskRecord) map[string]
 	return summary
 }
 
-func latestTaskFailure(task runengine.TaskRecord) (string, string) {
+func latestTaskFailure(task runengine.TaskRecord) (string, string, string) {
 	for index := len(task.AuditRecords) - 1; index >= 0; index-- {
 		record := task.AuditRecords[index]
 		if stringValue(record, "result", "") != "failed" {
 			continue
 		}
-		return firstNonEmptyString(stringValue(record, "action", ""), stringValue(record, "category", "")), firstNonEmptyString(stringValue(record, "summary", ""), stringValue(record, "reason", ""))
+		metadata := mapValue(record, "metadata")
+		return firstNonEmptyString(stringValue(metadata, "failure_code", ""), stringValue(record, "action", "")), firstNonEmptyString(stringValue(metadata, "failure_category", ""), stringValue(record, "type", "")), firstNonEmptyString(stringValue(record, "summary", ""), stringValue(record, "reason", ""))
 	}
 	if task.Status == "failed" {
-		return firstNonEmptyString(task.CurrentStep, "execution_failed"), firstNonEmptyString(stringValue(task.BubbleMessage, "text", ""), "任务执行失败")
+		return firstNonEmptyString(task.CurrentStep, "execution_failed"), "task_execution", firstNonEmptyString(stringValue(task.BubbleMessage, "text", ""), "任务执行失败")
 	}
-	return "", ""
+	return "", "", ""
 }
 
 func taskObservationSignals(task runengine.TaskRecord) []string {
@@ -2449,7 +2454,7 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 
 func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, pendingExecution map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, error) {
 	if s.executor == nil || s.executor.ScreenClient() == nil {
-		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, errors.New("screen capability unavailable"))
+		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, tools.ErrScreenCaptureNotSupported)
 		return failedTask, failureBubble, nil, nil
 	}
 	screenSession, err := s.executor.ScreenClient().StartSession(context.Background(), tools.ScreenSessionStartInput{
@@ -2832,10 +2837,24 @@ func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bo
 	if s.storage == nil || strings.TrimSpace(taskID) == "" {
 		return runengine.TaskRecord{}, false
 	}
+	taskRunTask, taskRunOK := s.taskDetailFromTaskRunStorage(taskID)
 	if s.storage.TaskStore() != nil {
 		if task, ok := s.taskDetailFromStructuredStorage(taskID); ok {
+			if taskRunOK {
+				task = mergeStructuredTaskDetailCompatibility(task, taskRunTask)
+			}
 			return task, true
 		}
+	}
+	if taskRunOK {
+		return taskRunTask, true
+	}
+	return runengine.TaskRecord{}, false
+}
+
+func (s *Service) taskDetailFromTaskRunStorage(taskID string) (runengine.TaskRecord, bool) {
+	if s.storage == nil || s.storage.TaskRunStore() == nil || strings.TrimSpace(taskID) == "" {
+		return runengine.TaskRecord{}, false
 	}
 	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
 	if err != nil {
@@ -2847,6 +2866,65 @@ func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bo
 		}
 	}
 	return runengine.TaskRecord{}, false
+}
+
+// mergeStructuredTaskDetailCompatibility fills task-detail fields that are
+// still sourced from task-run snapshots while the first-class task tables are
+// being rolled out. The structured row stays authoritative and the task-run
+// snapshot only backfills fields the structured read could not rebuild.
+func mergeStructuredTaskDetailCompatibility(task, taskRunTask runengine.TaskRecord) runengine.TaskRecord {
+	if task.FinishedAt == nil && taskRunTask.FinishedAt != nil {
+		task.FinishedAt = cloneTimePointer(taskRunTask.FinishedAt)
+	}
+	if len(task.BubbleMessage) == 0 {
+		task.BubbleMessage = cloneMap(taskRunTask.BubbleMessage)
+	}
+	if len(task.DeliveryResult) == 0 {
+		task.DeliveryResult = cloneMap(taskRunTask.DeliveryResult)
+	}
+	if len(task.Artifacts) == 0 {
+		task.Artifacts = cloneMapSlice(taskRunTask.Artifacts)
+	}
+	if len(task.Citations) == 0 {
+		task.Citations = cloneMapSlice(taskRunTask.Citations)
+	}
+	if len(task.AuditRecords) == 0 {
+		task.AuditRecords = cloneMapSlice(taskRunTask.AuditRecords)
+	}
+	if len(task.MirrorReferences) == 0 {
+		task.MirrorReferences = cloneMapSlice(taskRunTask.MirrorReferences)
+	}
+	if len(task.ApprovalRequest) == 0 {
+		task.ApprovalRequest = cloneMap(taskRunTask.ApprovalRequest)
+	}
+	if len(task.PendingExecution) == 0 {
+		task.PendingExecution = cloneMap(taskRunTask.PendingExecution)
+	}
+	if len(task.Authorization) == 0 {
+		task.Authorization = cloneMap(taskRunTask.Authorization)
+	}
+	if len(task.ImpactScope) == 0 {
+		task.ImpactScope = cloneMap(taskRunTask.ImpactScope)
+	}
+	if len(task.TokenUsage) == 0 {
+		task.TokenUsage = cloneMap(taskRunTask.TokenUsage)
+	}
+	if len(task.LatestEvent) == 0 {
+		task.LatestEvent = cloneMap(taskRunTask.LatestEvent)
+	}
+	if len(task.LatestToolCall) == 0 {
+		task.LatestToolCall = cloneMap(taskRunTask.LatestToolCall)
+	}
+	if strings.TrimSpace(task.LoopStopReason) == "" {
+		task.LoopStopReason = taskRunTask.LoopStopReason
+	}
+	if len(task.SteeringMessages) == 0 {
+		task.SteeringMessages = append([]string(nil), taskRunTask.SteeringMessages...)
+	}
+	if strings.TrimSpace(task.CurrentStepStatus) == "" {
+		task.CurrentStepStatus = taskRunTask.CurrentStepStatus
+	}
+	return task
 }
 
 func (s *Service) taskDetailFromStructuredStorage(taskID string) (runengine.TaskRecord, bool) {
@@ -5966,6 +6044,7 @@ func (s *Service) failExecutionTask(task runengine.TaskRecord, taskIntent map[st
 	auditAction := "execute_task"
 	auditTarget := impactScopeTarget(impactScope, targetPathFromIntent(taskIntent))
 	auditResult := "failed"
+	failureCode, failureCategory := classifyScreenFailure(task, err)
 	if errors.Is(err, execution.ErrRecoveryPointPrepareFailed) {
 		securityStatus = "execution_error"
 		stepName = "recovery_prepare_failed"
@@ -5978,10 +6057,56 @@ func (s *Service) failExecutionTask(task runengine.TaskRecord, taskIntent map[st
 	if !ok {
 		return task, bubble
 	}
+	updatedTask = s.attachFormalCitations(task, updatedTask, executionResult.ToolCalls, executionResult.ToolOutput, executionResult.DeliveryResult, executionResult.Artifacts)
 	auditRecord := s.writeGovernanceAuditRecord(updatedTask.TaskID, updatedTask.RunID, auditType, auditAction, bubbleText, auditTarget, auditResult)
+	if len(auditRecord) > 0 {
+		metadata := cloneMap(mapValue(auditRecord, "metadata"))
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
+		if failureCode != "" {
+			metadata["failure_code"] = failureCode
+		}
+		if failureCategory != "" {
+			metadata["failure_category"] = failureCategory
+		}
+		if len(metadata) > 0 {
+			auditRecord["metadata"] = metadata
+		}
+	}
 	budgetFailureAudit := s.buildBudgetFailureAudit(updatedTask, err)
 	updatedTask = s.appendAuditData(updatedTask, compactAuditRecords(auditRecord, budgetFailureAudit), nil)
 	return updatedTask, bubble
+}
+
+// classifyScreenFailure keeps screen-task runtime summaries and governance
+// metadata aligned with the formal protocol error names while still exposing a
+// task-facing failure category for UI grouping.
+func classifyScreenFailure(task runengine.TaskRecord, err error) (string, string) {
+	if stringValue(task.Intent, "name", "") != "screen_analyze" && task.SourceType != "screen_capture" {
+		return "", ""
+	}
+	lowerError := strings.ToLower(err.Error())
+	switch {
+	case errors.Is(err, tools.ErrApprovalRequired), errors.Is(err, tools.ErrScreenCaptureUnauthorized):
+		return "APPROVAL_REQUIRED", "screen_authorization"
+	case errors.Is(err, tools.ErrScreenCaptureNotSupported):
+		return "PLATFORM_NOT_SUPPORTED", "screen_capability"
+	case errors.Is(err, tools.ErrOCRWorkerFailed):
+		return "OCR_WORKER_FAILED", "screen_ocr"
+	case errors.Is(err, tools.ErrPlaywrightSidecarFailed), errors.Is(err, tools.ErrScreenCaptureFailed), errors.Is(err, tools.ErrScreenKeyframeSamplingFailed):
+		return "PLAYWRIGHT_SIDECAR_FAILED", "screen_capture"
+	case errors.Is(err, tools.ErrCapabilityDenied):
+		return "CAPABILITY_DENIED", "screen_capability"
+	case errors.Is(err, tools.ErrToolOutputInvalid):
+		return "TOOL_OUTPUT_INVALID", "screen_observation"
+	case errors.Is(err, tools.ErrScreenCaptureSessionExpired), strings.Contains(lowerError, "session"):
+		return "TOOL_EXECUTION_FAILED", "screen_session"
+	case strings.Contains(lowerError, "incomplete") || strings.Contains(lowerError, "empty") || strings.Contains(lowerError, "未识别"):
+		return "TOOL_OUTPUT_INVALID", "screen_observation"
+	default:
+		return "TOOL_EXECUTION_FAILED", "screen_analysis"
+	}
 }
 
 func executionFailureBubble(err error) string {

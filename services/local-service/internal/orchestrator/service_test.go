@@ -4718,19 +4718,47 @@ func TestServiceTaskDetailGetIncludesFailureSummaryForFailedScreenTask(t *testin
 			ScreenSummary: "release validation failed",
 		},
 	})
-	updatedTask, _ := service.failExecutionTask(task, task.Intent, execution.Result{}, tools.ErrOCRWorkerFailed)
+	updatedTask, _ := service.failExecutionTask(task, task.Intent, execution.Result{
+		Artifacts: []map[string]any{{
+			"artifact_id":   "art_screen_failure_detail",
+			"task_id":       task.TaskID,
+			"artifact_type": "screen_capture",
+			"title":         "build-dashboard.png",
+			"path":          "workspace/build-dashboard.png",
+			"mime_type":     "image/png",
+		}},
+		ToolOutput: map[string]any{
+			"citation_seed": map[string]any{
+				"artifact_id":       "art_screen_failure_detail",
+				"artifact_type":     "screen_capture",
+				"evidence_role":     "error_evidence",
+				"ocr_excerpt":       "Fatal build error",
+				"screen_session_id": "screen_session_failure_detail",
+			},
+		},
+	}, tools.ErrOCRWorkerFailed)
 
 	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": updatedTask.TaskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
 	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["latest_failure_code"] != "OCR_WORKER_FAILED" {
+		t.Fatalf("expected failed screen task to expose formal latest_failure_code, got %+v", runtimeSummary)
+	}
+	if runtimeSummary["latest_failure_category"] != "screen_ocr" {
+		t.Fatalf("expected failed screen task to expose latest_failure_category, got %+v", runtimeSummary)
+	}
 	if runtimeSummary["latest_failure_summary"] == nil {
 		t.Fatalf("expected failed screen task to expose latest_failure_summary, got %+v", runtimeSummary)
 	}
 	observationSignals := runtimeSummary["observation_signals"].([]string)
 	if len(observationSignals) == 0 {
 		t.Fatalf("expected failed screen task to expose observation signals, got %+v", runtimeSummary)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["source_ref"] != "art_screen_failure_detail" {
+		t.Fatalf("expected failed screen task to retain formal citations, got %+v", citations)
 	}
 }
 
@@ -7526,6 +7554,102 @@ func TestServiceTaskDetailGetPrefersStructuredTaskStoreFallback(t *testing.T) {
 	arguments := intent["arguments"].(map[string]any)
 	if arguments["style"] != "key_points" {
 		t.Fatalf("expected structured task detail to preserve intent arguments, got %+v", intent)
+	}
+}
+
+func TestServiceTaskDetailGetStructuredFallbackBackfillsTaskRunEvidence(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured screen detail evidence")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_screen_evidence"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_screen",
+		RunID:               "run_structured_screen_evidence",
+		Title:               "structured screen evidence task",
+		SourceType:          "screen_capture",
+		Status:              "failed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "bubble",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "generate_output",
+		CurrentStepStatus:   "failed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 13, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 13, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 13, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_screen_evidence",
+		TaskID:        taskID,
+		Name:          "generate_output",
+		Status:        "failed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 13, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 13, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+	if err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      taskID,
+		SessionID:   "sess_structured_screen",
+		RunID:       "run_structured_screen_evidence",
+		Title:       "structured screen evidence task",
+		SourceType:  "screen_capture",
+		Status:      "failed",
+		Intent:      map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 15, 13, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 15, 13, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 15, 13, 6, 0, 0, time.UTC)),
+		Citations: []map[string]any{{
+			"citation_id": "cit_task_structured_screen_evidence_art_structured_screen_evidence",
+			"task_id":     taskID,
+			"run_id":      "run_structured_screen_evidence",
+			"source_type": "file",
+			"source_ref":  "art_structured_screen_evidence",
+			"label":       "error_evidence | screen_capture | fatal build error",
+		}},
+		AuditRecords: []map[string]any{{
+			"audit_id":   "audit_structured_screen_evidence",
+			"task_id":    taskID,
+			"type":       "execution",
+			"action":     "execute_task",
+			"summary":    "OCR worker failed while analyzing the screen.",
+			"target":     "workspace/structured-screen.png",
+			"result":     "failed",
+			"created_at": "2026-04-15T13:05:00Z",
+			"metadata": map[string]any{
+				"failure_code":     "OCR_WORKER_FAILED",
+				"failure_category": "screen_ocr",
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("save task run with structured fallback evidence failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["latest_failure_code"] != "OCR_WORKER_FAILED" || runtimeSummary["latest_failure_category"] != "screen_ocr" {
+		t.Fatalf("expected structured fallback to backfill failure metadata, got %+v", runtimeSummary)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["source_ref"] != "art_structured_screen_evidence" {
+		t.Fatalf("expected structured fallback to backfill citations, got %+v", citations)
 	}
 }
 
