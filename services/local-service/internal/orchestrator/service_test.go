@@ -4753,12 +4753,46 @@ func TestServiceTaskDetailGetIncludesFailureSummaryForFailedScreenTask(t *testin
 		t.Fatalf("expected failed screen task to expose latest_failure_summary, got %+v", runtimeSummary)
 	}
 	observationSignals := runtimeSummary["observation_signals"].([]string)
-	if len(observationSignals) == 0 {
-		t.Fatalf("expected failed screen task to expose observation signals, got %+v", runtimeSummary)
+	if !reflect.DeepEqual(observationSignals, []string{"screen_summary", "visible_text", "page_title"}) {
+		t.Fatalf("expected failed screen task to expose stable observation signals, got %+v", runtimeSummary)
 	}
 	citations := detailResult["citations"].([]map[string]any)
 	if len(citations) != 1 || citations[0]["source_ref"] != "art_screen_failure_detail" {
 		t.Fatalf("expected failed screen task to retain formal citations, got %+v", citations)
+	}
+}
+
+func TestLatestTaskFailurePrefersStructuredFailureMetadataOverBudgetSignals(t *testing.T) {
+	task := runengine.TaskRecord{
+		TaskID: "task_failure_signal_priority",
+		Status: "failed",
+		RunID:  "run_failure_signal_priority",
+		AuditRecords: []map[string]any{{
+			"type":    "execution",
+			"action":  "execute_task",
+			"result":  "failed",
+			"summary": "OCR worker failed while analyzing the current screen.",
+			"metadata": map[string]any{
+				"failure_code":     "OCR_WORKER_FAILED",
+				"failure_category": "screen_ocr",
+			},
+		}, {
+			"category": "budget_auto_downgrade",
+			"action":   "budget_auto_downgrade.failure_signal",
+			"result":   "failed",
+			"reason":   model.ErrClientNotConfigured.Error(),
+		}},
+	}
+
+	failureCode, failureCategory, failureSummary := latestTaskFailure(task)
+	if failureCode != "OCR_WORKER_FAILED" {
+		t.Fatalf("expected latestTaskFailure to keep structured failure_code, got %q", failureCode)
+	}
+	if failureCategory != "screen_ocr" {
+		t.Fatalf("expected latestTaskFailure to keep structured failure_category, got %q", failureCategory)
+	}
+	if !strings.Contains(failureSummary, "OCR worker failed") {
+		t.Fatalf("expected latestTaskFailure to keep structured failure summary, got %q", failureSummary)
 	}
 }
 

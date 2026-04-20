@@ -1076,13 +1076,29 @@ func (s *Service) buildTaskRuntimeSummary(task runengine.TaskRecord) map[string]
 }
 
 func latestTaskFailure(task runengine.TaskRecord) (string, string, string) {
+	var fallbackCode string
+	var fallbackCategory string
+	var fallbackSummary string
 	for index := len(task.AuditRecords) - 1; index >= 0; index-- {
 		record := task.AuditRecords[index]
 		if stringValue(record, "result", "") != "failed" {
 			continue
 		}
 		metadata := mapValue(record, "metadata")
-		return firstNonEmptyString(stringValue(metadata, "failure_code", ""), stringValue(record, "action", "")), firstNonEmptyString(stringValue(metadata, "failure_category", ""), stringValue(record, "type", "")), firstNonEmptyString(stringValue(record, "summary", ""), stringValue(record, "reason", ""))
+		failureCode := strings.TrimSpace(stringValue(metadata, "failure_code", ""))
+		failureCategory := strings.TrimSpace(stringValue(metadata, "failure_category", ""))
+		failureSummary := firstNonEmptyString(stringValue(record, "summary", ""), stringValue(record, "reason", ""))
+		if failureCode != "" || failureCategory != "" {
+			return firstNonEmptyString(failureCode, stringValue(record, "action", "")), firstNonEmptyString(failureCategory, firstNonEmptyString(stringValue(record, "type", ""), stringValue(record, "category", ""))), failureSummary
+		}
+		if fallbackCode == "" && fallbackCategory == "" && fallbackSummary == "" {
+			fallbackCode = firstNonEmptyString(stringValue(record, "action", ""), firstNonEmptyString(stringValue(record, "type", ""), stringValue(record, "category", "")))
+			fallbackCategory = firstNonEmptyString(stringValue(record, "type", ""), stringValue(record, "category", ""))
+			fallbackSummary = failureSummary
+		}
+	}
+	if fallbackCode != "" || fallbackCategory != "" || fallbackSummary != "" {
+		return fallbackCode, fallbackCategory, fallbackSummary
 	}
 	if task.Status == "failed" {
 		return firstNonEmptyString(task.CurrentStep, "execution_failed"), "task_execution", firstNonEmptyString(stringValue(task.BubbleMessage, "text", ""), "任务执行失败")
@@ -1091,13 +1107,21 @@ func latestTaskFailure(task runengine.TaskRecord) (string, string, string) {
 }
 
 func taskObservationSignals(task runengine.TaskRecord) []string {
-	result := make([]string, 0, 5)
-	for _, value := range []string{task.Snapshot.ScreenSummary, task.Snapshot.VisibleText, task.Snapshot.PageTitle, task.Snapshot.WindowTitle} {
-		trimmed := strings.TrimSpace(value)
-		if trimmed == "" {
+	result := make([]string, 0, 4)
+	observationSources := []struct {
+		signal string
+		value  string
+	}{
+		{signal: "screen_summary", value: task.Snapshot.ScreenSummary},
+		{signal: "visible_text", value: task.Snapshot.VisibleText},
+		{signal: "page_title", value: task.Snapshot.PageTitle},
+		{signal: "window_title", value: task.Snapshot.WindowTitle},
+	}
+	for _, item := range observationSources {
+		if strings.TrimSpace(item.value) == "" {
 			continue
 		}
-		result = append(result, truncateText(trimmed, 48))
+		result = append(result, item.signal)
 	}
 	return uniqueTrimmedStrings(result)
 }
