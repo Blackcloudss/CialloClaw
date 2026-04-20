@@ -1161,6 +1161,24 @@ func TestServiceSecurityRespondResumesQueuedScreenAnalyzeTaskThroughApproval(t *
 	if screenResult["task"].(map[string]any)["status"] != "completed" {
 		t.Fatalf("expected queued screen task to complete after approval, got %+v", screenResult["task"])
 	}
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": secondTaskID})
+	if err != nil {
+		t.Fatalf("task detail get for queued screen task failed: %v", err)
+	}
+	if detailResult["approval_request"] != nil {
+		t.Fatalf("expected completed queued screen task to clear approval_request, got %+v", detailResult["approval_request"])
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 {
+		t.Fatalf("expected queued screen task detail to retain one formal citation, got %+v", citations)
+	}
+	if !strings.Contains(stringValue(citations[0], "label", ""), "error_evidence") {
+		t.Fatalf("expected queued screen task citation to preserve evidence role, got %+v", citations[0])
+	}
+	securitySummary := detailResult["security_summary"].(map[string]any)
+	if securitySummary["latest_restore_point"] == nil {
+		t.Fatalf("expected queued screen task detail to retain recovery point summary, got %+v", securitySummary)
+	}
 }
 
 func TestServiceConfirmTaskRejectsUnknownIntentWithoutCorrection(t *testing.T) {
@@ -5410,6 +5428,40 @@ func TestServiceStartTaskInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T)
 	}
 	if stringValue(record.PendingExecution, "target_object", "") != "Build Dashboard" {
 		t.Fatalf("expected inferred screen target to use page context, got %+v", record.PendingExecution)
+	}
+}
+
+func TestServiceStartTaskInfersScreenAnalyzeTitleFromScreenSummaryWhenTitlesAreMissing(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_summary_title",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "看看当前屏幕上哪里出错了",
+		},
+		"context": map[string]any{
+			"screen": map[string]any{
+				"summary":      "release validation failed before publish",
+				"visible_text": "fatal build error",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start inferred screen task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if !strings.Contains(stringValue(task, "title", ""), "release validation") {
+		t.Fatalf("expected screen summary to drive inferred task title, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	arguments := intentValue["arguments"].(map[string]any)
+	if arguments["screen_summary"] != "release validation failed before publish" || arguments["visible_text"] != "fatal build error" {
+		t.Fatalf("expected inferred intent to preserve screen summary and visible text, got %+v", arguments)
 	}
 }
 

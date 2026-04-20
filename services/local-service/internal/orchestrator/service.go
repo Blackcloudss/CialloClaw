@@ -629,7 +629,13 @@ func inferredScreenTaskTitle(snapshot contextsvc.TaskContextSnapshot) string {
 }
 
 func screenSubjectFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
-	return firstNonEmptyString(snapshot.PageTitle, firstNonEmptyString(snapshot.WindowTitle, "当前屏幕"))
+	return firstNonEmptyString(
+		snapshot.PageTitle,
+		firstNonEmptyString(
+			snapshot.WindowTitle,
+			firstNonEmptyString(snapshot.ScreenSummary, firstNonEmptyString(snapshot.VisibleText, "当前屏幕")),
+		),
+	)
 }
 
 func screenTargetObject(arguments map[string]any) string {

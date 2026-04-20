@@ -1923,7 +1923,24 @@ test("TaskDetailPanel keeps evidence artifacts scoped to formal citation links",
   assert.match(panelSource, /const evidenceArtifactRefs = new Set\(evidenceItems\.map\(\(citation\) => citation\.source_ref\)\)/);
   assert.match(panelSource, /const evidenceArtifacts = artifactItems\.filter\(\(artifact\) => evidenceArtifactRefs\.has\(artifact\.artifact_id\) \|\| evidenceArtifactRefs\.has\(artifact\.path\)\)/);
   assert.match(panelSource, /const outputArtifacts = artifactItems\.filter\(\(artifact\) => !evidenceArtifactRefs\.has\(artifact\.artifact_id\) && !evidenceArtifactRefs\.has\(artifact\.path\)\)/);
+  assert.match(panelSource, /const formalEvidenceCount = new Set\(/);
+  assert.match(panelSource, /return sourceRef\.length > 0 \? sourceRef : citation\.citation_id/);
   assert.doesNotMatch(panelSource, /artifactItems\.map\(\(artifact\) => \(/);
+});
+
+test("TaskDetailPanel renders a formal screen governance section only for screen tasks with synced detail", () => {
+  const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
+
+  assert.match(panelSource, /const isScreenTask = task\.source_type === "screen_capture" \|\| detail\.task\.intent\?\.name === "screen_analyze"/);
+  assert.match(panelSource, /if \(!isScreenTask \|\| shouldDeferSecuritySummary\) \{/);
+  assert.match(panelSource, /Screen Governance/);
+  assert.match(panelSource, /屏幕授权、恢复与失败收口/);
+  assert.match(panelSource, /该区域只消费正式 `approval_request`、`recovery_point` 与 `runtime_summary` 字段/);
+  assert.match(panelSource, /runtimeSummary\.latest_failure_category/);
+  assert.match(panelSource, /detail\.approval_request/);
+  assert.match(panelSource, /detail\.security_summary\.latest_restore_point/);
+  assert.match(panelSource, /formalEvidenceCount/);
+  assert.doesNotMatch(panelSource, /evidenceItems\.length \+ evidenceArtifacts\.length/);
 });
 
 test("TaskDetailPanel keeps runtime sections visible for ended tasks and preserves steering draft until success", () => {
