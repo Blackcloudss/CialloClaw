@@ -391,6 +391,7 @@ type LoopRuntimeStore interface {
 	SaveSteps(ctx context.Context, records []StepRecord) error
 	SaveEvents(ctx context.Context, records []EventRecord) error
 	SaveDeliveryResult(ctx context.Context, record DeliveryResultRecord) error
+	GetLatestDeliveryResult(ctx context.Context, taskID string) (DeliveryResultRecord, bool, error)
 	ListEvents(ctx context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]EventRecord, int, error)
 }
 

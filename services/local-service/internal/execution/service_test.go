@@ -60,6 +60,21 @@ func (s *recordingLoopRuntimeStore) SaveDeliveryResult(_ context.Context, record
 	return nil
 }
 
+func (s *recordingLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, taskID string) (storage.DeliveryResultRecord, bool, error) {
+	var latest storage.DeliveryResultRecord
+	found := false
+	for _, record := range s.deliveryResults {
+		if record.TaskID != taskID {
+			continue
+		}
+		if !found || record.CreatedAt > latest.CreatedAt {
+			latest = record
+			found = true
+		}
+	}
+	return latest, found, nil
+}
+
 func (s *recordingLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]storage.EventRecord, int, error) {
 	filtered := make([]storage.EventRecord, 0, len(s.events))
 	fromTime := time.Time{}

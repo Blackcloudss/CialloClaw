@@ -3006,6 +3006,31 @@ func mergeStructuredTaskDetailCompatibility(task, taskRunTask runengine.TaskReco
 	return task
 }
 
+// latestDeliveryResultFromStorage restores the newest first-class
+// delivery_result when structured task detail cannot rely on task_run
+// compatibility snapshots anymore.
+func (s *Service) latestDeliveryResultFromStorage(taskID string) map[string]any {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	record, ok, err := s.storage.LoopRuntimeStore().GetLatestDeliveryResult(context.Background(), taskID)
+	if err != nil || !ok {
+		return nil
+	}
+	payload := map[string]any{}
+	if strings.TrimSpace(record.PayloadJSON) != "" {
+		if err := json.Unmarshal([]byte(record.PayloadJSON), &payload); err != nil {
+			payload = map[string]any{}
+		}
+	}
+	return map[string]any{
+		"type":         record.Type,
+		"title":        record.Title,
+		"payload":      payload,
+		"preview_text": record.PreviewText,
+	}
+}
+
 func (s *Service) taskDetailFromStructuredStorage(taskID string) (runengine.TaskRecord, bool) {
 	record, err := s.storage.TaskStore().GetTask(context.Background(), taskID)
 	if err != nil {
@@ -3314,6 +3339,9 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (rune
 func (s *Service) hydrateStructuredTaskGovernance(task *runengine.TaskRecord) {
 	if s == nil || s.storage == nil || task == nil {
 		return
+	}
+	if len(task.DeliveryResult) == 0 {
+		task.DeliveryResult = s.latestDeliveryResultFromStorage(task.TaskID)
 	}
 	securitySummary := cloneMap(task.SecuritySummary)
 	if securitySummary == nil {

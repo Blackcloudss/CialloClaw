@@ -7860,6 +7860,78 @@ func TestServiceTaskDetailGetStructuredFallbackBackfillsTaskRunEvidence(t *testi
 	}
 }
 
+func TestServiceTaskDetailGetStructuredFallbackReadsFormalDeliveryFromLoopStore(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task detail delivery fallback")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime storage to be wired")
+	}
+	taskID := "task_structured_delivery_only"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_delivery",
+		RunID:               "run_structured_delivery_only",
+		Title:               "structured delivery only task",
+		SourceType:          "screen_capture",
+		Status:              "completed",
+		IntentName:          "screen_analyze",
+		IntentArgumentsJSON: `{"language":"eng"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 14, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_delivery_only",
+		TaskID:        taskID,
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:     time.Date(2026, 4, 15, 14, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_" + taskID,
+		TaskID:           taskID,
+		Type:             "task_detail",
+		Title:            "结构化交付结果",
+		PayloadJSON:      `{"task_id":"` + taskID + `","path":"workspace/structured-delivery.md","url":null}`,
+		PreviewText:      "formal delivery from loop store",
+		CreatedAt:        "2026-04-15T14:06:00Z",
+	}); err != nil {
+		t.Fatalf("save loop runtime delivery result failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured fallback to read delivery_result from loop store, got %+v", detailResult["delivery_result"])
+	}
+	if deliveryResult["title"] != "结构化交付结果" || deliveryResult["preview_text"] != "formal delivery from loop store" {
+		t.Fatalf("unexpected loop-store delivery result: %+v", deliveryResult)
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	if payload["path"] != "workspace/structured-delivery.md" || payload["task_id"] != taskID {
+		t.Fatalf("expected loop-store delivery payload to stay intact, got %+v", payload)
+	}
+}
+
 func TestServiceTaskDetailGetStructuredFallbackRehydratesApprovalRequest(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "structured task detail approval")
 	if service.storage == nil {

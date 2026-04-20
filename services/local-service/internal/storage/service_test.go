@@ -619,6 +619,13 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	if total != 1 || len(events) != 1 || events[0].Type != "loop.completed" {
 		t.Fatalf("unexpected loop events: total=%d items=%+v", total, events)
 	}
+	deliveryResult, ok, err := store.GetLatestDeliveryResult(context.Background(), "task_loop_001")
+	if err != nil {
+		t.Fatalf("GetLatestDeliveryResult returned error: %v", err)
+	}
+	if !ok || deliveryResult.DeliveryResultID != "delivery_result_001" || deliveryResult.PreviewText != "loop preview" {
+		t.Fatalf("unexpected latest delivery_result: ok=%v record=%+v", ok, deliveryResult)
+	}
 }
 
 func TestServiceTaskStoresTrackStructuredTaskRecordsFromTaskRunSnapshots(t *testing.T) {

@@ -115,6 +115,23 @@ func (s *inMemoryLoopRuntimeStore) SaveDeliveryResult(_ context.Context, record 
 	return nil
 }
 
+func (s *inMemoryLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, taskID string) (DeliveryResultRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	latest := DeliveryResultRecord{}
+	found := false
+	for _, record := range s.deliveryResults {
+		if record.TaskID != taskID {
+			continue
+		}
+		if !found || parseGovernanceTime(record.CreatedAt).After(parseGovernanceTime(latest.CreatedAt)) {
+			latest = record
+			found = true
+		}
+	}
+	return latest, found, nil
+}
+
 func (s *inMemoryLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]EventRecord, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -216,6 +233,26 @@ func (s *SQLiteLoopRuntimeStore) SaveDeliveryResult(ctx context.Context, record 
 		return fmt.Errorf("write delivery_result record: %w", err)
 	}
 	return nil
+}
+
+func (s *SQLiteLoopRuntimeStore) GetLatestDeliveryResult(ctx context.Context, taskID string) (DeliveryResultRecord, bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT delivery_result_id, task_id, type, title, payload_json, preview_text, created_at
+		FROM delivery_results
+		WHERE task_id = ?
+		ORDER BY created_at DESC, delivery_result_id DESC
+		LIMIT 1
+	`, taskID)
+	var record DeliveryResultRecord
+	var previewText sql.NullString
+	if err := row.Scan(&record.DeliveryResultID, &record.TaskID, &record.Type, &record.Title, &record.PayloadJSON, &previewText, &record.CreatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return DeliveryResultRecord{}, false, nil
+		}
+		return DeliveryResultRecord{}, false, fmt.Errorf("get latest delivery_result: %w", err)
+	}
+	record.PreviewText = previewText.String
+	return record, true, nil
 }
 
 func (s *SQLiteLoopRuntimeStore) ListEvents(ctx context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]EventRecord, int, error) {
