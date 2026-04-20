@@ -92,13 +92,13 @@ body[data-app-window="shell-ball"],
 
 .shell-ball-surface {
   --shell-ball-scale: 0.5;
+  --shell-ball-stage-anchor-x: 50%;
+  --shell-ball-stage-anchor-y: 50%;
+  --shell-ball-input-anchor-offset-y: 6.35rem;
+  --shell-ball-input-proxy-offset-y: 5.65rem;
+  --shell-ball-voice-frame-size: 15.5rem;
   --shell-ball-transition-scale: 1;
   --shell-ball-transition-opacity: 1;
-  --shell-ball-canvas-size: 800px;
-  --shell-ball-anchor-x: 400px;
-  --shell-ball-anchor-y: 470px;
-  --shell-ball-bubble-top: 110px;
-  --shell-ball-input-top: 540px;
   --shell-ball-paper: rgba(255, 251, 244, 0.88);
   --shell-ball-paper-strong: rgba(255, 253, 249, 0.96);
   --shell-ball-paper-soft: rgba(251, 246, 238, 0.72);
@@ -112,24 +112,22 @@ body[data-app-window="shell-ball"],
   --shell-ball-teal: #4f9da7;
   --shell-ball-slate: #8f9aa5;
   color: var(--shell-ball-ink);
-  display: grid;
-  gap: 0.26rem;
-  justify-items: center;
+  display: block;
   margin: 0;
   max-width: none;
-  min-height: 0;
+  min-height: 100%;
   opacity: var(--shell-ball-transition-opacity);
   overflow: hidden;
   padding: 0;
   pointer-events: none;
   position: relative;
-  transform: scale(var(--shell-ball-transition-scale));
-  transform-origin: center;
+  transform: scale(calc(var(--shell-ball-scale) * var(--shell-ball-transition-scale)));
+  transform-origin: center center;
   transition:
     opacity 260ms cubic-bezier(0.22, 1, 0.36, 1),
     transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
-  width: var(--shell-ball-canvas-size);
-  height: var(--shell-ball-canvas-size);
+  width: 100%;
+  height: 100%;
 }
 
 .shell-ball-surface[data-dashboard-transition-phase="opening"],
@@ -164,34 +162,6 @@ body[data-app-window="shell-ball"],
   pointer-events: none;
 }
 
-.shell-ball-surface__interaction-shell {
-  inset: 0;
-  position: absolute;
-}
-
-.shell-ball-surface__interaction-zone,
-.shell-ball-surface__body {
-  height: 100%;
-  position: relative;
-  width: 100%;
-}
-
-.shell-ball-surface__mascot-shell {
-  left: var(--shell-ball-anchor-x);
-  position: absolute;
-  top: var(--shell-ball-anchor-y);
-  transform: translate(-50%, -50%) scale(var(--shell-ball-scale));
-  transform-origin: center;
-}
-
-.shell-ball-surface__overlay {
-  left: var(--shell-ball-anchor-x);
-  position: absolute;
-  top: var(--shell-ball-anchor-y);
-  transform: translate(-50%, -50%);
-  z-index: 7;
-}
-
 .shell-ball-switcher {
   pointer-events: auto;
 }
@@ -203,18 +173,37 @@ body[data-app-window="shell-ball"],
 }
 
 .shell-ball-surface__slot {
-  left: var(--shell-ball-anchor-x);
+  display: grid;
+  justify-items: center;
+  left: var(--shell-ball-stage-anchor-x);
   position: absolute;
-  transform: translateX(-50%);
-  width: max-content;
+  width: fit-content;
+  z-index: 5;
 }
 
+.shell-ball-surface__slot--top,
 .shell-ball-surface__slot--bottom {
-  top: var(--shell-ball-input-top);
+  transform: scale(calc(1 / var(--shell-ball-scale)));
 }
 
 .shell-ball-surface__slot--top {
-  top: var(--shell-ball-bubble-top);
+  transform-origin: bottom center;
+}
+
+.shell-ball-surface__slot--bottom {
+  top: calc(var(--shell-ball-stage-anchor-y) + var(--shell-ball-input-anchor-offset-y));
+  transform-origin: top center;
+  transform: translateX(-50%) scale(calc(1 / var(--shell-ball-scale)));
+}
+
+.shell-ball-voice-window {
+  height: var(--shell-ball-voice-frame-size);
+  left: var(--shell-ball-stage-anchor-x);
+  position: absolute;
+  top: var(--shell-ball-stage-anchor-y);
+  transform: translate(-50%, -50%) scale(calc(1 / var(--shell-ball-scale)));
+  transform-origin: center;
+  width: var(--shell-ball-voice-frame-size);
 }
 
 .shell-ball-switcher__eyebrow,
@@ -545,37 +534,45 @@ body[data-app-window="shell-ball"],
 
 .shell-ball-surface__interaction-shell {
   display: grid;
+  height: 100%;
   justify-items: center;
-  width: auto;
+  width: 100%;
 }
 
 .shell-ball-surface__interaction-zone {
   align-items: center;
   display: grid;
+  height: 100%;
   justify-items: center;
-  width: auto;
+  position: relative;
+  width: 100%;
 }
 
 .shell-ball-surface__body {
-  align-items: center;
-  display: grid;
-  gap: 0;
-  justify-items: center;
-  min-height: 0;
-  padding: 0 0 1.02rem;
+  height: 100%;
+  inset: 0;
+  min-height: 100%;
+  padding: 0;
   position: relative;
-  width: var(--shell-ball-helper-width);
+  width: 100%;
 }
 
 .shell-ball-surface__mascot-shell {
   align-items: center;
   display: flex;
   justify-content: center;
+  left: var(--shell-ball-stage-anchor-x);
+  position: absolute;
+  top: var(--shell-ball-stage-anchor-y);
+  transform: translate(-50%, -50%);
   width: max-content;
+  z-index: 4;
 }
 
 .shell-ball-surface__overlay {
+  inset: 0;
   pointer-events: none;
+  position: absolute;
   z-index: 7;
 }
 
@@ -585,13 +582,13 @@ body[data-app-window="shell-ball"],
   border-bottom: 2px solid rgba(91, 103, 118, 0.34);
   border-radius: 0;
   display: block;
-  left: var(--shell-ball-anchor-x);
+  left: 50%;
   height: 1.6rem;
   margin-top: 0;
   opacity: 0;
   pointer-events: none;
   position: absolute;
-  top: calc(var(--shell-ball-anchor-y) + 54px);
+  top: calc(var(--shell-ball-stage-anchor-y) + var(--shell-ball-input-proxy-offset-y));
   transform: translateX(-50%);
   width: var(--shell-ball-helper-width);
 }
