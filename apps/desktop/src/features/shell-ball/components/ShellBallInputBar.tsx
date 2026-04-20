@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ChangeEvent, CompositionEvent, KeyboardEvent } from "react";
 import styled from "styled-components";
 import { ArrowUp, Paperclip } from "lucide-react";
@@ -45,7 +45,9 @@ export function ShellBallInputBar({
 }: ShellBallInputBarProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const compositionActiveRef = useRef(false);
+  const focusHighlightTimerRef = useRef<number | null>(null);
   const trimmedValue = value.trim();
+  const [delayedHighlightVisible, setDelayedHighlightVisible] = useState(false);
   const isHidden = mode === "hidden";
   const isInteractive = mode === "interactive";
   const isReadonly = mode === "readonly";
@@ -65,6 +67,14 @@ export function ShellBallInputBar({
 
     field.style.height = `${nextHeight}px`;
   }, [value]);
+
+  useEffect(() => {
+    return () => {
+      if (focusHighlightTimerRef.current !== null) {
+        window.clearTimeout(focusHighlightTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (inputRef.current === null) {
@@ -116,6 +126,27 @@ export function ShellBallInputBar({
     onCompositionStateChange(false);
   }
 
+  function clearDelayedHighlightTimer() {
+    if (focusHighlightTimerRef.current === null) {
+      return;
+    }
+
+    window.clearTimeout(focusHighlightTimerRef.current);
+    focusHighlightTimerRef.current = null;
+  }
+
+  function armDelayedHighlight() {
+    clearDelayedHighlightTimer();
+    setDelayedHighlightVisible(false);
+
+    // Delay the textarea fill so the shell-ball keeps its lighter idle look
+    // until the user intentionally stays in the field.
+    focusHighlightTimerRef.current = window.setTimeout(() => {
+      setDelayedHighlightVisible(true);
+      focusHighlightTimerRef.current = null;
+    }, 2000);
+  }
+
   const hiddenState = isHidden || isVoice;
 
   return (
@@ -123,6 +154,7 @@ export function ShellBallInputBar({
       data-filled={trimmedValue !== "" ? "true" : "false"}
       data-hidden={hiddenState ? "true" : "false"}
       data-mode={mode}
+      data-delayed-highlight={delayedHighlightVisible ? "true" : "false"}
       data-voice-preview={voicePreview ?? undefined}
     >
       <div className="shell-ball-uiverse-inputbox">
@@ -135,8 +167,14 @@ export function ShellBallInputBar({
           onCompositionStart={handleCompositionStart}
           onCompositionEnd={handleCompositionEnd}
           onKeyDown={handleKeyDown}
-          onFocus={() => onFocusChange(true)}
+          onFocus={() => {
+            onFocusChange(true);
+            armDelayedHighlight();
+          }}
           onBlur={() => {
+            clearDelayedHighlightTimer();
+            setDelayedHighlightVisible(false);
+
             if (compositionActiveRef.current) {
               return;
             }
@@ -201,11 +239,10 @@ const StyledInputBar = styled.div`
     position: relative;
     width: 100%;
     padding: 10px;
-    background: rgba(128, 128, 128, 0.24);
+    background: transparent;
     outline: none;
     box-shadow: none;
     border: none;
-    border-radius: 4px;
     caret-color: rgba(255, 255, 255, 0.96);
     color: rgba(255, 255, 255, 0.96);
     font-size: 1em;
@@ -219,6 +256,11 @@ const StyledInputBar = styled.div`
     resize: none;
     transition: 0.5s;
     z-index: 10;
+  }
+
+  &[data-delayed-highlight="true"] .shell-ball-uiverse-inputbox textarea {
+    background: rgba(128, 128, 128, 0.24);
+    border-radius: 4px;
   }
 
   .shell-ball-uiverse-inputbox textarea::-webkit-scrollbar {
@@ -260,8 +302,8 @@ const StyledInputBar = styled.div`
   .shell-ball-uiverse-inputbox textarea:valid ~ i,
   .shell-ball-uiverse-inputbox textarea:focus ~ i,
   &[data-filled="true"] .shell-ball-uiverse-inputbox i {
-    height: 2px;
-    background: rgba(128, 128, 128, 0.42);
+    height: 44px;
+    background: rgba(128, 128, 128, 0.24);
   }
 
   .shell-ball-uiverse-actions {
