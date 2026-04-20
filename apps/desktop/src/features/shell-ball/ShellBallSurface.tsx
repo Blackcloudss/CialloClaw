@@ -175,7 +175,12 @@ export function ShellBallSurface({
                   value=""
                   onChange={() => {}}
                 />
-                <div ref={mascotRef} className="shell-ball-surface__mascot-shell">
+                <div
+                  ref={mascotRef}
+                  className="shell-ball-surface__mascot-shell"
+                  onPointerEnter={onRegionEnter}
+                  onPointerLeave={onRegionLeave}
+                >
                   <ShellBallMascot
                     visualState={visualState}
                     voicePreview={voicePreview}
@@ -194,7 +199,11 @@ export function ShellBallSurface({
                     onPressCancel={onPressCancel}
                   />
                 </div>
-                {overlayContent ? <div className="shell-ball-surface__overlay">{overlayContent}</div> : null}
+                {overlayContent ? (
+                  <div className="shell-ball-surface__overlay">
+                    <div className="shell-ball-surface__voice-anchor">{overlayContent}</div>
+                  </div>
+                ) : null}
                 <button
                   aria-hidden={!showInputProxy}
                   className="shell-ball-surface__input-line-proxy"
@@ -207,7 +216,11 @@ export function ShellBallSurface({
               </div>
             </section>
         </div>
-        {bottomContent ? <div className="shell-ball-surface__slot shell-ball-surface__slot--bottom">{bottomContent}</div> : null}
+        {bottomContent ? (
+          <div className="shell-ball-surface__slot shell-ball-surface__slot--bottom">
+            <div className="shell-ball-surface__slot-visual shell-ball-surface__slot-visual--bottom">{bottomContent}</div>
+          </div>
+        ) : null}
         {children ? <div className="shell-ball-surface__stack">{children}</div> : null}
       </div>
     </div>

@@ -183,6 +183,12 @@ body[data-app-window="shell-ball"],
   z-index: 5;
 }
 
+.shell-ball-surface__slot-visual {
+  display: grid;
+  justify-items: center;
+  width: fit-content;
+}
+
 .shell-ball-surface__slot--top,
 .shell-ball-surface__slot--bottom {
   transform: scale(calc(1 / var(--shell-ball-scale)));
@@ -195,16 +201,26 @@ body[data-app-window="shell-ball"],
 .shell-ball-surface__slot--bottom {
   top: calc(var(--shell-ball-stage-anchor-y) + var(--shell-ball-input-anchor-offset-y));
   transform-origin: top center;
-  transform: translateX(-50%) scale(calc(1 / var(--shell-ball-scale)));
+  transform: translateX(-50%);
+}
+
+.shell-ball-surface__slot-visual--bottom {
+  transform: scale(calc(1 / var(--shell-ball-scale)));
+  transform-origin: top center;
 }
 
 .shell-ball-voice-window {
+  height: 100%;
+  position: relative;
+  width: 100%;
+}
+
+.shell-ball-surface__voice-anchor {
   height: var(--shell-ball-voice-frame-size);
   left: var(--shell-ball-stage-anchor-x);
   position: absolute;
   top: var(--shell-ball-stage-anchor-y);
-  transform: translate(-50%, -50%) scale(calc(1 / var(--shell-ball-scale)));
-  transform-origin: center;
+  transform: translate(-50%, -50%);
   width: var(--shell-ball-voice-frame-size);
 }
 

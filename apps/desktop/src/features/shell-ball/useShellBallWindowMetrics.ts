@@ -144,10 +144,12 @@ export function measureShellBallContentSize(element: ShellBallMeasurableElement,
   const rect = element.getBoundingClientRect();
 
   if (element instanceof HTMLElement && element.classList.contains("shell-ball-surface")) {
+    // The merged ball window measures only stable anchor wrappers so visual
+    // nudges inside those wrappers never feed back into the native frame.
     const measuredRegions = [
       element.querySelector<HTMLElement>(".shell-ball-surface__mascot-shell"),
       element.querySelector<HTMLElement>(".shell-ball-surface__slot--bottom"),
-      element.querySelector<HTMLElement>(".shell-ball-voice-window"),
+      element.querySelector<HTMLElement>(".shell-ball-surface__voice-anchor"),
     ].filter((region): region is HTMLElement => region !== null);
 
     if (measuredRegions.length > 0) {
