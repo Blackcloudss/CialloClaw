@@ -4762,6 +4762,53 @@ func TestServiceTaskDetailGetIncludesFailureSummaryForFailedScreenTask(t *testin
 	}
 }
 
+func TestBuildTaskCitationsPreservesDistinctReferencesForSameArtifact(t *testing.T) {
+	task := runengine.TaskRecord{
+		TaskID: "task_screen_evidence_chain",
+		RunID:  "run_screen_evidence_chain",
+	}
+	artifacts := []map[string]any{{
+		"artifact_id":   "art_screen_capture",
+		"task_id":       task.TaskID,
+		"artifact_type": "screen_capture",
+		"title":         "dashboard.png",
+		"path":          "workspace/dashboard.png",
+		"mime_type":     "image/png",
+	}}
+	toolCalls := []tools.ToolCallRecord{{
+		Output: map[string]any{
+			"citation_seed": map[string]any{
+				"artifact_id":       "art_screen_capture",
+				"artifact_type":     "screen_capture",
+				"evidence_role":     "error_evidence",
+				"ocr_excerpt":       "Build failed on line 42",
+				"screen_session_id": "screen_session_a",
+			},
+		},
+	}, {
+		Output: map[string]any{
+			"citation_seed": map[string]any{
+				"artifact_id":       "art_screen_capture",
+				"artifact_type":     "screen_capture",
+				"evidence_role":     "context_evidence",
+				"ocr_excerpt":       "Open pull request checks panel",
+				"screen_session_id": "screen_session_a",
+			},
+		},
+	}}
+
+	citations := buildTaskCitations(task, toolCalls, nil, nil, artifacts)
+	if len(citations) != 2 {
+		t.Fatalf("expected distinct citations for the same artifact, got %+v", citations)
+	}
+	if citations[0]["source_ref"] != "art_screen_capture" || citations[1]["source_ref"] != "art_screen_capture" {
+		t.Fatalf("expected both citations to point at the shared artifact, got %+v", citations)
+	}
+	if citations[0]["citation_id"] == citations[1]["citation_id"] {
+		t.Fatalf("expected distinct formal citation ids, got %+v", citations)
+	}
+}
+
 func TestLatestTaskFailurePrefersStructuredFailureMetadataOverBudgetSignals(t *testing.T) {
 	task := runengine.TaskRecord{
 		TaskID: "task_failure_signal_priority",

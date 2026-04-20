@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"path"
 	"sort"
 	"strings"
@@ -5802,14 +5803,29 @@ func citationFromSeed(task runengine.TaskRecord, seed map[string]any, artifactsB
 	if _, ok := artifactsByID[artifactID]; ok {
 		sourceType = "file"
 	}
+	// Formal citations may legitimately point at the same artifact more than once
+	// when they represent distinct evidence roles or OCR-derived references. Fold
+	// only exact seed duplicates so task detail can preserve the full evidence chain.
 	return map[string]any{
-		"citation_id": fmt.Sprintf("cit_%s_%s", task.TaskID, sanitizeCitationSuffix(sourceRef)),
+		"citation_id": buildCitationID(task.TaskID, sourceRef, artifactType, evidenceRole, ocrExcerpt),
 		"task_id":     task.TaskID,
 		"run_id":      task.RunID,
 		"source_type": sourceType,
 		"source_ref":  sourceRef,
 		"label":       label,
 	}
+}
+
+func buildCitationID(taskID, sourceRef, artifactType, evidenceRole, ocrExcerpt string) string {
+	fingerprint := fnv.New64a()
+	_, _ = fingerprint.Write([]byte(sourceRef))
+	_, _ = fingerprint.Write([]byte{0})
+	_, _ = fingerprint.Write([]byte(artifactType))
+	_, _ = fingerprint.Write([]byte{0})
+	_, _ = fingerprint.Write([]byte(evidenceRole))
+	_, _ = fingerprint.Write([]byte{0})
+	_, _ = fingerprint.Write([]byte(ocrExcerpt))
+	return fmt.Sprintf("cit_%s_%s_%x", taskID, sanitizeCitationSuffix(sourceRef), fingerprint.Sum64())
 }
 
 func sanitizeCitationSuffix(value string) string {
