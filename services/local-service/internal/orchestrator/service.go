@@ -1041,10 +1041,15 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 		securitySummary["latest_restore_point"] = latestRestorePoint
 	}
 	runtimeSummary := s.buildTaskRuntimeSummary(task)
+	deliveryResultValue := any(nil)
+	if normalizedDelivery := normalizeTaskDetailDeliveryResult(task.TaskID, task.DeliveryResult); len(normalizedDelivery) > 0 {
+		deliveryResultValue = normalizedDelivery
+	}
 
 	return map[string]any{
 		"task":                 taskMap(task),
 		"timeline":             protocolTaskStepList(timelineMap(task.Timeline)),
+		"delivery_result":      deliveryResultValue,
 		"artifacts":            protocolArtifactList(s.artifactsForTask(task.TaskID, task.Artifacts)),
 		"citations":            protocolCitationList(task.Citations),
 		"mirror_references":    protocolMirrorReferenceList(task.MirrorReferences),
@@ -1364,7 +1369,7 @@ func protocolCitationList(citations []map[string]any) []map[string]any {
 }
 
 func protocolCitationMap(citation map[string]any) map[string]any {
-	return map[string]any{
+	result := map[string]any{
 		"citation_id": stringValue(citation, "citation_id", ""),
 		"task_id":     stringValue(citation, "task_id", ""),
 		"run_id":      stringValue(citation, "run_id", ""),
@@ -1372,6 +1377,22 @@ func protocolCitationMap(citation map[string]any) map[string]any {
 		"source_ref":  stringValue(citation, "source_ref", ""),
 		"label":       stringValue(citation, "label", ""),
 	}
+	if artifactID := strings.TrimSpace(stringValue(citation, "artifact_id", "")); artifactID != "" {
+		result["artifact_id"] = artifactID
+	}
+	if artifactType := strings.TrimSpace(stringValue(citation, "artifact_type", "")); artifactType != "" {
+		result["artifact_type"] = artifactType
+	}
+	if evidenceRole := strings.TrimSpace(stringValue(citation, "evidence_role", "")); evidenceRole != "" {
+		result["evidence_role"] = evidenceRole
+	}
+	if excerptText := strings.TrimSpace(stringValue(citation, "excerpt_text", "")); excerptText != "" {
+		result["excerpt_text"] = excerptText
+	}
+	if screenSessionID := strings.TrimSpace(stringValue(citation, "screen_session_id", "")); screenSessionID != "" {
+		result["screen_session_id"] = screenSessionID
+	}
+	return result
 }
 
 // protocolArtifactMap trims one artifact to the formal Artifact contract.
@@ -1460,6 +1481,15 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 		resolved["preview_text"] = stringValue(resolved, "title", "")
 	}
 	return resolved
+}
+
+// normalizeTaskDetailDeliveryResult keeps task detail aligned with the formal
+// delivery contract without forcing the dashboard to infer missing payload fields.
+func normalizeTaskDetailDeliveryResult(taskID string, deliveryResult map[string]any) map[string]any {
+	if len(deliveryResult) == 0 {
+		return nil
+	}
+	return normalizeDeliveryOpenResult(nil, cloneMap(deliveryResult), taskID)
 }
 
 // TaskControl handles agent.task.control and converts user actions into runtime
@@ -5926,7 +5956,7 @@ func citationFromSeed(task runengine.TaskRecord, seed map[string]any, artifactsB
 		sourceType = "file"
 	}
 	identity := stableCitationIdentity(task.TaskID, sourceType, sourceRef, seed)
-	return map[string]any{
+	result := map[string]any{
 		"citation_id": fmt.Sprintf("cit_%s_%s", task.TaskID, identity),
 		"task_id":     task.TaskID,
 		"run_id":      task.RunID,
@@ -5934,6 +5964,22 @@ func citationFromSeed(task runengine.TaskRecord, seed map[string]any, artifactsB
 		"source_ref":  sourceRef,
 		"label":       label,
 	}
+	if strings.TrimSpace(artifactID) != "" {
+		result["artifact_id"] = artifactID
+	}
+	if strings.TrimSpace(artifactType) != "" {
+		result["artifact_type"] = artifactType
+	}
+	if strings.TrimSpace(evidenceRole) != "" {
+		result["evidence_role"] = evidenceRole
+	}
+	if strings.TrimSpace(ocrExcerpt) != "" {
+		result["excerpt_text"] = ocrExcerpt
+	}
+	if screenSessionID := strings.TrimSpace(stringValue(seed, "screen_session_id", "")); screenSessionID != "" {
+		result["screen_session_id"] = screenSessionID
+	}
+	return result
 }
 
 // stableCitationIdentity derives a deterministic citation fingerprint from the

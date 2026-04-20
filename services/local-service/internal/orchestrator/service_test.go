@@ -4878,6 +4878,12 @@ func TestBuildTaskCitationsPreservesDistinctFormalReferencesForSameArtifact(t *t
 	if citations[0]["citation_id"] == citations[1]["citation_id"] {
 		t.Fatalf("expected distinct formal references on the same artifact to keep unique citation ids, got %+v", citations)
 	}
+	if citations[0]["artifact_id"] != "art_screen_multi_citation" || citations[1]["artifact_type"] != "screen_capture" {
+		t.Fatalf("expected structured citation metadata to survive deduping, got %+v", citations)
+	}
+	if citations[0]["excerpt_text"] == citations[1]["excerpt_text"] {
+		t.Fatalf("expected distinct citations to preserve their excerpt text, got %+v", citations)
+	}
 }
 
 func TestServiceDashboardOverviewRespectsIncludeFilter(t *testing.T) {
@@ -5387,6 +5393,16 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 	}
 	if citations[0]["source_type"] != "file" || !strings.Contains(stringValue(citations[0], "label", ""), "error_evidence") {
 		t.Fatalf("expected citation to preserve artifact-backed screen evidence metadata, got %+v", citations[0])
+	}
+	if citations[0]["artifact_type"] != "screen_capture" || citations[0]["evidence_role"] != "error_evidence" {
+		t.Fatalf("expected citation to expose structured screen evidence role and artifact type, got %+v", citations[0])
+	}
+	if citations[0]["excerpt_text"] == nil || citations[0]["screen_session_id"] == nil {
+		t.Fatalf("expected citation to expose OCR excerpt and screen session metadata, got %+v", citations[0])
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok || stringValue(deliveryResult, "preview_text", "") == "" {
+		t.Fatalf("expected task detail to expose formal delivery_result, got %+v", detailResult["delivery_result"])
 	}
 	record, exists = service.runEngine.GetTask(task["task_id"].(string))
 	if !exists || len(record.Citations) != 1 {
@@ -7420,8 +7436,8 @@ func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
 		t.Fatalf("task detail get failed: %v", err)
 	}
 
-	if _, ok := detailResult["delivery_result"]; ok {
-		t.Fatalf("expected task detail response not to expose undeclared delivery_result field, got %+v", detailResult["delivery_result"])
+	if _, ok := detailResult["delivery_result"]; !ok {
+		t.Fatal("expected task detail response to expose formal delivery_result field")
 	}
 	if _, ok := detailResult["audit_records"]; ok {
 		t.Fatalf("expected task detail response not to expose undeclared audit_records field, got %+v", detailResult["audit_records"])
@@ -7775,6 +7791,16 @@ func TestServiceTaskDetailGetStructuredFallbackBackfillsTaskRunEvidence(t *testi
 		StartedAt:   time.Date(2026, 4, 15, 13, 0, 0, 0, time.UTC),
 		UpdatedAt:   time.Date(2026, 4, 15, 13, 5, 0, 0, time.UTC),
 		FinishedAt:  timePointer(time.Date(2026, 4, 15, 13, 6, 0, 0, time.UTC)),
+		DeliveryResult: map[string]any{
+			"type":         "task_detail",
+			"title":        "屏幕分析结果",
+			"preview_text": "fatal build error",
+			"payload": map[string]any{
+				"task_id": taskID,
+				"path":    "workspace/structured-screen.png",
+				"url":     nil,
+			},
+		},
 		Citations: []map[string]any{{
 			"citation_id": "cit_" + taskID + "_" + stableCitationIdentity(taskID, "file", "art_structured_screen_evidence", map[string]any{
 				"artifact_id":   "art_structured_screen_evidence",
@@ -7782,11 +7808,15 @@ func TestServiceTaskDetailGetStructuredFallbackBackfillsTaskRunEvidence(t *testi
 				"evidence_role": "error_evidence",
 				"ocr_excerpt":   "fatal build error",
 			}),
-			"task_id":     taskID,
-			"run_id":      "run_structured_screen_evidence",
-			"source_type": "file",
-			"source_ref":  "art_structured_screen_evidence",
-			"label":       "error_evidence | screen_capture | fatal build error",
+			"task_id":       taskID,
+			"run_id":        "run_structured_screen_evidence",
+			"source_type":   "file",
+			"source_ref":    "art_structured_screen_evidence",
+			"label":         "error_evidence | screen_capture | fatal build error",
+			"artifact_id":   "art_structured_screen_evidence",
+			"artifact_type": "screen_capture",
+			"evidence_role": "error_evidence",
+			"excerpt_text":  "fatal build error",
 		}},
 		AuditRecords: []map[string]any{{
 			"audit_id":   "audit_structured_screen_evidence",
@@ -7820,6 +7850,13 @@ func TestServiceTaskDetailGetStructuredFallbackBackfillsTaskRunEvidence(t *testi
 	citations := detailResult["citations"].([]map[string]any)
 	if len(citations) != 1 || citations[0]["source_ref"] != "art_structured_screen_evidence" {
 		t.Fatalf("expected structured fallback to backfill citations, got %+v", citations)
+	}
+	if citations[0]["excerpt_text"] != "fatal build error" || citations[0]["evidence_role"] != "error_evidence" {
+		t.Fatalf("expected structured fallback to preserve citation metadata, got %+v", citations[0])
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok || deliveryResult["preview_text"] != "fatal build error" {
+		t.Fatalf("expected structured fallback to backfill delivery result, got %+v", detailResult["delivery_result"])
 	}
 }
 
