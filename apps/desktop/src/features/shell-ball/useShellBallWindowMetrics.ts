@@ -132,6 +132,22 @@ export function createShellBallWindowFrame(
 export function measureShellBallContentSize(element: ShellBallMeasurableElement, includeScrollBounds = true): ShellBallContentSize {
   const rect = element.getBoundingClientRect();
 
+  if (element instanceof HTMLElement && element.classList.contains("shell-ball-surface")) {
+    const measuredRegions = [
+      element.querySelector<HTMLElement>(".shell-ball-surface__mascot-shell"),
+      element.querySelector<HTMLElement>(".shell-ball-surface__slot--top"),
+      element.querySelector<HTMLElement>(".shell-ball-surface__slot--bottom"),
+      element.querySelector<HTMLElement>(".shell-ball-voice-window"),
+    ].filter((region): region is HTMLElement => region !== null);
+
+    if (measuredRegions.length > 0) {
+      return {
+        width: Math.max(...measuredRegions.map((region) => Math.max(region.getBoundingClientRect().width, region.scrollWidth))),
+        height: Math.max(...measuredRegions.map((region) => Math.max(region.getBoundingClientRect().height, region.scrollHeight))),
+      };
+    }
+  }
+
   if (element instanceof HTMLElement && element.dataset.shellBallInputWindow === "true") {
     const inputBoxes = Array.from(element.querySelectorAll<HTMLElement>(".shell-ball-uiverse-inputbox"));
     const actions = Array.from(element.querySelectorAll<HTMLElement>(".shell-ball-uiverse-actions"));
