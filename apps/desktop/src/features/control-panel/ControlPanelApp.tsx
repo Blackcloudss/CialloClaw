@@ -4,9 +4,8 @@
  */
 import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
-  ArrowLeft,
-  Bot,
   BrainCircuit,
+  CircleHelp,
   GripHorizontal,
   Save,
   Settings2,
@@ -24,6 +23,7 @@ import {
   saveControlPanelData,
   type ControlPanelData,
 } from "@/services/controlPanelService";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { requestCurrentDesktopWindowClose, startCurrentDesktopWindowDragging } from "@/platform/desktopWindowFrame";
 import "./controlPanel.css";
 
@@ -35,12 +35,9 @@ type NavigationGroup = {
 };
 
 type SectionMeta = {
-  description: string;
   group: string;
-  helper: string;
   icon: LucideIcon;
   navLabel: string;
-  summary: string;
   title: string;
 };
 
@@ -82,57 +79,39 @@ type InfoRowProps = {
 
 const SECTION_META: Record<ControlPanelSectionId, SectionMeta> = {
   actions: {
-    description: "集中查看当前快照状态、巡检结果与保存结果。",
     group: "治理与应用",
-    helper: "在保存前再次确认来源、恢复点和关键反馈。",
     icon: Save,
     navLabel: "保存与操作",
-    summary: "把当前草稿、巡检反馈与正式保存动作收束到一个稳定出口。",
     title: "保存与操作",
   },
   automation: {
-    description: "管理任务来源、巡检频率和提醒节奏。",
     group: "协作策略",
-    helper: "推荐先确认来源列表，再决定哪些提醒要常驻启用。",
     icon: Workflow,
     navLabel: "任务巡检",
-    summary: "决定 Agent 何时主动巡视任务、何时提醒你接管和推进。",
     title: "任务与巡检",
   },
   desktop: {
-    description: "控制悬浮球的在场感、尺寸和停靠方式。",
     group: "基础控制",
-    helper: "保持克制的品牌感，优先突出常驻入口的存在方式。",
     icon: Sparkles,
-    navLabel: "桌面入口",
-    summary: "让悬浮球在显眼与安静之间找到合适平衡，不打断你的桌面流。",
-    title: "外观与桌面入口",
+    navLabel: "悬浮球",
+    title: "悬浮球",
   },
   general: {
-    description: "语言、主题和工作区等高频基础设置。",
     group: "基础控制",
-    helper: "默认首屏，优先放置影响整个桌面体验的高频项。",
     icon: Settings2,
     navLabel: "通用设置",
-    summary: "统一操作面板、仪表盘和桌面入口的基础偏好。",
     title: "通用设置",
   },
   memory: {
-    description: "配置镜子记忆的开关、节奏和保留策略。",
     group: "协作策略",
-    helper: "把镜子解释成协作连续性，而不是抽象参数。",
     icon: BrainCircuit,
     navLabel: "镜子记忆",
-    summary: "决定长期协作信息保留多久、如何总结，以及多久刷新一次用户画像。",
     title: "记忆设置",
   },
   models: {
-    description: "查看模型路由、安全摘要与预算约束。",
     group: "治理与应用",
-    helper: "保留正式安全状态和预算信息，不把它们降级成纯展示文案。",
     icon: ShieldCheck,
     navLabel: "模型与安全",
-    summary: "把 provider、模型、预算和待授权状态放在同一个可信任边界里。",
     title: "模型与安全",
   },
 };
@@ -201,6 +180,17 @@ function StatusPill({ children, tone }: StatusPillProps) {
   return <span className={`control-panel-shell__status-pill control-panel-shell__status-pill--${tone}`}>{children}</span>;
 }
 
+function HelpTooltip({ content }: { content: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger className="control-panel-shell__help-trigger" aria-label={content}>
+        <CircleHelp size={14} strokeWidth={1.9} />
+      </TooltipTrigger>
+      <TooltipContent className="control-panel-shell__tooltip">{content}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function SidebarItem({ active, item, onSelect }: SidebarItemProps) {
   const Icon = item.icon;
 
@@ -214,10 +204,7 @@ function SidebarItem({ active, item, onSelect }: SidebarItemProps) {
       <span className="control-panel-shell__nav-icon" aria-hidden="true">
         <Icon size={17} strokeWidth={1.85} />
       </span>
-      <span className="control-panel-shell__nav-copy">
-        <span className="control-panel-shell__nav-label">{item.navLabel}</span>
-        <span className="control-panel-shell__nav-description">{item.description}</span>
-      </span>
+      <span className="control-panel-shell__nav-label">{item.navLabel}</span>
     </button>
   );
 }
@@ -226,14 +213,12 @@ function SettingsCard({ children, description, title }: SettingsCardProps) {
   return (
     <section className="control-panel-shell__card">
       <div className="control-panel-shell__card-header">
-        <Heading as="h2" size="4" className="control-panel-shell__card-title">
-          {title}
-        </Heading>
-        {description ? (
-          <Text as="p" size="2" className="control-panel-shell__card-description">
-            {description}
-          </Text>
-        ) : null}
+        <div className="control-panel-shell__title-row">
+          <Heading as="h2" size="4" className="control-panel-shell__card-title">
+            {title}
+          </Heading>
+          {description ? <HelpTooltip content={description} /> : null}
+        </div>
       </div>
       <div className="control-panel-shell__card-body">{children}</div>
     </section>
@@ -246,14 +231,12 @@ function ControlLine({ children, className, hint, label }: ControlLineProps) {
   return (
     <div className={classes}>
       <div className="control-panel-shell__row-copy">
-        <Text as="p" size="2" weight="medium" className="control-panel-shell__row-label">
-          {label}
-        </Text>
-        {hint ? (
-          <Text as="p" size="2" className="control-panel-shell__row-hint">
-            {hint}
+        <div className="control-panel-shell__title-row control-panel-shell__title-row--field">
+          <Text as="p" size="2" weight="medium" className="control-panel-shell__row-label">
+            {label}
           </Text>
-        ) : null}
+          {hint ? <HelpTooltip content={hint} /> : null}
+        </div>
       </div>
       <div className="control-panel-shell__row-field">{children}</div>
     </div>
@@ -264,14 +247,12 @@ function ToggleLine({ checked, description, label, onCheckedChange }: ToggleLine
   return (
     <div className="control-panel-shell__row control-panel-shell__row--toggle">
       <div className="control-panel-shell__row-copy">
-        <Text as="p" size="2" weight="medium" className="control-panel-shell__row-label">
-          {label}
-        </Text>
-        {description ? (
-          <Text as="p" size="2" className="control-panel-shell__row-hint">
-            {description}
+        <div className="control-panel-shell__title-row control-panel-shell__title-row--field">
+          <Text as="p" size="2" weight="medium" className="control-panel-shell__row-label">
+            {label}
           </Text>
-        ) : null}
+          {description ? <HelpTooltip content={description} /> : null}
+        </div>
       </div>
       <div className="control-panel-shell__row-field control-panel-shell__row-field--inline">
         <Switch checked={checked} onCheckedChange={onCheckedChange} />
@@ -428,7 +409,7 @@ export function ControlPanelApp() {
       case "general":
         return (
           <>
-            <SettingsCard title="界面偏好" description="优先保留最常用的基础设置，让切换语言和主题的路径更直接。">
+            <SettingsCard title="界面偏好" description="语言与主题会影响整个桌面端界面。">
               <ControlLine label="语言" hint="统一控制仪表盘与操作面板界面语言。">
                 <TextField.Root
                   className="control-panel-shell__input"
@@ -466,7 +447,7 @@ export function ControlPanelApp() {
               </ControlLine>
             </SettingsCard>
 
-            <SettingsCard title="系统行为" description="这些设置会影响桌面端的常驻方式和提醒风格。">
+            <SettingsCard title="系统行为" description="影响应用启动方式和通知表现。">
               <ToggleLine
                 label="开机自启"
                 description="仅影响下次系统启动时是否自动运行。"
@@ -498,7 +479,7 @@ export function ControlPanelApp() {
               />
             </SettingsCard>
 
-            <SettingsCard title="工作区与下载" description="路径变更只影响后续文件，不迁移历史内容。">
+            <SettingsCard title="工作区与下载" description="变更后仅影响后续新生成的文件位置。">
               <ControlLine label="工作区路径" hint="任务文档与生成文件默认写入的本地位置。">
                 <TextField.Root
                   className="control-panel-shell__input"
@@ -524,7 +505,7 @@ export function ControlPanelApp() {
       case "desktop":
         return (
           <>
-            <SettingsCard title="悬浮球状态" description="让桌面入口在显眼与克制之间保持平衡。">
+            <SettingsCard title="悬浮球状态" description="控制悬浮球在桌面上的默认表现。">
               <ToggleLine
                 label="自动贴边"
                 description="结束拖动后自动吸附到屏幕边缘。"
@@ -556,7 +537,7 @@ export function ControlPanelApp() {
               />
             </SettingsCard>
 
-            <SettingsCard title="在场方式" description="沿用当前正式字段，不额外引入桌面端专属状态。">
+            <SettingsCard title="在场方式" description="调整悬浮球的尺寸与停靠模式。">
               <ControlLine label="尺寸" hint="在多窗口协作时决定悬浮球的可发现程度。">
                 <div className="control-panel-shell__slider-stack">
                   <Slider
@@ -613,7 +594,7 @@ export function ControlPanelApp() {
       case "memory":
         return (
           <>
-            <SettingsCard title="镜子记忆" description="将长期理解解释成协作连续性，而不是抽象 AI 参数。">
+            <SettingsCard title="镜子记忆" description="控制长期记忆是否开启以及保留方式。">
               <ToggleLine
                 label="启用记忆"
                 description="关闭后不再记录新的长期记忆。"
@@ -646,7 +627,7 @@ export function ControlPanelApp() {
               </ControlLine>
             </SettingsCard>
 
-            <SettingsCard title="记忆节奏" description="保持总结与画像刷新频率透明可见。">
+            <SettingsCard title="记忆节奏" description="显示工作总结与画像刷新的默认频率。">
               <InfoRow label="工作总结间隔" value={workSummaryCadence} />
               <InfoRow label="画像刷新间隔" value={profileCadence} />
             </SettingsCard>
@@ -656,7 +637,7 @@ export function ControlPanelApp() {
       case "automation":
         return (
           <>
-            <SettingsCard title="巡检规则" description="巡检与提醒应服务主链路，而不是制造额外打扰。">
+            <SettingsCard title="巡检规则" description="控制任务巡检的启动方式与提醒节奏。">
               <InfoRow label="巡检频率" value={inspectionInterval} />
 
               <ToggleLine
@@ -708,14 +689,10 @@ export function ControlPanelApp() {
               />
             </SettingsCard>
 
-            <SettingsCard title="任务来源" description="每行一个路径或标签，保留真实巡检来源而不是演示数据。">
+            <SettingsCard title="任务来源" description="每行填写一个路径或标签作为巡检来源。">
               <InfoRow label="已配置来源" value={`${draft.inspector.task_sources.length} 项`} />
 
-              <ControlLine
-                label="任务来源列表"
-                hint="支持多个工作区路径或任务标签。"
-                className="control-panel-shell__row--stacked"
-              >
+              <ControlLine label="任务来源列表" hint="支持多个工作区路径或任务标签。" className="control-panel-shell__row--stacked">
                 <TextArea
                   className="control-panel-shell__textarea"
                   value={draft.inspector.task_sources.join("\n")}
@@ -741,7 +718,7 @@ export function ControlPanelApp() {
       case "models":
         return (
           <>
-            <SettingsCard title="模型路由" description="provider、base URL 与 model 的修改都保留在正式设置边界里。">
+            <SettingsCard title="模型路由" description="配置 provider、接口地址和默认模型。">
               <ControlLine label="Provider" hint="当前任务默认使用的模型提供商。">
                 <TextField.Root
                   className="control-panel-shell__input"
@@ -822,7 +799,7 @@ export function ControlPanelApp() {
               />
             </SettingsCard>
 
-            <SettingsCard title="安全与预算摘要" description="保留正式安全状态、成本和待授权统计的可见性。">
+            <SettingsCard title="安全与预算摘要" description="查看当前安全状态、授权数量与预算限制。">
               <InfoRow label="当前模型" value={draft.settings.models.model} />
               <InfoRow label="API Key 状态" value={providerApiKeyStatus} />
               <InfoRow label="安全状态" value={draft.securitySummary.security_status} />
@@ -843,14 +820,14 @@ export function ControlPanelApp() {
       case "actions":
         return (
           <>
-            <SettingsCard title="当前快照" description="保存前再次核对来源、同步状态和最近恢复点。">
+            <SettingsCard title="当前快照" description="汇总当前来源、保存状态和最近恢复点。">
               <InfoRow label="数据来源" value={sourceValue} />
               <InfoRow label="保存状态" value={saveStateValue} />
               <InfoRow label="巡检频率" value={inspectionInterval} />
               <InfoRow label="最近恢复点" value={latestRestorePoint} />
             </SettingsCard>
 
-            <SettingsCard title="即时反馈" description="巡检和保存反馈都保留在当前窗口会话内，便于快速判断结果。">
+            <SettingsCard title="即时反馈" description="显示最近一次巡检与保存的执行结果。">
               <div className="control-panel-shell__feedback-grid">
                 <div className="control-panel-shell__feedback-card">
                   <Text as="p" size="1" className="control-panel-shell__feedback-label">
@@ -880,21 +857,12 @@ export function ControlPanelApp() {
     <main className="app-shell control-panel-shell">
       <div className="control-panel-shell__titlebar" aria-label="控制面板窗口操作" onPointerDown={handleTopbarPointerDown}>
         <div className="control-panel-shell__titlebar-copy">
-          <Text as="p" size="1" className="control-panel-shell__eyebrow">
-            Desktop Control Surface
-          </Text>
-          <div className="control-panel-shell__titlebar-heading">
-            <Heading size="5" className="control-panel-shell__titlebar-title">
-              控制面板
-            </Heading>
-            <Text as="p" size="2" className="control-panel-shell__titlebar-subtitle">
-              贴近系统设置页的结构，保留 CialloClaw 的正式状态与品牌强调。
-            </Text>
-          </div>
+          <Heading size="5" className="control-panel-shell__titlebar-title">
+            控制面板
+          </Heading>
         </div>
 
         <div className="control-panel-shell__titlebar-actions">
-          <div className="control-panel-shell__titlebar-status">{sourceValue}</div>
           <button
             type="button"
             className="control-panel-shell__window-button control-panel-shell__window-button--drag"
@@ -918,20 +886,6 @@ export function ControlPanelApp() {
 
       <div className="control-panel-shell__workspace">
         <aside className="control-panel-shell__sidebar" aria-label="控制面板分组导航">
-          <button type="button" className="control-panel-shell__back-button" onClick={handleWindowCloseClick}>
-            <ArrowLeft size={16} strokeWidth={1.85} />
-            <span>返回应用</span>
-          </button>
-
-          <div className="control-panel-shell__sidebar-copy">
-            <Text as="p" size="1" className="control-panel-shell__sidebar-kicker">
-              设置分组
-            </Text>
-            <Text as="p" size="2" className="control-panel-shell__sidebar-summary">
-              按高频基础设置、协作策略和治理边界分层组织，避免把所有开关塞进一页。
-            </Text>
-          </div>
-
           <div className="control-panel-shell__nav-groups">
             {NAVIGATION_GROUPS.map((group) => (
               <div key={group.label} className="control-panel-shell__nav-group">
@@ -951,38 +905,18 @@ export function ControlPanelApp() {
               </div>
             ))}
           </div>
-
-          <div className="control-panel-shell__sidebar-footer">
-            <div className="control-panel-shell__sidebar-insight">
-              <div className="control-panel-shell__sidebar-insight-icon" aria-hidden="true">
-                <Bot size={18} strokeWidth={1.85} />
-              </div>
-              <div className="control-panel-shell__sidebar-insight-copy">
-                <Text as="p" size="1" className="control-panel-shell__sidebar-insight-label">
-                  当前协作快照
-                </Text>
-                <Text as="p" size="2" className="control-panel-shell__sidebar-insight-text">
-                  模型 {draft.settings.models.model}，待授权 {draft.securitySummary.pending_authorizations} 项。
-                </Text>
-              </div>
-            </div>
-          </div>
         </aside>
 
         <section className="control-panel-shell__content">
           <header className="control-panel-shell__hero">
-            <Text as="p" size="1" className="control-panel-shell__eyebrow">
-              {activeMeta.group}
-            </Text>
-            <Heading size="8" className="control-panel-shell__hero-title">
-              {activeMeta.title}
-            </Heading>
-            <Text as="p" size="3" className="control-panel-shell__hero-summary">
-              {activeMeta.summary}
-            </Text>
-            <Text as="p" size="2" className="control-panel-shell__hero-helper">
-              {activeMeta.helper}
-            </Text>
+            <div className="control-panel-shell__hero-heading">
+              <Text as="p" size="1" className="control-panel-shell__eyebrow">
+                {activeMeta.group}
+              </Text>
+              <Heading size="8" className="control-panel-shell__hero-title">
+                {activeMeta.title}
+              </Heading>
+            </div>
 
             <div className="control-panel-shell__hero-metrics">
               <div className="control-panel-shell__metric-card">
@@ -1013,18 +947,8 @@ export function ControlPanelApp() {
           <div className="control-panel-shell__cards">{renderSectionContent()}</div>
 
           <div className="control-panel-shell__action-bar">
-            <div className="control-panel-shell__action-summary">
-              <div className="control-panel-shell__action-summary-icon" aria-hidden="true">
-                <Save size={18} strokeWidth={1.9} />
-              </div>
-              <div className="control-panel-shell__action-summary-copy">
-                <Text as="p" size="1" className="control-panel-shell__action-summary-label">
-                  当前草稿
-                </Text>
-                <Text as="p" size="2" className="control-panel-shell__action-summary-text">
-                  {hasChanges ? "你有尚未保存的调整。" : "当前设置已与最近一次快照同步。"}
-                </Text>
-              </div>
+            <div className="control-panel-shell__action-statuses">
+              {saveStateValue}
             </div>
 
             <div className="control-panel-shell__action-buttons">
