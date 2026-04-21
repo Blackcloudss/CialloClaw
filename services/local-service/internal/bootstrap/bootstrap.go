@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
@@ -49,6 +50,10 @@ type runtimeStarter interface {
 
 // New assembles a fully wired local-service application.
 func New(cfg config.Config) (*App, error) {
+	if strings.ContainsRune(cfg.WorkspaceRoot, '\x00') {
+		return nil, fmt.Errorf("workspace root contains invalid null byte")
+	}
+
 	pathPolicy, err := platform.NewLocalPathPolicy(cfg.WorkspaceRoot)
 	if err != nil {
 		return nil, err
