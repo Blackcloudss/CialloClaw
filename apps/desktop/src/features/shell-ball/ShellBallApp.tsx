@@ -620,20 +620,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       void syncShellBallCursorPassthrough(event.clientX, event.clientY);
     };
 
-    const pollNativeCursor = window.setInterval(() => {
-      void (async () => {
-        if (!interactivePassthroughRef.current) {
-          return;
-        }
-
-        if (disposed) {
-          return;
-        }
-
-        await syncShellBallCursorPassthroughFromNativePointer();
-      })();
-    }, 50);
-
     void (async () => {
       // Start in click-through mode and immediately reconcile the current native
       // cursor position so the shell-ball window does not block the desktop when
@@ -652,7 +638,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
     return () => {
       disposed = true;
-      window.clearInterval(pollNativeCursor);
       window.removeEventListener("mousemove", handleMouseMove);
       void setShellBallIgnoreCursorEvents(false, false);
     };
@@ -665,7 +650,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
     // Message submit completion reveals bubbles and usually blurs the input.
     // Reconcile immediately so the orb can regain interactivity without waiting
-    // for the next polling tick or a manual extra click.
+    // for another forwarded mousemove or a manual extra click.
     void syncShellBallCursorPassthroughFromNativePointer();
   }, [inputFocused, snapshot.visibility.bubble, syncShellBallCursorPassthroughFromNativePointer]);
 
