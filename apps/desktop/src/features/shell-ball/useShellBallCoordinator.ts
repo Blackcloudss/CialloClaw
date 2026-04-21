@@ -1077,7 +1077,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       .map((item) => getShellBallPinnedBubbleWindowLabel(item.bubble.bubble_id));
 
     void Promise.all([
-      emitSnapshotToLabel(shellBallWindowLabels.bubble),
       ...pinnedBubbleLabels.map((label) => emitSnapshotToLabel(label)),
       ...latestSnapshot.bubbleItems
         .filter((item) => item.bubble.pinned)
