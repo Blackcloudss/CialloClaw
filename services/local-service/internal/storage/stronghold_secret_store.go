@@ -1,3 +1,5 @@
+//go:build windows
+
 package storage
 
 import (
@@ -9,11 +11,6 @@ import (
 	"strings"
 	"sync"
 )
-
-type strongholdFilePayload struct {
-	Backend string                  `json:"backend"`
-	Records map[string]SecretRecord `json:"records"`
-}
 
 // DPAPISecretStore is the formal Stronghold-backed secret store. It persists a
 // single encrypted payload outside the normal SQLite settings/runtime path so

@@ -462,6 +462,13 @@ func TestEngineSessionStoreUsesMostRecentlyUpdatedTaskForSessionSnapshot(t *test
 	storageService := storage.NewService(storageTestAdapter{databasePath: filepath.Join(t.TempDir(), "sessions-freshness.db")})
 	defer func() { _ = storageService.Close() }()
 	engine := NewEngine()
+	baseTime := time.Date(2026, 4, 22, 1, 23, 54, 0, time.UTC)
+	tick := 0
+	engine.now = func() time.Time {
+		value := baseTime.Add(time.Duration(tick) * time.Second)
+		tick++
+		return value
+	}
 	if err := engine.WithSessionStore(storageService.SessionStore()); err != nil {
 		t.Fatalf("attach session store failed: %v", err)
 	}
