@@ -370,6 +370,26 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     await setShellBallIgnoreCursorEvents(nextIgnoreCursorEvents, true);
   }, [resolveShellBallInteractiveHit]);
 
+  const syncShellBallCursorPassthroughFromNativePointer = useCallback(async () => {
+    const currentWindow = getCurrentWindow();
+
+    if (currentWindow.label !== shellBallWindowLabels.ball) {
+      return;
+    }
+
+    const mousePosition = await getShellBallMousePosition();
+    if (mousePosition === null) {
+      return;
+    }
+
+    const outerPosition = await currentWindow.outerPosition();
+    const scaleFactor = await currentWindow.scaleFactor();
+    const clientX = (mousePosition.client_x - outerPosition.x) / scaleFactor;
+    const clientY = (mousePosition.client_y - outerPosition.y) / scaleFactor;
+
+    await syncShellBallCursorPassthrough(clientX, clientY);
+  }, [syncShellBallCursorPassthrough]);
+
   const focusInlineInputField = useCallback((syncInteraction = true) => {
     if (syncInteraction) {
       handleInputFocusRequest();
@@ -596,17 +616,11 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
           return;
         }
 
-        const mousePosition = await getShellBallMousePosition();
-        if (disposed || mousePosition === null) {
+        if (disposed) {
           return;
         }
 
-        const outerPosition = await currentWindow.outerPosition();
-        const scaleFactor = await currentWindow.scaleFactor();
-        const clientX = (mousePosition.client_x - outerPosition.x) / scaleFactor;
-        const clientY = (mousePosition.client_y - outerPosition.y) / scaleFactor;
-
-        await syncShellBallCursorPassthrough(clientX, clientY);
+        await syncShellBallCursorPassthroughFromNativePointer();
       })();
     }, 50);
 
@@ -617,17 +631,11 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       interactivePassthroughRef.current = true;
       await setShellBallIgnoreCursorEvents(true, true);
 
-      const mousePosition = await getShellBallMousePosition();
-      if (disposed || mousePosition === null) {
+      if (disposed) {
         return;
       }
 
-      const outerPosition = await currentWindow.outerPosition();
-      const scaleFactor = await currentWindow.scaleFactor();
-      const clientX = (mousePosition.client_x - outerPosition.x) / scaleFactor;
-      const clientY = (mousePosition.client_y - outerPosition.y) / scaleFactor;
-
-      await syncShellBallCursorPassthrough(clientX, clientY);
+      await syncShellBallCursorPassthroughFromNativePointer();
     })();
 
     window.addEventListener("mousemove", handleMouseMove);
@@ -638,7 +646,18 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       window.removeEventListener("mousemove", handleMouseMove);
       void setShellBallIgnoreCursorEvents(false, false);
     };
-  }, [syncShellBallCursorPassthrough]);
+  }, [syncShellBallCursorPassthrough, syncShellBallCursorPassthroughFromNativePointer]);
+
+  useEffect(() => {
+    if (getCurrentWindow().label !== shellBallWindowLabels.ball) {
+      return;
+    }
+
+    // Message submit completion reveals bubbles and usually blurs the input.
+    // Reconcile immediately so the orb can regain interactivity without waiting
+    // for the next polling tick or a manual extra click.
+    void syncShellBallCursorPassthroughFromNativePointer();
+  }, [inputFocused, snapshot.visibility.bubble, syncShellBallCursorPassthroughFromNativePointer]);
 
   function handleDoubleClick() {
     if (!shouldOpenDashboardFromDoubleClick) {
