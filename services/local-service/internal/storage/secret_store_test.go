@@ -307,13 +307,14 @@ func TestDPAPISecretStoreRejectsCorruptPayload(t *testing.T) {
 }
 
 func TestDPAPISecretStoreLoadAndSavePayloadHelpers(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "stronghold-helper.db")
 	if runtime.GOOS != "windows" {
-		if _, err := NewDPAPISecretStore(filepath.Join(t.TempDir(), "stronghold-helper.db")); err == nil || !errors.Is(err, ErrStrongholdUnavailable) {
+		if _, err := NewDPAPISecretStore(storePath); err == nil || !errors.Is(err, ErrStrongholdUnavailable) {
 			t.Fatalf("expected unsupported platform to reject formal stronghold store, got %v", err)
 		}
 		return
 	}
-	store, err := NewDPAPISecretStore(filepath.Join(t.TempDir(), "stronghold-helper.db"))
+	store, err := NewDPAPISecretStore(storePath)
 	if err != nil {
 		t.Fatalf("NewDPAPISecretStore returned error: %v", err)
 	}
@@ -336,7 +337,7 @@ func TestDPAPISecretStoreLoadAndSavePayloadHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("protectStrongholdBytes returned error: %v", err)
 	}
-	if err := os.WriteFile(store.path, protected, 0o600); err != nil {
+	if err := os.WriteFile(storePath, protected, 0o600); err != nil {
 		t.Fatalf("write protected payload failed: %v", err)
 	}
 	payload, err = store.loadPayloadLocked()
