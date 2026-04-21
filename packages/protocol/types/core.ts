@@ -580,10 +580,22 @@ export interface RetrievalHit {
 export interface PluginManifest {
   plugin_id: string;
   name: string;
+  display_name: string;
+  summary: string;
   version: string;
+  source: "builtin" | "local_dir" | "github" | "marketplace";
   entry: string;
-  capabilities: string[];
+  enabled: boolean;
   permissions: string[];
+  capabilities: PluginCapabilitySummary[];
+}
+
+export interface PluginCapabilitySummary {
+  tool_name: string;
+  display_name: string;
+  description: string;
+  source: "builtin" | "worker" | "sidecar";
+  risk_hint: RiskLevel;
 }
 
 // PluginRuntimeState 定义当前模块的接口约束。
@@ -608,6 +620,52 @@ export interface PluginMetricSnapshot {
   last_started_at: string;
   last_failed_at: string;
   last_seen_at: string;
+}
+
+export interface PluginRuntimeEvent {
+  name: string;
+  kind: PluginRuntimeState["kind"];
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface PluginContractField {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+  example?: string | null;
+}
+
+export interface PluginDataContract {
+  schema_ref: string;
+  schema_json: Record<string, unknown> | null;
+  fields: PluginContractField[];
+}
+
+export interface PluginDeliveryMapping {
+  emits_tool_call: boolean;
+  artifact_types: string[];
+  delivery_types: DeliveryType[];
+  citation_source_types: Citation["source_type"][];
+}
+
+export interface PluginToolContract {
+  tool_name: string;
+  display_name: string;
+  description: string;
+  source: "builtin" | "worker" | "sidecar";
+  risk_hint: RiskLevel;
+  timeout_sec: number;
+  supports_dry_run: boolean;
+  input_contract: PluginDataContract;
+  output_contract: PluginDataContract;
+  delivery_mapping: PluginDeliveryMapping;
+}
+
+export interface PluginListItem extends PluginManifest {
+  runtimes: PluginRuntimeState[];
 }
 
 // RpcResponseMeta 定义当前模块的接口约束。

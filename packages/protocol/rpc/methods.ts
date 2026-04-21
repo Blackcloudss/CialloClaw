@@ -16,6 +16,8 @@ import type {
   IntentPayload,
   MirrorReference,
   NotepadAction,
+  PluginListItem,
+  PluginManifest,
   RecommendationFeedback,
   RecommendationScene,
   RecoveryPoint,
@@ -26,7 +28,9 @@ import type {
   Session,
   SettingsSnapshot,
   PluginMetricSnapshot,
+  PluginRuntimeEvent,
   PluginRuntimeState,
+  PluginToolContract,
   Task,
   TaskControlAction,
   TaskListGroup,
@@ -72,12 +76,16 @@ export const RPC_METHODS_STABLE = {
   AGENT_SETTINGS_GET: "agent.settings.get",
   AGENT_SETTINGS_UPDATE: "agent.settings.update",
   AGENT_PLUGIN_RUNTIME_LIST: "agent.plugin.runtime.list",
+  AGENT_PLUGIN_LIST: "agent.plugin.list",
+  AGENT_PLUGIN_DETAIL_GET: "agent.plugin.detail.get",
 } as const;
 
 // RPC_METHODS_PLANNED reserves method names that are still documented as
 // planned and do not have a frozen implementation contract yet.
 export const RPC_METHODS_PLANNED = {
   AGENT_MIRROR_MEMORY_MANAGE: "agent.mirror.memory.manage",
+  AGENT_PLUGIN_ENABLE: "agent.plugin.enable",
+  AGENT_PLUGIN_DISABLE: "agent.plugin.disable",
 } as const;
 
 // RPC_METHODS combines stable and planned method names for typed reuse.
@@ -766,20 +774,43 @@ export interface AgentPluginRuntimeListParams {
   request_meta?: RequestMeta;
 }
 
-// PluginRuntimeEvent mirrors the backend runtime event query payload.
-export interface PluginRuntimeEvent {
-  name: string;
-  kind: PluginRuntimeState["kind"];
-  event_type: string;
-  payload: Record<string, unknown>;
-  created_at: string;
-}
-
 // AgentPluginRuntimeListResult defines the plugin runtime query result.
 export interface AgentPluginRuntimeListResult {
   items: PluginRuntimeState[];
   metrics: PluginMetricSnapshot[];
   events: PluginRuntimeEvent[];
+}
+
+export interface AgentPluginListParams {
+  request_meta?: RequestMeta;
+  page?: {
+    limit: number;
+    offset: number;
+  };
+  query?: string;
+  kinds?: PluginRuntimeState["kind"][];
+  health?: PluginRuntimeState["health"][];
+}
+
+export interface AgentPluginListResult {
+  items: PluginListItem[];
+  page: JsonRpcPage;
+}
+
+export interface AgentPluginDetailGetParams {
+  request_meta?: RequestMeta;
+  plugin_id: string;
+  include_runtime?: boolean;
+  include_metrics?: boolean;
+  include_events?: boolean;
+}
+
+export interface AgentPluginDetailGetResult {
+  plugin: PluginManifest;
+  runtimes: PluginRuntimeState[];
+  metrics: PluginMetricSnapshot[];
+  recent_events: PluginRuntimeEvent[];
+  tools: PluginToolContract[];
 }
 
 // TaskUpdatedNotification 定义当前模块的接口约束。
