@@ -1046,6 +1046,9 @@ export function useShellBallInteraction() {
     }
 
     if (!focused) {
+      // Blur should fully retire the higher-level input-active state so later
+      // mascot gestures do not inherit a stale input hover relationship.
+      inputHoveredRef.current = false;
       syncHoverRetention();
     }
   }
