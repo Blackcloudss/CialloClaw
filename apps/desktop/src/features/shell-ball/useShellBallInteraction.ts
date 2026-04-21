@@ -1049,7 +1049,11 @@ export function useShellBallInteraction() {
       // Blur should fully retire the higher-level input-active state so later
       // mascot gestures do not inherit a stale input hover relationship.
       inputHoveredRef.current = false;
-      syncHoverRetention();
+      controllerRef.current?.forceState("idle", {
+        regionActive: false,
+        hoverRetained: false,
+      });
+      syncVisualState();
     }
   }
 
