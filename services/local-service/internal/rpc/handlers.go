@@ -43,6 +43,8 @@ func (s *Server) registerHandlers() {
 		"agent.settings.get":                   s.handleAgentSettingsGet,
 		"agent.settings.update":                s.handleAgentSettingsUpdate,
 		"agent.plugin.runtime.list":            s.handleAgentPluginRuntimeList,
+		"agent.plugin.list":                    s.handleAgentPluginList,
+		"agent.plugin.detail.get":              s.handleAgentPluginDetailGet,
 	}
 }
 
@@ -234,6 +236,18 @@ func (s *Server) handleAgentSettingsUpdate(params map[string]any) (any, *rpcErro
 // handleAgentPluginRuntimeList handles agent.plugin.runtime.list.
 func (s *Server) handleAgentPluginRuntimeList(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.PluginRuntimeList(params)
+	return wrapOrchestratorResult(data, err)
+}
+
+// handleAgentPluginList handles agent.plugin.list.
+func (s *Server) handleAgentPluginList(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.PluginList(params)
+	return wrapOrchestratorResult(data, err)
+}
+
+// handleAgentPluginDetailGet handles agent.plugin.detail.get.
+func (s *Server) handleAgentPluginDetailGet(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.PluginDetailGet(params)
 	return wrapOrchestratorResult(data, err)
 }
 

@@ -1400,6 +1400,51 @@ func TestDispatchReturnsPluginRuntimeList(t *testing.T) {
 	}
 }
 
+func TestDispatchReturnsPluginList(t *testing.T) {
+	server := newTestServer()
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-plugin-list"`),
+		Method:  "agent.plugin.list",
+		Params: mustMarshal(t, map[string]any{
+			"query": "ocr",
+			"page":  map[string]any{"limit": 10, "offset": 0},
+		}),
+	})
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	items := data["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["plugin_id"] != "ocr" {
+		t.Fatalf("expected plugin list query to return filtered ocr plugin, got %+v", data)
+	}
+}
+
+func TestDispatchReturnsPluginDetail(t *testing.T) {
+	server := newTestServer()
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-plugin-detail"`),
+		Method:  "agent.plugin.detail.get",
+		Params: mustMarshal(t, map[string]any{
+			"plugin_id": "ocr",
+		}),
+	})
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	if data["plugin"].(map[string]any)["plugin_id"] != "ocr" {
+		t.Fatalf("expected plugin detail query to resolve ocr plugin, got %+v", data)
+	}
+	if len(data["tools"].([]map[string]any)) == 0 {
+		t.Fatalf("expected plugin detail query to return tool contracts, got %+v", data)
+	}
+}
+
 func TestDispatchMapsTaskControlInvalidActionToInvalidParams(t *testing.T) {
 	server := newTestServer()
 

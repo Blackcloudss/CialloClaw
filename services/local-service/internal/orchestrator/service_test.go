@@ -9209,6 +9209,79 @@ func TestServicePluginRuntimeListReturnsStructuredState(t *testing.T) {
 	}
 }
 
+func TestServicePluginListReturnsStructuredCatalog(t *testing.T) {
+	service := newTestService()
+	service.plugin.MarkRuntimeHealthy(plugin.RuntimeKindWorker, "ocr_worker")
+	service.plugin.MarkRuntimeFailed(plugin.RuntimeKindSidecar, "playwright_sidecar", errors.New("sidecar failed"))
+
+	result, err := service.PluginList(map[string]any{
+		"query":  "ocr",
+		"kinds":  []any{"worker"},
+		"health": []any{"healthy"},
+		"page": map[string]any{
+			"limit":  10,
+			"offset": 0,
+		},
+	})
+	if err != nil {
+		t.Fatalf("plugin list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["plugin_id"] != "ocr" {
+		t.Fatalf("expected plugin list to return filtered ocr plugin, got %+v", items)
+	}
+	if len(items[0]["capabilities"].([]map[string]any)) == 0 || len(items[0]["runtimes"].([]map[string]any)) == 0 {
+		t.Fatalf("expected plugin list item to expose capabilities and runtimes, got %+v", items[0])
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 1 || page["has_more"] != false {
+		t.Fatalf("expected plugin list page metadata, got %+v", page)
+	}
+}
+
+func TestServicePluginDetailGetReturnsStructuredContracts(t *testing.T) {
+	service := newTestService()
+	service.plugin.MarkRuntimeHealthy(plugin.RuntimeKindWorker, "ocr_worker")
+
+	result, err := service.PluginDetailGet(map[string]any{
+		"plugin_id":       "ocr",
+		"include_runtime": true,
+		"include_metrics": true,
+		"include_events":  true,
+	})
+	if err != nil {
+		t.Fatalf("plugin detail get failed: %v", err)
+	}
+	pluginValue := result["plugin"].(map[string]any)
+	if pluginValue["plugin_id"] != "ocr" || pluginValue["display_name"] != "OCR Worker" {
+		t.Fatalf("expected structured plugin detail header, got %+v", pluginValue)
+	}
+	runtimes := result["runtimes"].([]map[string]any)
+	if len(runtimes) != 1 || runtimes[0]["name"] != "ocr_worker" {
+		t.Fatalf("expected plugin detail runtimes for ocr worker, got %+v", runtimes)
+	}
+	metrics := result["metrics"].([]map[string]any)
+	if len(metrics) != 1 || metrics[0]["name"] != "ocr_worker" {
+		t.Fatalf("expected plugin detail metrics for ocr worker, got %+v", metrics)
+	}
+	events := result["recent_events"].([]map[string]any)
+	if len(events) == 0 {
+		t.Fatalf("expected plugin detail events, got %+v", events)
+	}
+	tools := result["tools"].([]map[string]any)
+	if len(tools) != 1 || tools[0]["tool_name"] != "ocr_image" {
+		t.Fatalf("expected plugin detail tools, got %+v", tools)
+	}
+	inputContract := tools[0]["input_contract"].(map[string]any)
+	if inputContract["schema_ref"] != "tools/ocr_image/input" {
+		t.Fatalf("expected structured plugin input contract, got %+v", inputContract)
+	}
+	deliveryMapping := tools[0]["delivery_mapping"].(map[string]any)
+	if deliveryMapping["emits_tool_call"] != true {
+		t.Fatalf("expected delivery mapping to preserve tool call emission, got %+v", deliveryMapping)
+	}
+}
+
 func TestServiceSnapshotUsesStablePrimaryWorker(t *testing.T) {
 	service := newTestService()
 	snapshot := service.Snapshot()
