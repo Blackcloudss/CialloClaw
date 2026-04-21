@@ -1357,6 +1357,79 @@ func TestDispatchMapsModelConfigurationErrors(t *testing.T) {
 	}
 }
 
+func TestHandlerWrappersCoverRecommendationInspectorDashboardAndSecurityMethods(t *testing.T) {
+	server := newTestServer()
+	handlerCalls := []struct {
+		name   string
+		invoke func() (any, *rpcError)
+	}{
+		{name: "recommendation.get", invoke: func() (any, *rpcError) { return server.handleAgentRecommendationGet(map[string]any{}) }},
+		{name: "recommendation.feedback.submit", invoke: func() (any, *rpcError) { return server.handleAgentRecommendationFeedbackSubmit(map[string]any{}) }},
+		{name: "task_inspector.config.get", invoke: func() (any, *rpcError) { return server.handleAgentTaskInspectorConfigGet(nil) }},
+		{name: "task_inspector.config.update", invoke: func() (any, *rpcError) {
+			return server.handleAgentTaskInspectorConfigUpdate(map[string]any{"task_sources": []any{"D:/workspace/todos"}, "inspection_interval": map[string]any{"unit": "minute", "value": 10}})
+		}},
+		{name: "task_inspector.run", invoke: func() (any, *rpcError) { return server.handleAgentTaskInspectorRun(map[string]any{}) }},
+		{name: "notepad.list", invoke: func() (any, *rpcError) { return server.handleAgentNotepadList(map[string]any{}) }},
+		{name: "notepad.convert_to_task", invoke: func() (any, *rpcError) {
+			return server.handleAgentNotepadConvertToTask(map[string]any{"item_id": "missing"})
+		}},
+		{name: "dashboard.overview.get", invoke: func() (any, *rpcError) { return server.handleAgentDashboardOverviewGet(map[string]any{}) }},
+		{name: "dashboard.module.get", invoke: func() (any, *rpcError) { return server.handleAgentDashboardModuleGet(map[string]any{"module": "task"}) }},
+		{name: "mirror.overview.get", invoke: func() (any, *rpcError) { return server.handleAgentMirrorOverviewGet(map[string]any{}) }},
+		{name: "security.summary.get", invoke: func() (any, *rpcError) { return server.handleAgentSecuritySummaryGet(nil) }},
+		{name: "security.pending.list", invoke: func() (any, *rpcError) { return server.handleAgentSecurityPendingList(map[string]any{}) }},
+		{name: "security.respond", invoke: func() (any, *rpcError) {
+			return server.handleAgentSecurityRespond(map[string]any{"task_id": "missing", "decision": "approve"})
+		}},
+	}
+	for _, call := range handlerCalls {
+		data, rpcErr := call.invoke()
+		if data == nil && rpcErr == nil {
+			t.Fatalf("expected %s handler to return either data or rpc error", call.name)
+		}
+		if rpcErr != nil && rpcErr.TraceID == "" {
+			t.Fatalf("expected %s handler rpc error to include trace id, got %+v", call.name, rpcErr)
+		}
+	}
+}
+
+func TestJSONRPCHandlerWrappersCoverPrimitiveDecodersAndTracingHelpers(t *testing.T) {
+	req := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`1`),
+		Method:  "agent.settings.update",
+		Params:  mustMarshal(t, map[string]any{"request_meta": map[string]any{"trace_id": "trace_rpc_helpers"}, "enabled": true, "count": 3, "labels": []string{"a", "b"}}),
+	}
+	decoded, err := decodeRequest(strings.NewReader(string(mustMarshal(t, req))))
+	if err != nil {
+		t.Fatalf("decodeRequest returned error: %v", err)
+	}
+	params, err := decodeParams(decoded.Params)
+	if err != nil {
+		t.Fatalf("decodeParams returned error: %v", err)
+	}
+	if requestTraceID(params) != "trace_rpc_helpers" || traceIDFromRequest(decoded.Params) != "trace_rpc_helpers" {
+		t.Fatalf("expected trace helpers to extract request trace ids, params=%+v", params)
+	}
+	if !boolValue(params, "enabled", false) || intValue(params, "count", 0) != 3 {
+		t.Fatalf("expected primitive decoders to round-trip values, params=%+v", params)
+	}
+	labels := stringSliceValue(params["labels"])
+	if len(labels) != 2 || labels[1] != "b" {
+		t.Fatalf("expected stringSliceValue to decode labels, got %+v", labels)
+	}
+	if boolValue(nil, "enabled", false) || intValue(nil, "count", 0) != 0 || len(stringSliceValue(map[string]any{"labels": 7}["labels"])) != 0 {
+		t.Fatal("expected primitive decoders to handle nil and invalid inputs")
+	}
+	if _, err := decodeRequest(strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"agent.settings.get","params":`)); err == nil {
+		t.Fatal("expected malformed request to fail decodeRequest")
+	}
+	if _, err := decodeParams(json.RawMessage(`{"broken":`)); err == nil {
+		t.Fatal("expected malformed params to fail decodeParams")
+	}
+}
+
 func TestDispatchReturnsSettingsGet(t *testing.T) {
 	server := newTestServer()
 	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "settings-get.db")})

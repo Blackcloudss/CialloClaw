@@ -2523,3 +2523,115 @@ func (s stubExecutionCapability) RunCommand(_ context.Context, command string, a
 	}
 	return s.result, nil
 }
+
+func TestExecutionHelperBranchesAndConfigurationAccessors(t *testing.T) {
+	if (*Service)(nil).WithArtifactStore(nil) != nil || (*Service)(nil).WithLoopRuntimeStore(nil) != nil || (*Service)(nil).WithExtensionAssetCatalog(nil) != nil || (*Service)(nil).WithNotificationEmitter(nil) != nil || (*Service)(nil).WithSteeringPoller(nil) != nil {
+		t.Fatal("expected nil service receiver helpers to return nil")
+	}
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	service := NewService(
+		platform.NewLocalFileSystemAdapter(mustPathPolicy(t)),
+		stubExecutionCapability{},
+		sidecarclient.NewNoopPlaywrightSidecarClient(),
+		sidecarclient.NewNoopOCRWorkerClient(),
+		sidecarclient.NewNoopMediaWorkerClient(),
+		sidecarclient.NewNoopScreenCaptureClient(),
+		nil,
+		audit.NewService(),
+		checkpoint.NewService(),
+		delivery.NewService(),
+		toolRegistry,
+		nil,
+		plugin.NewService(),
+	)
+	if service.agentLoopMaxTurns() != 4 || service.agentLoopCompressionChars() != 2400 || service.agentLoopKeepRecent() != 4 || service.agentLoopPlannerRetryBudget() != 1 || service.agentLoopToolRetryBudget() != 1 {
+		t.Fatalf("expected nil-model defaults for agent loop config, got service=%+v", service)
+	}
+	configuredService := NewService(
+		platform.NewLocalFileSystemAdapter(mustPathPolicy(t)),
+		stubExecutionCapability{},
+		sidecarclient.NewNoopPlaywrightSidecarClient(),
+		sidecarclient.NewNoopOCRWorkerClient(),
+		sidecarclient.NewNoopMediaWorkerClient(),
+		sidecarclient.NewNoopScreenCaptureClient(),
+		model.NewService(serviceconfig.ModelConfig{MaxToolIterations: 7, ContextCompressChars: 1234, ContextKeepRecent: 5, PlannerRetryBudget: 2, ToolRetryBudget: 3}),
+		audit.NewService(),
+		checkpoint.NewService(),
+		delivery.NewService(),
+		toolRegistry,
+		nil,
+		plugin.NewService(),
+	)
+	if configuredService.agentLoopMaxTurns() != 7 || configuredService.agentLoopCompressionChars() != 1234 || configuredService.agentLoopKeepRecent() != 5 || configuredService.agentLoopPlannerRetryBudget() != 2 || configuredService.agentLoopToolRetryBudget() != 3 {
+		t.Fatal("expected configured model limits to be exposed through helper accessors")
+	}
+	request := Request{TaskID: "task_helper", Intent: map[string]any{"name": "translate", "arguments": map[string]any{"target_language": "English"}}, BudgetDowngrade: map[string]any{"applied": true, "summary": "Downgraded", "trigger_reason": "provider_unavailable", "degrade_actions": []any{"skip_expensive_tools"}, "trace": map[string]any{"planner_retry_budget": 2, "expensive_tool_categories": []any{"command", "filesystem_mutation"}}}}
+	if !budgetDowngradeBlocksAgentLoopTools(request) || !budgetDowngradeDisallowsDirectTool(request, "exec_command") || budgetDowngradeDisallowsDirectTool(request, "read_file") {
+		t.Fatal("expected budget downgrade helpers to classify expensive tools")
+	}
+	if budgetPlannerRetryBudget(request, 4) != 2 || len(budgetExpensiveToolCategories(request)) != 2 || budgetToolCategory("write_file") != "filesystem_mutation" || budgetToolCategory("page_interact") != "browser_mutation" || budgetToolCategory("normalize_recording") != "media_heavy" {
+		t.Fatal("expected budget helper branches to expose configured categories and overrides")
+	}
+	trace, ok := budgetDowngradeGenerationFallback(request, "input text", errors.New("provider unavailable"))
+	if !ok || trace.GenerationOutput["fallback"] != true || trace.ModelInvocation["fallback"] != true {
+		t.Fatalf("expected budget downgrade generation fallback trace, got %+v ok=%v", trace, ok)
+	}
+	failure := budgetFailureSignal(request, model.ErrClientNotConfigured)
+	if failure == nil || failure["category"] != "budget_auto_downgrade" || !isBudgetFailureReason(model.ErrClientNotConfigured.Error()) || normalizeBudgetFailureReason("") != "execution fallback" {
+		t.Fatalf("expected budget failure helpers to emit structured failure signal, got %+v", failure)
+	}
+	if !containsExecutionString([]string{"a", "b"}, "b") || containsExecutionString([]string{"a"}, "c") {
+		t.Fatal("expected containsExecutionString to match only exact values")
+	}
+	if !strings.Contains(buildPrompt(request, "hello"), "翻译成English") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "rewrite"}}, "hello"), "改写") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "explain"}}, "hello"), "解释") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "write_file"}}, "hello"), "保存为文档") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "summarize"}}, "hello"), "摘要") {
+		t.Fatal("expected buildPrompt to cover major intent variants")
+	}
+	if !strings.Contains(fallbackOutput(request, "hello world"), "翻译结果") || workspaceDocumentContent("", "plain text") == "plain text" || previewTextForOutput("", "bubble") == "" || previewTextForDeliveryType("workspace_document") == "" || truncateBubbleText("") == "" {
+		t.Fatal("expected delivery helper functions to provide fallback output text")
+	}
+	if deliveryPayloadPath(map[string]any{"payload": map[string]any{"path": "workspace/result.md"}}) != "workspace/result.md" || targetPathFromIntent(map[string]any{"arguments": map[string]any{"target_path": "workspace/note.md"}}) != "workspace/note.md" || targetPathFromIntent(map[string]any{"arguments": map[string]any{"target_path": "workspace_document"}}) != "" {
+		t.Fatal("expected delivery path helpers to resolve explicit workspace targets")
+	}
+	if workspaceFSPath("workspace/docs/result.md") != "docs/result.md" || workspaceFSPath("../outside") != "" || workspaceFSPath("workspace") != "." || !isWindowsAbsolutePath("C:/workspace/result.md") {
+		t.Fatal("expected workspace path helpers to normalize and guard paths")
+	}
+	if len(extractHighlights("one. two? three!", 2)) != 2 || firstSentence("one. two") == "" || normalizeWhitespace("  a\n b  ") != "a b" || truncateText("hello world", 5) != "hello..." {
+		t.Fatal("expected text helpers to normalize, extract, and truncate text")
+	}
+	if mapValue(nil, "missing") == nil || stringValue(map[string]any{"name": "  ok  "}, "name", "fallback") != "  ok  " || boolValue(map[string]any{"enabled": true}, "enabled") != true || len(stringSliceValue(map[string]any{"items": []any{" a ", 2, "b"}}, "items")) != 2 {
+		t.Fatal("expected primitive execution helpers to tolerate nil maps and decode slices")
+	}
+	if intValue(map[string]any{"count": int32(3)}, "count") != 3 || intValue(map[string]any{"count": float32(4)}, "count") != 4 || int64Value(map[string]any{"count": float64(5)}, "count") != 5 {
+		t.Fatal("expected numeric helper branches to cover multiple number types")
+	}
+	if invocationRecordMap(nil) != nil {
+		t.Fatal("expected invocationRecordMap(nil) to stay nil")
+	}
+	if agentloopAppendSteeringInput("base", []string{" ", "first", "second"}) == "base" || !isAgentLoopIntent(map[string]any{"name": defaultAgentLoopIntentName}) {
+		t.Fatal("expected steering and intent helpers to cover follow-up guidance branches")
+	}
+	definitions := configuredService.agentLoopToolDefinitions()
+	if len(definitions) == 0 {
+		t.Fatal("expected agentLoopToolDefinitions to expose a bounded tool set")
+	}
+	plannerInput := buildAgentLoopPlannerInput("hello", []string{"obs-1", "obs-2", "obs-3"}, 10, 1)
+	if !strings.Contains(plannerInput, "Observed tool results") || !strings.Contains(summarizeAgentLoopHistory([]string{"obs-1", "obs-2"}, 20), "Compressed earlier observations") || singleLineSummary("a\n b") != "a b" {
+		t.Fatal("expected planner input helpers to compact history")
+	}
+	annotated := annotateLoopRound(tools.ToolCallRecord{}, 2)
+	if annotated.Output["loop_round"] != 2 {
+		t.Fatalf("expected annotateLoopRound to attach loop_round, got %+v", annotated)
+	}
+}
+
+func mustPathPolicy(t *testing.T) *platform.LocalPathPolicy {
+	t.Helper()
+	policy, err := platform.NewLocalPathPolicy(filepath.Join(t.TempDir(), "workspace"))
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+	return policy
+}

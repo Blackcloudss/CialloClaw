@@ -191,10 +191,59 @@ func TestStrongholdSQLiteFallbackProviderHonorsCanceledContext(t *testing.T) {
 	}
 }
 
+func TestStrongholdSQLiteFallbackProviderRejectsUnopenablePath(t *testing.T) {
+	dirPath := filepath.Join(t.TempDir(), "stronghold-fallback-dir")
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		t.Fatalf("prepare fallback directory path failed: %v", err)
+	}
+	provider := NewStrongholdSQLiteFallbackProvider(dirPath)
+	if _, err := provider.Open(context.Background()); !errors.Is(err, ErrStrongholdUnavailable) {
+		t.Fatalf("expected unopenable fallback path to return ErrStrongholdUnavailable, got %v", err)
+	}
+	descriptor := provider.Descriptor()
+	if descriptor.Available || descriptor.Initialized || !descriptor.Fallback {
+		t.Fatalf("expected failed fallback provider descriptor to stay unavailable, got %+v", descriptor)
+	}
+}
+
 func TestStrongholdSQLiteProviderRejectsMissingPath(t *testing.T) {
 	provider := NewStrongholdSQLiteProvider("   ")
 	if _, err := provider.Open(context.Background()); !errors.Is(err, ErrStrongholdUnavailable) {
 		t.Fatalf("expected missing formal provider path to return ErrStrongholdUnavailable, got %v", err)
+	}
+}
+
+func TestStrongholdProvidersDescriptorAndCanceledContextBranches(t *testing.T) {
+	var nilFormalProvider *StrongholdSQLiteProvider
+	descriptor := nilFormalProvider.Descriptor()
+	if descriptor.Backend != "stronghold" || descriptor.Available || descriptor.Initialized || descriptor.Fallback {
+		t.Fatalf("unexpected nil formal provider descriptor: %+v", descriptor)
+	}
+	if _, err := nilFormalProvider.Open(context.Background()); !errors.Is(err, ErrStrongholdUnavailable) {
+		t.Fatalf("expected nil formal provider open to return ErrStrongholdUnavailable, got %v", err)
+	}
+	var nilFallbackProvider *StrongholdSQLiteFallbackProvider
+	descriptor = nilFallbackProvider.Descriptor()
+	if descriptor.Backend != "stronghold_sqlite_fallback" || descriptor.Available || descriptor.Initialized || !descriptor.Fallback {
+		t.Fatalf("unexpected nil fallback provider descriptor: %+v", descriptor)
+	}
+	if _, err := nilFallbackProvider.Open(context.Background()); !errors.Is(err, ErrStrongholdUnavailable) {
+		t.Fatalf("expected nil fallback provider open to return ErrStrongholdUnavailable, got %v", err)
+	}
+
+	formalProvider := NewStrongholdSQLiteProvider(filepath.Join(t.TempDir(), "stronghold-formal-cancel.db"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := formalProvider.Open(ctx); runtime.GOOS == "windows" {
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected canceled formal provider open to return context.Canceled on windows, got %v", err)
+		}
+	} else if !errors.Is(err, ErrStrongholdUnavailable) {
+		t.Fatalf("expected unsupported platform to still report ErrStrongholdUnavailable, got %v", err)
+	}
+	missingFallbackProvider := NewStrongholdSQLiteFallbackProvider("   ")
+	if _, err := missingFallbackProvider.Open(context.Background()); !errors.Is(err, ErrStrongholdUnavailable) {
+		t.Fatalf("expected missing fallback provider path to return ErrStrongholdUnavailable, got %v", err)
 	}
 }
 
@@ -293,6 +342,24 @@ func TestDPAPISecretStoreLoadAndSavePayloadHelpers(t *testing.T) {
 	payload, err = store.loadPayloadLocked()
 	if err != nil || payload.Backend != "stronghold" || payload.Records["model::openai_responses_api_key"].Value != "secret" {
 		t.Fatalf("expected helper payload to round-trip, payload=%+v err=%v", payload, err)
+	}
+}
+
+func TestWindowsStrongholdBlobHelpers(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	if blob := newWindowsDataBlob(nil); blob.Data != nil || blob.Size != 0 {
+		t.Fatalf("expected empty blob for nil input, got %+v", blob)
+	}
+	data := []byte("secret")
+	blob := newWindowsDataBlob(data)
+	if blob.Data == nil || blob.Size != uint32(len(data)) {
+		t.Fatalf("expected populated blob, got %+v", blob)
+	}
+	freeWindowsDataBlob(newWindowsDataBlob(nil))
+	if decoded, err := unprotectStrongholdBytes([]byte("not-protected")); err == nil || decoded != nil {
+		t.Fatalf("expected invalid ciphertext to fail, decoded=%v err=%v", decoded, err)
 	}
 }
 

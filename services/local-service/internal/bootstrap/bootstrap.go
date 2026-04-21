@@ -48,13 +48,22 @@ type runtimeStarter interface {
 	Start() error
 }
 
+var (
+	newLocalPathPolicyForBootstrap        = platform.NewLocalPathPolicy
+	registerBuiltinToolsForBootstrap      = builtin.RegisterBuiltinTools
+	registerPlaywrightToolsForBootstrap   = sidecarclient.RegisterPlaywrightTools
+	registerOCRToolsForBootstrap          = sidecarclient.RegisterOCRTools
+	registerMediaToolsForBootstrap        = sidecarclient.RegisterMediaTools
+	newModelServiceFromConfigForBootstrap = model.NewServiceFromConfig
+)
+
 // New assembles a fully wired local-service application.
 func New(cfg config.Config) (*App, error) {
 	if strings.ContainsRune(cfg.WorkspaceRoot, '\x00') {
 		return nil, fmt.Errorf("workspace root contains invalid null byte")
 	}
 
-	pathPolicy, err := platform.NewLocalPathPolicy(cfg.WorkspaceRoot)
+	pathPolicy, err := newLocalPathPolicyForBootstrap(cfg.WorkspaceRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -91,16 +100,20 @@ func New(cfg config.Config) (*App, error) {
 	mediaClient := mediaRuntime.Client()
 	screenClient := sidecarclient.NewLocalScreenCaptureClient(fileSystem)
 	toolRegistry := tools.NewRegistry()
-	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+	if err := registerBuiltinToolsForBootstrap(toolRegistry); err != nil {
+		_ = storageService.Close()
 		return nil, err
 	}
-	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
+	if err := registerPlaywrightToolsForBootstrap(toolRegistry); err != nil {
+		_ = storageService.Close()
 		return nil, err
 	}
-	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
+	if err := registerOCRToolsForBootstrap(toolRegistry); err != nil {
+		_ = storageService.Close()
 		return nil, err
 	}
-	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
+	if err := registerMediaToolsForBootstrap(toolRegistry); err != nil {
+		_ = storageService.Close()
 		return nil, err
 	}
 	toolExecutor := tools.NewToolExecutor(
@@ -108,7 +121,7 @@ func New(cfg config.Config) (*App, error) {
 		tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())),
 	)
 
-	modelService, err := model.NewServiceFromConfig(model.ServiceConfig{
+	modelService, err := newModelServiceFromConfigForBootstrap(model.ServiceConfig{
 		ModelConfig:  cfg.Model,
 		SecretSource: model.NewStaticSecretSource(storageService),
 	})
