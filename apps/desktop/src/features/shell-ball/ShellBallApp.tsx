@@ -4,7 +4,7 @@
  * transitions.
  */
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useEventListener } from "ahooks";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, monitorFromPoint } from "@tauri-apps/api/window";
@@ -33,7 +33,7 @@ import {
   shellBallWindowLabels,
   showShellBallWindow,
 } from "../../platform/shellBallWindowController";
-import { getShellBallMousePosition, setShellBallIgnoreCursorEvents } from "../../platform/shellBallWindow";
+import { setShellBallInteractiveRegions, setShellBallPressLock } from "../../platform/shellBallWindow";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
 
 type ShellBallAppProps = {
@@ -50,14 +50,6 @@ type ShellBallWindowAnchor = {
 const SHELL_BALL_DASHBOARD_TRANSITION_DURATION_MS = 260;
 const SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS = 240;
 const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;
-const SHELL_BALL_INTERACTIVE_SELECTOR = [
-  ".shell-ball-mascot__hotspot",
-  ".shell-ball-uiverse-inputbox textarea",
-  ".shell-ball-uiverse-action",
-  ".shell-ball-mascot__voice-hint",
-  ".shell-ball-bubble-zone",
-  ".shell-ball-bubble-message__control",
-].join(", ");
 
 type ShellBallClipboardPrompt = {
   text: string;
@@ -262,10 +254,9 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const [selectionPrompt, setSelectionPrompt] = useState<ShellBallSelectionSnapshot | null>(null);
   const [clipboardPrompt, setClipboardPrompt] = useState<ShellBallClipboardPrompt | null>(null);
   const anchorRef = useRef<ShellBallWindowAnchor | null>(null);
-  const activeInteractiveRegionsRef = useRef(0);
-  const interactivePassthroughRef = useRef(true);
   const pressCaptureLockRef = useRef(false);
   const mascotRef = useRef<HTMLDivElement>(null);
+  const lastReportedMascotRegionRef = useRef<string>("");
   const dashboardTransitionPhaseRef = useRef<ShellBallDashboardTransitionPhase>("idle");
   const clipboardPromptClearTimeoutRef = useRef<number | null>(null);
   const selectionPromptClearTimeoutRef = useRef<number | null>(null);
@@ -334,79 +325,36 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleDroppedFiles: handleCoordinatorDroppedFiles,
   };
 
-  const resolveShellBallInteractiveHit = useCallback((clientX: number, clientY: number) => {
-    const interactiveElements = rootRef.current?.querySelectorAll<HTMLElement>(SHELL_BALL_INTERACTIVE_SELECTOR) ?? [];
-
-    for (const element of interactiveElements) {
-      const rect = element.getBoundingClientRect();
-
-      if (
-        clientX >= rect.left
-        && clientX <= rect.right
-        && clientY >= rect.top
-        && clientY <= rect.bottom
-      ) {
-        return true;
-      }
-    }
-
-    return false;
-  }, [rootRef]);
-
-  const syncShellBallCursorPassthrough = useCallback(async (clientX: number, clientY: number) => {
+  const reportMascotHotspotRegion = useCallback(async () => {
     const currentWindow = getCurrentWindow();
 
     if (currentWindow.label !== shellBallWindowLabels.ball) {
       return;
     }
 
-    const hitInteractiveZone = resolveShellBallInteractiveHit(clientX, clientY);
-    const nextIgnoreCursorEvents = pressCaptureLockRef.current ? false : !hitInteractiveZone;
-
-    if (interactivePassthroughRef.current === nextIgnoreCursorEvents) {
+    const hotspot = mascotRef.current?.querySelector<HTMLElement>(".shell-ball-mascot__hotspot");
+    if (hotspot === null || hotspot === undefined) {
+      await setShellBallInteractiveRegions([]);
+      lastReportedMascotRegionRef.current = "";
       return;
     }
 
-    interactivePassthroughRef.current = nextIgnoreCursorEvents;
-    await setShellBallIgnoreCursorEvents(nextIgnoreCursorEvents, true);
-  }, [resolveShellBallInteractiveHit]);
-
-  const syncShellBallCursorPassthroughFromNativePointer = useCallback(async () => {
-    const currentWindow = getCurrentWindow();
-
-    if (currentWindow.label !== shellBallWindowLabels.ball) {
-      return;
-    }
-
-    const mousePosition = await getShellBallMousePosition();
-    if (mousePosition === null) {
-      return;
-    }
-
-    const outerPosition = await currentWindow.outerPosition();
+    const rect = hotspot.getBoundingClientRect();
     const scaleFactor = await currentWindow.scaleFactor();
-    const clientX = (mousePosition.client_x - outerPosition.x) / scaleFactor;
-    const clientY = (mousePosition.client_y - outerPosition.y) / scaleFactor;
+    const region = {
+      x: Math.round(rect.left * scaleFactor),
+      y: Math.round(rect.top * scaleFactor),
+      width: Math.max(1, Math.round(rect.width * scaleFactor)),
+      height: Math.max(1, Math.round(rect.height * scaleFactor)),
+    };
+    const signature = JSON.stringify(region);
 
-    await syncShellBallCursorPassthrough(clientX, clientY);
-  }, [syncShellBallCursorPassthrough]);
-
-  const setShellBallWindowInteractive = useCallback(async () => {
-    if (!interactivePassthroughRef.current) {
+    if (signature === lastReportedMascotRegionRef.current) {
       return;
     }
 
-    interactivePassthroughRef.current = false;
-    await setShellBallIgnoreCursorEvents(false, true);
-  }, []);
-
-  const setShellBallWindowPassthrough = useCallback(async () => {
-    if (pressCaptureLockRef.current || activeInteractiveRegionsRef.current > 0 || interactivePassthroughRef.current) {
-      return;
-    }
-
-    interactivePassthroughRef.current = true;
-    await setShellBallIgnoreCursorEvents(true, true);
+    lastReportedMascotRegionRef.current = signature;
+    await setShellBallInteractiveRegions([region]);
   }, []);
 
   const focusInlineInputField = useCallback((syncInteraction = true) => {
@@ -434,46 +382,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     })();
   }, [focusInlineInputField, handleCoordinatorDroppedFiles, handleCoordinatorPrimaryAction]);
 
-  const enterInteractiveRegion = useCallback(() => {
-    activeInteractiveRegionsRef.current += 1;
-    void setShellBallWindowInteractive();
-  }, [setShellBallWindowInteractive]);
-
-  const leaveInteractiveRegion = useCallback(() => {
-    activeInteractiveRegionsRef.current = Math.max(0, activeInteractiveRegionsRef.current - 1);
-    void setShellBallWindowPassthrough();
-  }, [setShellBallWindowPassthrough]);
-
-  const handleInteractiveRegionEnter = useCallback(() => {
-    enterInteractiveRegion();
-    handleCoordinatorRegionEnter();
-  }, [enterInteractiveRegion, handleCoordinatorRegionEnter]);
-
-  const handleInteractiveRegionLeave = useCallback(() => {
-    leaveInteractiveRegion();
-    handleCoordinatorRegionLeave();
-  }, [handleCoordinatorRegionLeave, leaveInteractiveRegion]);
-
-  const handleInteractiveInputHoverChange = useCallback((active: boolean) => {
-    if (active) {
-      enterInteractiveRegion();
-    } else {
-      leaveInteractiveRegion();
-    }
-
-    handleCoordinatorInputHoverChange(active);
-  }, [enterInteractiveRegion, handleCoordinatorInputHoverChange, leaveInteractiveRegion]);
-
-  const handleInteractiveBubbleHoverChange = useCallback((active: boolean) => {
-    if (active) {
-      enterInteractiveRegion();
-    } else {
-      leaveInteractiveRegion();
-    }
-
-    handleCoordinatorBubbleHoverChange(active);
-  }, [enterInteractiveRegion, handleCoordinatorBubbleHoverChange, leaveInteractiveRegion]);
-
   const handleInlineInputFocusChange = useCallback((focused: boolean) => {
     if (!focused) {
       // Blur should fully retire any outstanding focus request so later orb
@@ -486,27 +394,27 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
   const handleLockedPressStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     pressCaptureLockRef.current = true;
-    void setShellBallWindowInteractive();
+    void setShellBallPressLock(true);
     handlePressStart(event);
-  }, [handlePressStart, setShellBallWindowInteractive]);
+  }, [handlePressStart]);
 
   const handleLockedPressEnd = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     try {
       return handlePressEnd(event);
     } finally {
       pressCaptureLockRef.current = false;
-      void setShellBallWindowPassthrough();
+      void setShellBallPressLock(false);
     }
-  }, [handlePressEnd, setShellBallWindowPassthrough]);
+  }, [handlePressEnd]);
 
   const handleLockedPressCancel = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     try {
       handlePressCancel(event);
     } finally {
       pressCaptureLockRef.current = false;
-      void setShellBallWindowPassthrough();
+      void setShellBallPressLock(false);
     }
-  }, [handlePressCancel, setShellBallWindowPassthrough]);
+  }, [handlePressCancel]);
 
   useEffect(() => {
     const wasVoiceActive =
@@ -668,52 +576,31 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const currentWindow = getCurrentWindow();
 
     if (currentWindow.label !== shellBallWindowLabels.ball) {
       return;
     }
 
-    let disposed = false;
-
-    const handleMouseMove = (event: MouseEvent) => {
-      void syncShellBallCursorPassthrough(event.clientX, event.clientY);
-    };
-
     void (async () => {
-      // Start in click-through mode and immediately reconcile the current native
-      // cursor position so the shell-ball window does not block the desktop when
-      // the pointer is outside its true hotspots.
-      interactivePassthroughRef.current = true;
-      await setShellBallIgnoreCursorEvents(true, true);
-
-      if (disposed) {
-        return;
-      }
-
-      await syncShellBallCursorPassthroughFromNativePointer();
+      await reportMascotHotspotRegion();
     })();
 
-    window.addEventListener("mousemove", handleMouseMove);
-
     return () => {
-      disposed = true;
-      window.removeEventListener("mousemove", handleMouseMove);
-      void setShellBallIgnoreCursorEvents(false, false);
+      void setShellBallInteractiveRegions([]);
+      void setShellBallPressLock(false);
+      lastReportedMascotRegionRef.current = "";
     };
-  }, [syncShellBallCursorPassthrough, syncShellBallCursorPassthroughFromNativePointer]);
+  }, [reportMascotHotspotRegion, windowFrame]);
 
   useEffect(() => {
     if (getCurrentWindow().label !== shellBallWindowLabels.ball) {
       return;
     }
 
-    // Message submit completion reveals bubbles and usually blurs the input.
-    // Reconcile immediately so the orb can regain interactivity without waiting
-    // for another forwarded mousemove or a manual extra click.
-    void syncShellBallCursorPassthroughFromNativePointer();
-  }, [inputFocused, snapshot.visibility.bubble, syncShellBallCursorPassthroughFromNativePointer]);
+    void reportMascotHotspotRegion();
+  }, [snapshot.visibility.bubble, inputFocused, reportMascotHotspotRegion]);
 
   function handleDoubleClick() {
     if (!shouldOpenDashboardFromDoubleClick) {
@@ -946,10 +833,10 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
                 data-shell-ball-interactive="true"
                 data-visibility-phase={snapshot.bubbleRegion.visibilityPhase}
                 onPointerEnter={() => {
-                  handleInteractiveBubbleHoverChange(true);
+                  handleCoordinatorBubbleHoverChange(true);
                 }}
                 onPointerLeave={() => {
-                  handleInteractiveBubbleHoverChange(false);
+                  handleCoordinatorBubbleHoverChange(false);
                 }}
               >
                 <ShellBallBubbleZone
@@ -974,10 +861,10 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
           data-shell-ball-input-window="true"
           data-shell-ball-interactive="true"
           onPointerEnter={() => {
-            handleInteractiveInputHoverChange(true);
+            handleCoordinatorInputHoverChange(true);
           }}
           onPointerLeave={() => {
-            handleInteractiveInputHoverChange(false);
+            handleCoordinatorInputHoverChange(false);
           }}
         >
           <ShellBallAttachmentTray paths={pendingFiles} onRemove={handleRemovePendingFile} />
@@ -1035,8 +922,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       }}
       onPrimaryClick={handleMascotPrimaryAction}
       onDoubleClick={handleDoubleClick}
-      onRegionEnter={handleInteractiveRegionEnter}
-      onRegionLeave={handleInteractiveRegionLeave}
+      onRegionEnter={handleCoordinatorRegionEnter}
+      onRegionLeave={handleCoordinatorRegionLeave}
       onTextDrop={handleSurfaceTextDrop}
       inputFocused={inputFocused}
       onPressStart={handleLockedPressStart}

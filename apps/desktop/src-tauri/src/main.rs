@@ -747,6 +747,27 @@ fn pick_shell_ball_files(window: tauri::Window) -> Result<Vec<String>, String> {
         .collect())
 }
 
+#[derive(Clone, serde::Deserialize)]
+struct ShellBallInteractiveRect {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+#[cfg(windows)]
+#[derive(Clone, Default)]
+struct ShellBallInteractiveState {
+    hwnd: Option<isize>,
+    regions: Vec<ShellBallInteractiveRect>,
+    press_lock: bool,
+    current_ignore: Option<bool>,
+}
+
+#[cfg(windows)]
+static SHELL_BALL_INTERACTIVE_STATE: Lazy<Mutex<ShellBallInteractiveState>> =
+    Lazy::new(|| Mutex::new(ShellBallInteractiveState::default()));
+
 fn open_or_focus_dashboard_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window(DASHBOARD_WINDOW_LABEL) {
         if let Err(error) = window.unminimize() {
@@ -843,6 +864,71 @@ unsafe fn set_forward_mouse_messages(hwnd: HWND, forward: bool) {
 }
 
 #[cfg(windows)]
+unsafe fn set_window_ignore_cursor_events(hwnd: HWND, ignore: bool) {
+    let current_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+    let layered_style = current_style | WS_EX_LAYERED.0 as u32;
+    let next_style = if ignore {
+        layered_style | WS_EX_TRANSPARENT.0 as u32
+    } else {
+        layered_style & !(WS_EX_TRANSPARENT.0 as u32)
+    };
+
+    if next_style == current_style {
+        return;
+    }
+
+    let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next_style as isize);
+    let _ = SetWindowPos(
+        hwnd,
+        Some(HWND(std::ptr::null_mut())),
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+    );
+}
+
+#[cfg(windows)]
+unsafe fn sync_shell_ball_native_hit_testing(screen_point: POINT) {
+    let snapshot = match SHELL_BALL_INTERACTIVE_STATE.lock() {
+        Ok(state) => state.clone(),
+        Err(_) => return,
+    };
+
+    let Some(hwnd_value) = snapshot.hwnd else {
+        return;
+    };
+
+    let hwnd = HWND(hwnd_value as _);
+    let mut client_point = screen_point;
+    if !ScreenToClient(hwnd, &mut client_point).as_bool() {
+        return;
+    }
+
+    let hit_interactive_region = snapshot.press_lock
+        || snapshot.regions.iter().any(|region| {
+            client_point.x >= region.x
+                && client_point.x <= region.x + region.width
+                && client_point.y >= region.y
+                && client_point.y <= region.y + region.height
+        });
+    let next_ignore = !hit_interactive_region;
+
+    if snapshot.current_ignore == Some(next_ignore) {
+        return;
+    }
+
+    set_window_ignore_cursor_events(hwnd, next_ignore);
+
+    if let Ok(mut state) = SHELL_BALL_INTERACTIVE_STATE.lock() {
+        if state.hwnd == Some(hwnd_value) {
+            state.current_ignore = Some(next_ignore);
+        }
+    }
+}
+
+#[cfg(windows)]
 unsafe extern "system" fn mousemove_forward(
     n_code: i32,
     w_param: WPARAM,
@@ -854,6 +940,8 @@ unsafe extern "system" fn mousemove_forward(
 
     if w_param.0 as u32 == WM_MOUSEMOVE {
         let point = (*(l_param.0 as *const MSLLHOOKSTRUCT)).pt;
+
+        sync_shell_ball_native_hit_testing(point);
 
         let forwarding_windows = match FORWARDING_WINDOWS.lock() {
             Ok(guard) => guard,
@@ -946,6 +1034,76 @@ fn shell_ball_get_mouse_position() -> Option<CursorPosition> {
     None
 }
 
+#[cfg(windows)]
+#[tauri::command]
+fn shell_ball_set_interactive_regions(
+    window: tauri::Window,
+    regions: Vec<ShellBallInteractiveRect>,
+) -> Result<(), String> {
+    let hwnd = window
+        .hwnd()
+        .map_err(|error| format!("failed to get shell-ball hwnd: {error}"))?;
+
+    {
+        let mut state = SHELL_BALL_INTERACTIVE_STATE
+            .lock()
+            .map_err(|_| "shell-ball interactive state lock poisoned".to_string())?;
+        state.hwnd = Some(hwnd.0 as isize);
+        state.regions = regions;
+        state.current_ignore = None;
+    }
+
+    let mut point = POINT { x: 0, y: 0 };
+    unsafe {
+        if GetCursorPos(&mut point).is_ok() {
+            sync_shell_ball_native_hit_testing(point);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn shell_ball_set_interactive_regions(
+    _window: tauri::Window,
+    _regions: Vec<ShellBallInteractiveRect>,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn shell_ball_set_press_lock(window: tauri::Window, locked: bool) -> Result<(), String> {
+    let hwnd = window
+        .hwnd()
+        .map_err(|error| format!("failed to get shell-ball hwnd: {error}"))?;
+
+    {
+        let mut state = SHELL_BALL_INTERACTIVE_STATE
+            .lock()
+            .map_err(|_| "shell-ball interactive state lock poisoned".to_string())?;
+        state.hwnd = Some(hwnd.0 as isize);
+        state.press_lock = locked;
+        state.current_ignore = None;
+    }
+
+    let mut point = POINT { x: 0, y: 0 };
+    unsafe {
+        if GetCursorPos(&mut point).is_ok() {
+            sync_shell_ball_native_hit_testing(point);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn shell_ball_set_press_lock(_window: tauri::Window, _locked: bool) -> Result<(), String> {
+    Ok(())
+}
+
 #[tauri::command]
 fn shell_ball_apply_window_frame(
     window: tauri::Window,
@@ -1008,6 +1166,8 @@ fn main() {
             named_pipe_unsubscribe,
             shell_ball_set_ignore_cursor_events,
             shell_ball_get_mouse_position,
+            shell_ball_set_interactive_regions,
+            shell_ball_set_press_lock,
             desktop_get_mouse_activity_snapshot,
             desktop_capture_screenshot,
             desktop_get_active_window_context,

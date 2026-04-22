@@ -7,6 +7,13 @@ export type ShellBallMousePosition = {
   client_y: number;
 };
 
+export type ShellBallInteractiveRect = {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+};
+
 export type ShellBallWindowBounds = {
   height: number;
   width: number;
@@ -75,6 +82,34 @@ export async function getShellBallMousePosition() {
   }
 
   return invoke<ShellBallMousePosition | null>("shell_ball_get_mouse_position");
+}
+
+/**
+ * Reports the current shell-ball interactive hotspot rectangles to the native
+ * host using physical client coordinates relative to the shell-ball window.
+ */
+export async function setShellBallInteractiveRegions(regions: ShellBallInteractiveRect[]) {
+  if (!isTauriWindowEnvironment()) {
+    return;
+  }
+
+  await invoke("shell_ball_set_interactive_regions", {
+    regions,
+  });
+}
+
+/**
+ * Locks native shell-ball hit-testing to stay interactive while a mascot press
+ * sequence is active.
+ */
+export async function setShellBallPressLock(locked: boolean) {
+  if (!isTauriWindowEnvironment()) {
+    return;
+  }
+
+  await invoke("shell_ball_set_press_lock", {
+    locked,
+  });
 }
 
 /**
