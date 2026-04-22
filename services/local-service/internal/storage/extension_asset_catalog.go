@@ -49,7 +49,7 @@ func (s *Service) CurrentExecutionAssets(ctx context.Context) ([]ExtensionAssetR
 	} else if ok {
 		refs = append(refs, ref)
 	}
-	return refs, nil
+	return NormalizeExtensionAssetReferences(refs), nil
 }
 
 // PluginAssetsForCapabilities resolves plugin manifest references for the given
@@ -97,7 +97,7 @@ func (s *Service) PluginAssetsForCapabilities(ctx context.Context, capabilities 
 		}
 		return refs[i].Name < refs[j].Name
 	})
-	return refs, nil
+	return NormalizeExtensionAssetReferences(refs), nil
 }
 
 // EnsureBuiltinExecutionAssets keeps one minimal built-in asset selection in the
