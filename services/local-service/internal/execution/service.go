@@ -425,6 +425,12 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 	if err != nil {
 		return Result{}, false, err
 	}
+	promotedArtifact, promotedCleanup := s.promoteScreenArtifactForPersistence(ctx, request.TaskID, analysis.Artifact)
+	analysis.Artifact = promotedArtifact
+	analysis.CitationSeed["artifact_id"] = stringValue(analysis.Artifact, "artifact_id", "")
+	analysis.CitationSeed["artifact_type"] = stringValue(analysis.Artifact, "artifact_type", "")
+	analysis.CitationSeed["screen_session_id"] = stringValue(mapValue(analysis.Artifact, "delivery_payload"), "screen_session_id", "")
+	analysis.CitationSeed["evidence_role"] = stringValue(mapValue(analysis.Artifact, "delivery_payload"), "evidence_role", "")
 	auditRecord := s.screenAnalysisAuditRecord(request.TaskID, candidate, analysis.PreviewText)
 	cleanupPlan := s.screenAnalysisCleanupPlan(candidate)
 	cleanupSummary := s.screenAnalysisCleanupSummary(candidate)
@@ -434,6 +440,11 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 		"skipped_paths": stringSliceValue(cleanupPlan, "paths"),
 		"deleted_count": 0,
 		"skipped_count": len(stringSliceValue(cleanupPlan, "paths")),
+	}
+	if len(promotedCleanup) > 0 {
+		cleanupPlan = nil
+		cleanupSummary = cloneMap(promotedCleanup)
+		cleanupExecuted = cloneMap(promotedCleanup)
 	}
 	persistedArtifact := s.persistScreenArtifact(ctx, request.TaskID, analysis.Artifact)
 	recoveryPoint := s.screenAnalysisRecoveryPoint(ctx, request.TaskID, cleanupPlan, cleanupExecuted)
@@ -465,6 +476,51 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 	return result, true, nil
 }
 
+func (s *Service) promoteScreenArtifactForPersistence(_ context.Context, taskID string, artifact map[string]any) (map[string]any, map[string]any) {
+	normalized := cloneMap(artifact)
+	if len(normalized) == 0 || s == nil || s.fileSystem == nil {
+		return normalized, nil
+	}
+	currentPath := workspaceFSPath(stringValue(normalized, "path", ""))
+	if currentPath == "" || !strings.HasPrefix(currentPath, "temp/") {
+		return normalized, nil
+	}
+	if normalizedID := delivery.EnsureArtifactIdentifiers(taskID, []map[string]any{normalized}); len(normalizedID) == 1 {
+		normalized = normalizedID[0]
+	}
+	artifactID := stringValue(normalized, "artifact_id", "")
+	if artifactID == "" {
+		return normalized, nil
+	}
+	targetDir := path.Join("artifacts", "screen", taskID)
+	targetPath := path.Join(targetDir, fmt.Sprintf("%s%s", artifactID, filepath.Ext(currentPath)))
+	if currentPath == targetPath {
+		return normalized, nil
+	}
+	if err := s.fileSystem.MkdirAll(targetDir); err != nil {
+		return normalized, nil
+	}
+	if err := s.fileSystem.Move(currentPath, targetPath); err != nil {
+		return normalized, nil
+	}
+	normalized["path"] = targetPath
+	payload := cloneMap(mapValue(normalized, "delivery_payload"))
+	payload["retention_policy"] = string(tools.ScreenRetentionArtifact)
+	normalized["delivery_payload"] = payload
+	if normalizedID := delivery.EnsureArtifactIdentifiers(taskID, []map[string]any{normalized}); len(normalizedID) == 1 {
+		normalized = normalizedID[0]
+	}
+	cleanup := map[string]any{
+		"reason":            "screen_artifact_promoted",
+		"deleted_paths":     []string{currentPath},
+		"skipped_paths":     []string{},
+		"deleted_count":     1,
+		"skipped_count":     0,
+		"screen_session_id": stringValue(payload, "screen_session_id", ""),
+	}
+	return normalized, cleanup
+}
+
 func (s *Service) persistScreenArtifact(ctx context.Context, taskID string, artifact map[string]any) map[string]any {
 	if s == nil || s.artifactStore == nil || len(artifact) == 0 {
 		return nil
@@ -487,7 +543,7 @@ func (s *Service) persistScreenArtifact(ctx context.Context, taskID string, arti
 	if err := s.artifactStore.SaveArtifacts(ctx, []storage.ArtifactRecord{record}); err != nil {
 		return map[string]any{"persisted": false, "reason": err.Error()}
 	}
-	return map[string]any{"persisted": true, "artifact_id": record.ArtifactID}
+	return map[string]any{"persisted": true, "artifact_id": record.ArtifactID, "path": record.Path}
 }
 
 func (s *Service) screenAnalysisRecoveryPoint(ctx context.Context, taskID string, cleanupPlan map[string]any, cleanupExecuted map[string]any) map[string]any {

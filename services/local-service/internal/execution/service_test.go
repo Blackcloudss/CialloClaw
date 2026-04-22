@@ -1816,7 +1816,7 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 		t.Fatalf("expected screen audit metadata, got %+v", auditRecord)
 	}
 	cleanupSummary := mapValue(result.ToolOutput, "cleanup_summary")
-	if cleanupSummary["reason"] != "screen_analysis_pending_cleanup" || cleanupSummary["skipped_count"] != 1 {
+	if cleanupSummary["reason"] != "screen_artifact_promoted" || cleanupSummary["deleted_count"] != 1 {
 		t.Fatalf("expected cleanup summary to be attached, got %+v", result.ToolOutput)
 	}
 	traceSummary := mapValue(result.ToolOutput, "trace_summary")
@@ -1828,23 +1828,30 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 		t.Fatalf("expected eval summary to be attached, got %+v", result.ToolOutput)
 	}
 	cleanupPlan := mapValue(result.ToolOutput, "cleanup_plan")
-	if cleanupPlan["cleanup_required"] != true {
-		t.Fatalf("expected cleanup plan to be attached, got %+v", result.ToolOutput)
+	if len(cleanupPlan) != 0 {
+		t.Fatalf("expected cleanup plan to be cleared after artifact promotion, got %+v", result.ToolOutput)
 	}
 	cleanupExecuted := mapValue(result.ToolOutput, "cleanup_executed")
-	if cleanupExecuted["deleted_count"] != 0 || cleanupExecuted["skipped_count"] != 1 {
+	if cleanupExecuted["deleted_count"] != 1 || cleanupExecuted["skipped_count"] != 0 {
 		t.Fatalf("expected cleanup execution summary, got %+v", result.ToolOutput)
 	}
 	persisted := mapValue(result.ToolOutput, "artifact_persisted")
 	if persisted["persisted"] != true {
 		t.Fatalf("expected artifact persistence result, got %+v", result.ToolOutput)
 	}
-	recoveryPoint := mapValue(result.ToolOutput, "recovery_point")
-	if recoveryPoint["kind"] != "screen_cleanup" || recoveryPoint["cleanup_status"] != "pending_retry" {
-		t.Fatalf("expected deferred cleanup recovery semantics, got %+v", result.ToolOutput)
+	artifactPath := result.Artifacts[0]["path"].(string)
+	if !strings.HasPrefix(artifactPath, "artifacts/screen/task_screen_exec_001/") {
+		t.Fatalf("expected promoted artifact path, got %q", artifactPath)
 	}
-	if _, err := os.Stat(filepath.Join(workspaceRoot, "temp", "screen_sess_020", "frame_020.png")); err != nil {
-		t.Fatalf("expected persisted screen artifact source to remain until dedicated cleanup, got %v", err)
+	recoveryPoint := mapValue(result.ToolOutput, "recovery_point")
+	if len(recoveryPoint) != 0 {
+		t.Fatalf("expected artifact promotion to clear deferred cleanup recovery semantics, got %+v", result.ToolOutput)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, "temp", "screen_sess_020", "frame_020.png")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected promoted artifact source to be moved out of temp storage, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(artifactPath))); err != nil {
+		t.Fatalf("expected promoted artifact file to exist, got %v", err)
 	}
 	records, total, err := service.artifactStore.ListArtifacts(context.Background(), "task_screen_exec_001", 20, 0)
 	if err != nil || total != 1 || len(records) != 1 {
@@ -1852,6 +1859,9 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 	}
 	if records[0].ArtifactType != "screen_capture" {
 		t.Fatalf("expected screen_capture artifact record, got %+v", records[0])
+	}
+	if records[0].Path != artifactPath || persisted["path"] != artifactPath {
+		t.Fatalf("expected persisted artifact path to follow promoted artifact, record=%+v persisted=%+v", records[0], persisted)
 	}
 }
 

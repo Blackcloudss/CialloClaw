@@ -173,3 +173,47 @@ func TestLocalScreenCaptureClientStopAndHelperBranches(t *testing.T) {
 		t.Fatalf("expected uniqueScreenPaths to trim and dedupe, got %+v", got)
 	}
 }
+
+func TestLocalScreenCaptureClientCleansOrphanTempFiles(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	policy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy failed: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(policy)
+	if err := fileSystem.MkdirAll("temp/orphan_session"); err != nil {
+		t.Fatalf("mkdir orphan temp dir failed: %v", err)
+	}
+	if err := fileSystem.MkdirAll("inputs"); err != nil {
+		t.Fatalf("mkdir inputs failed: %v", err)
+	}
+	if err := fileSystem.WriteFile("temp/orphan_session/orphan.png", []byte("orphan")); err != nil {
+		t.Fatalf("write orphan temp file failed: %v", err)
+	}
+	if err := fileSystem.WriteFile("inputs/live.png", []byte("live")); err != nil {
+		t.Fatalf("write live source file failed: %v", err)
+	}
+	client := NewLocalScreenCaptureClient(fileSystem).(*localScreenCaptureClient)
+	client.now = func() time.Time { return time.Date(2026, 4, 19, 0, 0, 0, 0, time.UTC) }
+	liveSession, err := client.StartSession(context.Background(), tools.ScreenSessionStartInput{SessionID: "sess_screen_live", TaskID: "task_screen_live", RunID: "run_screen_live", TTL: 365 * 24 * time.Hour})
+	if err != nil {
+		t.Fatalf("start live session failed: %v", err)
+	}
+	liveCandidate, err := client.CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{ScreenSessionID: liveSession.ScreenSessionID, SourcePath: "inputs/live.png"})
+	if err != nil {
+		t.Fatalf("capture live screenshot failed: %v", err)
+	}
+	cleanup, err := client.CleanupExpiredScreenTemps(context.Background(), tools.ScreenCleanupInput{Reason: "ttl_cleanup", ExpiredBefore: time.Now().Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("cleanup expired temps failed: %v", err)
+	}
+	if cleanup.DeletedCount != 1 || cleanup.DeletedPaths[0] != "temp/orphan_session/orphan.png" {
+		t.Fatalf("expected orphan temp cleanup to remove only orphan file, got %+v", cleanup)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash("temp/orphan_session/orphan.png"))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected orphan temp file to be removed, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(liveCandidate.Path))); err != nil {
+		t.Fatalf("expected tracked live temp file to remain, got %v", err)
+	}
+}

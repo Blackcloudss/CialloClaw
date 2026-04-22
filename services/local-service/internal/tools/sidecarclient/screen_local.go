@@ -3,6 +3,7 @@ package sidecarclient
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -192,6 +193,9 @@ func (c *localScreenCaptureClient) CleanupExpiredScreenTemps(_ context.Context, 
 			c.sessions[sessionID] = expired
 		}
 	}
+	orphanDeleted, orphanSkipped := c.cleanupOrphanTempPathsLocked(input.ExpiredBefore)
+	deleted = append(deleted, orphanDeleted...)
+	skipped = append(skipped, orphanSkipped...)
 	return tools.ScreenCleanupResult{
 		Reason:       firstNonEmpty(input.Reason, "expired_cleanup"),
 		DeletedPaths: deleted,
@@ -269,6 +273,55 @@ func (c *localScreenCaptureClient) captureFromWorkspaceSource(input tools.Screen
 func (c *localScreenCaptureClient) nextScreenSessionID() string {
 	c.nextID++
 	return fmt.Sprintf("screen_local_%04d", c.nextID)
+}
+
+func (c *localScreenCaptureClient) cleanupOrphanTempPathsLocked(expiredBefore time.Time) ([]string, []string) {
+	if c.fileSystem == nil || expiredBefore.IsZero() {
+		return nil, nil
+	}
+	entries, err := fs.ReadDir(c.fileSystem, "temp")
+	if err != nil {
+		return nil, nil
+	}
+	trackedSessions := make(map[string]struct{}, len(c.sessions))
+	for sessionID := range c.sessions {
+		trackedSessions[sessionID] = struct{}{}
+	}
+	deleted := make([]string, 0)
+	skipped := make([]string, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		sessionID := strings.TrimSpace(entry.Name())
+		if sessionID == "" {
+			continue
+		}
+		if _, ok := trackedSessions[sessionID]; ok {
+			continue
+		}
+		sessionDir := filepath.ToSlash(filepath.Join("temp", sessionID))
+		files, err := fs.ReadDir(c.fileSystem, sessionDir)
+		if err != nil {
+			continue
+		}
+		for _, fileEntry := range files {
+			if fileEntry.IsDir() {
+				continue
+			}
+			candidatePath := filepath.ToSlash(filepath.Join(sessionDir, fileEntry.Name()))
+			info, err := fs.Stat(c.fileSystem, candidatePath)
+			if err != nil || info.ModTime().After(expiredBefore) {
+				continue
+			}
+			if err := c.fileSystem.Remove(candidatePath); err != nil {
+				skipped = append(skipped, candidatePath)
+				continue
+			}
+			deleted = append(deleted, candidatePath)
+		}
+	}
+	return deleted, skipped
 }
 
 func uniqueScreenPaths(values []string) []string {
