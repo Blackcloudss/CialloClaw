@@ -368,6 +368,46 @@ func TestEngineUpdateSettingsEmitsLeafModelKeys(t *testing.T) {
 	}
 }
 
+func TestEngineUpdateSettingsAccumulatesLegacyDataLogFields(t *testing.T) {
+	engine := NewEngine()
+	effective, updatedKeys, _, _, err := engine.UpdateSettings(map[string]any{
+		"data_log": map[string]any{
+			"provider":              "anthropic",
+			"budget_auto_downgrade": false,
+			"base_url":              "https://example.invalid/v1",
+			"model":                 "claude-test",
+			"budget_policy": map[string]any{
+				"failure_signal_window": 4,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("update settings returned error: %v", err)
+	}
+	expectedKeys := []string{
+		"models.credentials.base_url",
+		"models.credentials.budget_auto_downgrade",
+		"models.credentials.budget_policy.failure_signal_window",
+		"models.credentials.model",
+		"models.provider",
+	}
+	if !reflect.DeepEqual(updatedKeys, expectedKeys) {
+		t.Fatalf("expected legacy data_log keys to normalize into models credentials, got %+v", updatedKeys)
+	}
+	models := effective["models"].(map[string]any)
+	credentials := models["credentials"].(map[string]any)
+	if models["provider"] != "anthropic" {
+		t.Fatalf("expected provider to normalize from legacy data_log, got %+v", models)
+	}
+	if credentials["budget_auto_downgrade"] != false || credentials["base_url"] != "https://example.invalid/v1" || credentials["model"] != "claude-test" {
+		t.Fatalf("expected legacy data_log credentials to accumulate, got %+v", credentials)
+	}
+	budgetPolicy := credentials["budget_policy"].(map[string]any)
+	if budgetPolicy["failure_signal_window"] != 4 {
+		t.Fatalf("expected legacy budget policy to accumulate, got %+v", budgetPolicy)
+	}
+}
+
 func TestEngineUpdateSettingsOnlyRequestsRestartWhenLanguageChanges(t *testing.T) {
 	engine := NewEngine()
 	_, updatedKeys, applyMode, needRestart, err := engine.UpdateSettings(map[string]any{

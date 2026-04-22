@@ -2793,21 +2793,25 @@ func normalizeSettingsPatch(values map[string]any) map[string]any {
 		normalized = map[string]any{}
 	}
 	if dataLog, ok := normalized["data_log"].(map[string]any); ok && len(dataLog) > 0 {
-		models := map[string]any{}
+		models := cloneMap(mapValue(normalized, "models"))
+		if models == nil {
+			models = map[string]any{}
+		}
+		credentials := cloneMap(mapValue(models, "credentials"))
+		if credentials == nil {
+			credentials = map[string]any{}
+		}
 		for key, value := range dataLog {
 			switch key {
 			case "provider":
 				models[key] = value
 			default:
-				credentials := mapValue(normalized, "models", "credentials")
-				if credentials == nil {
-					credentials = map[string]any{}
-				}
 				credentials[key] = value
-				models["credentials"] = credentials
 			}
 		}
-		mergeMaps(models, mapValue(normalized, "models"))
+		if len(credentials) > 0 {
+			models["credentials"] = credentials
+		}
 		normalized["models"] = models
 		delete(normalized, "data_log")
 	}
