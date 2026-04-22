@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1090,6 +1091,20 @@ func TestModelFallbackErrorFromToolOutputRecognizesProviderAndTransportErrors(t 
 	}
 }
 
+func TestModelFallbackErrorFromToolOutputRebuildsHTTPStatusErrors(t *testing.T) {
+	err := modelFallbackErrorFromToolOutput(map[string]any{"fallback_reason": "openai responses returned http status 503: service unavailable"})
+	if !errors.Is(err, model.ErrOpenAIHTTPStatus) {
+		t.Fatalf("expected ErrOpenAIHTTPStatus, got %v", err)
+	}
+	var statusErr *model.OpenAIHTTPStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected OpenAIHTTPStatusError, got %T", err)
+	}
+	if statusErr.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", statusErr.StatusCode)
+	}
+}
+
 func TestBudgetDowngradeGenerationFallbackBuildsStructuredFallback(t *testing.T) {
 	trace, ok := budgetDowngradeGenerationFallback(Request{
 		TaskID:          "task_budget_helper",
@@ -1143,6 +1158,17 @@ func TestBudgetFailureSignalRecognizesToolOutputInvalid(t *testing.T) {
 	}
 	if signal["reason"] != tools.ErrToolOutputInvalid.Error() {
 		t.Fatalf("expected tool output invalid reason to be preserved, got %+v", signal)
+	}
+}
+
+func TestBudgetFailureSignalRecognizesProviderRuntimeUnavailable(t *testing.T) {
+	signal := budgetFailureSignal(Request{BudgetDowngrade: map[string]any{"applied": true}}, &model.OpenAIHTTPStatusError{StatusCode: http.StatusServiceUnavailable, Message: "service unavailable"})
+	if signal == nil {
+		t.Fatal("expected provider runtime failure to produce budget failure signal")
+	}
+	reason, _ := signal["reason"].(string)
+	if !strings.Contains(reason, "http status 503") {
+		t.Fatalf("expected provider runtime reason to be preserved, got %+v", signal)
 	}
 }
 

@@ -6923,8 +6923,12 @@ func classifyModelFailure(err error) (string, string) {
 		return "MODEL_PROVIDER_NOT_FOUND", "model_provider"
 	case errors.Is(err, model.ErrModelProviderRequired):
 		return "MODEL_PROVIDER_NOT_FOUND", "model_provider"
-	case errors.Is(err, model.ErrToolCallingNotSupported), errors.Is(err, model.ErrOpenAIEndpointRequired), errors.Is(err, model.ErrOpenAIModelIDRequired), errors.Is(err, model.ErrOpenAIHTTPStatus), errors.Is(err, model.ErrOpenAIRequestFailed), errors.Is(err, model.ErrOpenAIRequestTimeout), errors.Is(err, model.ErrOpenAIResponseInvalid):
+	case model.IsProviderRuntimeUnavailable(err):
+		return "MODEL_RUNTIME_UNAVAILABLE", "model_runtime"
+	case errors.Is(err, model.ErrToolCallingNotSupported):
 		return "MODEL_NOT_ALLOWED", "model_capability"
+	case errors.Is(err, model.ErrOpenAIEndpointRequired), errors.Is(err, model.ErrOpenAIModelIDRequired), errors.Is(err, model.ErrOpenAIHTTPStatus):
+		return "MODEL_NOT_ALLOWED", "model_configuration"
 	case errors.Is(err, tools.ErrToolOutputInvalid):
 		return "TOOL_OUTPUT_INVALID", "model_output"
 	case errors.Is(err, model.ErrClientNotConfigured), errors.Is(err, model.ErrOpenAIAPIKeyRequired), errors.Is(err, model.ErrSecretSourceFailed), errors.Is(err, model.ErrSecretNotFound), errors.Is(err, storage.ErrSecretNotFound), errors.Is(err, storage.ErrStrongholdUnavailable), errors.Is(err, storage.ErrSecretStoreAccessFailed):
@@ -6942,10 +6946,12 @@ func executionFailureBubble(err error) string {
 		return "执行失败：当前模型凭证未配置或不可访问，请先完成模型设置后重试。"
 	case errors.Is(err, model.ErrModelProviderRequired), errors.Is(err, model.ErrModelProviderUnsupported):
 		return "执行失败：当前模型提供方未登记，请检查模型设置后重试。"
+	case model.IsProviderRuntimeUnavailable(err):
+		return "执行失败：当前模型服务暂时不可用，请稍后重试。"
 	case errors.Is(err, model.ErrToolCallingNotSupported):
 		return "执行失败：当前模型不支持所需的工具调用能力，请调整模型设置后重试。"
-	case errors.Is(err, model.ErrOpenAIEndpointRequired), errors.Is(err, model.ErrOpenAIModelIDRequired), errors.Is(err, model.ErrOpenAIHTTPStatus), errors.Is(err, model.ErrOpenAIRequestFailed), errors.Is(err, model.ErrOpenAIRequestTimeout), errors.Is(err, model.ErrOpenAIResponseInvalid):
-		return "执行失败：当前模型配置或响应不可用，请检查模型设置后重试。"
+	case errors.Is(err, model.ErrOpenAIEndpointRequired), errors.Is(err, model.ErrOpenAIModelIDRequired), errors.Is(err, model.ErrOpenAIHTTPStatus):
+		return "执行失败：当前模型配置不完整或请求被提供方拒绝，请检查模型设置后重试。"
 	case errors.Is(err, tools.ErrToolOutputInvalid):
 		return "执行失败：当前模型返回结果不完整，请稍后重试。"
 	case errors.Is(err, tools.ErrWorkspaceBoundaryDenied):

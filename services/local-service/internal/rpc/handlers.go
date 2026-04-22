@@ -360,7 +360,15 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			TraceID: "trace_model_provider_not_found",
 		}
 	}
-	if errors.Is(err, model.ErrToolCallingNotSupported) || errors.Is(err, model.ErrOpenAIEndpointRequired) || errors.Is(err, model.ErrOpenAIModelIDRequired) || errors.Is(err, model.ErrOpenAIHTTPStatus) || errors.Is(err, model.ErrOpenAIRequestFailed) || errors.Is(err, model.ErrOpenAIRequestTimeout) || errors.Is(err, model.ErrOpenAIResponseInvalid) {
+	if model.IsProviderRuntimeUnavailable(err) {
+		return nil, &rpcError{
+			Code:    1008007,
+			Message: "MODEL_RUNTIME_UNAVAILABLE",
+			Detail:  err.Error(),
+			TraceID: "trace_model_runtime_unavailable",
+		}
+	}
+	if errors.Is(err, model.ErrToolCallingNotSupported) || errors.Is(err, model.ErrOpenAIEndpointRequired) || errors.Is(err, model.ErrOpenAIModelIDRequired) || errors.Is(err, model.ErrOpenAIHTTPStatus) {
 		return nil, &rpcError{
 			Code:    1008002,
 			Message: "MODEL_NOT_ALLOWED",

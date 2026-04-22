@@ -1573,6 +1573,9 @@ func modelFallbackErrorFromToolOutput(raw map[string]any) error {
 	}
 
 	matched := make([]error, 0, 12)
+	if statusErr := openAIHTTPStatusErrorFromFallbackReason(reason); statusErr != nil {
+		matched = append(matched, statusErr)
+	}
 	for _, candidate := range []error{
 		model.ErrClientNotConfigured,
 		model.ErrToolCallingNotSupported,
@@ -1583,7 +1586,6 @@ func modelFallbackErrorFromToolOutput(raw map[string]any) error {
 		model.ErrOpenAIAPIKeyRequired,
 		model.ErrOpenAIEndpointRequired,
 		model.ErrOpenAIModelIDRequired,
-		model.ErrOpenAIHTTPStatus,
 		model.ErrOpenAIRequestFailed,
 		model.ErrOpenAIRequestTimeout,
 		model.ErrOpenAIResponseInvalid,
@@ -1601,6 +1603,25 @@ func modelFallbackErrorFromToolOutput(raw map[string]any) error {
 	}
 	matched = append(matched, errors.New(reason))
 	return errors.Join(matched...)
+}
+
+func openAIHTTPStatusErrorFromFallbackReason(reason string) error {
+	const prefix = "openai responses returned http status "
+	trimmed := strings.TrimSpace(reason)
+	if !strings.HasPrefix(trimmed, prefix) {
+		return nil
+	}
+
+	remainder := strings.TrimPrefix(trimmed, prefix)
+	statusText, message, hasMessage := strings.Cut(remainder, ": ")
+	var statusCode int
+	if _, err := fmt.Sscanf(statusText, "%d", &statusCode); err != nil || statusCode <= 0 {
+		return errors.Join(model.ErrOpenAIHTTPStatus, errors.New(trimmed))
+	}
+	if !hasMessage {
+		return &model.OpenAIHTTPStatusError{StatusCode: statusCode}
+	}
+	return &model.OpenAIHTTPStatusError{StatusCode: statusCode, Message: strings.TrimSpace(message)}
 }
 
 func invocationRecordMap(record *model.InvocationRecord) map[string]any {
@@ -1703,7 +1724,7 @@ func budgetFailureSignal(request Request, generationErr error) map[string]any {
 		return nil
 	}
 	reason := strings.TrimSpace(generationErr.Error())
-	if !errors.Is(generationErr, model.ErrClientNotConfigured) && !errors.Is(generationErr, model.ErrToolCallingNotSupported) && !errors.Is(generationErr, model.ErrModelProviderRequired) && !errors.Is(generationErr, model.ErrModelProviderUnsupported) && !errors.Is(generationErr, model.ErrSecretNotFound) && !errors.Is(generationErr, model.ErrSecretSourceFailed) && !errors.Is(generationErr, model.ErrOpenAIAPIKeyRequired) && !errors.Is(generationErr, model.ErrOpenAIEndpointRequired) && !errors.Is(generationErr, model.ErrOpenAIModelIDRequired) && !errors.Is(generationErr, model.ErrOpenAIHTTPStatus) && !errors.Is(generationErr, model.ErrOpenAIRequestFailed) && !errors.Is(generationErr, model.ErrOpenAIRequestTimeout) && !errors.Is(generationErr, model.ErrOpenAIResponseInvalid) && !errors.Is(generationErr, tools.ErrToolOutputInvalid) && !isBudgetFailureReason(reason) {
+	if !errors.Is(generationErr, model.ErrClientNotConfigured) && !errors.Is(generationErr, model.ErrToolCallingNotSupported) && !errors.Is(generationErr, model.ErrModelProviderRequired) && !errors.Is(generationErr, model.ErrModelProviderUnsupported) && !errors.Is(generationErr, model.ErrSecretNotFound) && !errors.Is(generationErr, model.ErrSecretSourceFailed) && !errors.Is(generationErr, model.ErrOpenAIAPIKeyRequired) && !errors.Is(generationErr, model.ErrOpenAIEndpointRequired) && !errors.Is(generationErr, model.ErrOpenAIModelIDRequired) && !model.IsProviderRuntimeUnavailable(generationErr) && !errors.Is(generationErr, tools.ErrToolOutputInvalid) && !isBudgetFailureReason(reason) {
 		return nil
 	}
 	return map[string]any{

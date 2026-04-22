@@ -387,7 +387,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `1005xxx`：数据库、Artifact、恢复点、Stronghold、RAG 等落盘能力异常。
 - `1006xxx`：worker / sidecar / plugin 进程不可用或输出非法。
 - `1007xxx`：平台和执行环境问题。
-- `1008xxx`：模型、Skill、Blueprint、Prompt 模板、LSP 前馈能力异常；其中 `1008001`、`1008002` 已登记，其余仍为预留段。
+- `1008xxx`：模型、Skill、Blueprint、Prompt 模板、LSP 前馈能力异常；其中 `1008001`、`1008002`、`1008007` 已登记，其余仍为预留段。
 - `1009xxx`：结果审查、Doom Loop、Eval、Human-in-the-loop 升级异常，当前为预留段。
 
 ### 6.3 推荐错误码表
@@ -444,6 +444,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - `1008001` `MODEL_PROVIDER_NOT_FOUND`
 - `1008002` `MODEL_NOT_ALLOWED`
+- `1008007` `MODEL_RUNTIME_UNAVAILABLE`
 
 #### 预留错误码（尚未登记到错误码真源）
 

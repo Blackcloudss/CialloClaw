@@ -1389,12 +1389,46 @@ func TestDispatchMapsModelCapabilityErrors(t *testing.T) {
 }
 
 func TestDispatchMapsModelConfigurationErrors(t *testing.T) {
-	_, rpcErr := wrapOrchestratorResult(nil, model.ErrOpenAIEndpointRequired)
-	if rpcErr == nil {
-		t.Fatal("expected rpc error")
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "endpoint missing", err: model.ErrOpenAIEndpointRequired},
+		{name: "provider rejected request", err: &model.OpenAIHTTPStatusError{StatusCode: 400, Message: "bad request"}},
 	}
-	if rpcErr.Code != 1008002 || rpcErr.Message != "MODEL_NOT_ALLOWED" {
-		t.Fatalf("expected MODEL_NOT_ALLOWED mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, rpcErr := wrapOrchestratorResult(nil, test.err)
+			if rpcErr == nil {
+				t.Fatal("expected rpc error")
+			}
+			if rpcErr.Code != 1008002 || rpcErr.Message != "MODEL_NOT_ALLOWED" {
+				t.Fatalf("expected MODEL_NOT_ALLOWED mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+			}
+		})
+	}
+}
+
+func TestDispatchMapsModelRuntimeErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "timeout", err: model.ErrOpenAIRequestTimeout},
+		{name: "provider unavailable", err: &model.OpenAIHTTPStatusError{StatusCode: 503, Message: "service unavailable"}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, rpcErr := wrapOrchestratorResult(nil, test.err)
+			if rpcErr == nil {
+				t.Fatal("expected rpc error")
+			}
+			if rpcErr.Code != 1008007 || rpcErr.Message != "MODEL_RUNTIME_UNAVAILABLE" {
+				t.Fatalf("expected MODEL_RUNTIME_UNAVAILABLE mapping, got code=%d message=%s", rpcErr.Code, rpcErr.Message)
+			}
+		})
 	}
 }
 

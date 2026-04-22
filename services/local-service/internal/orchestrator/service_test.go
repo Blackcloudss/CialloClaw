@@ -5131,7 +5131,7 @@ func TestClassifyModelFailureUsesFormalCodes(t *testing.T) {
 			name:     "endpoint missing",
 			err:      model.ErrOpenAIEndpointRequired,
 			wantCode: "MODEL_NOT_ALLOWED",
-			wantType: "model_capability",
+			wantType: "model_configuration",
 		},
 		{
 			name:     "api key missing",
@@ -5142,8 +5142,20 @@ func TestClassifyModelFailureUsesFormalCodes(t *testing.T) {
 		{
 			name:     "provider timeout",
 			err:      model.ErrOpenAIRequestTimeout,
+			wantCode: "MODEL_RUNTIME_UNAVAILABLE",
+			wantType: "model_runtime",
+		},
+		{
+			name:     "provider rate limited",
+			err:      &model.OpenAIHTTPStatusError{StatusCode: 429, Message: "rate limited"},
+			wantCode: "MODEL_RUNTIME_UNAVAILABLE",
+			wantType: "model_runtime",
+		},
+		{
+			name:     "provider rejects request",
+			err:      &model.OpenAIHTTPStatusError{StatusCode: 400, Message: "bad request"},
 			wantCode: "MODEL_NOT_ALLOWED",
-			wantType: "model_capability",
+			wantType: "model_configuration",
 		},
 		{
 			name:     "output invalid",
