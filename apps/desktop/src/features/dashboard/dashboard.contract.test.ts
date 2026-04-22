@@ -833,6 +833,36 @@ test("security board styles stay scoped to the safety feature stylesheet", () =>
   assert.doesNotMatch(globalsSource, /\.security-page__draggable\s*\{/);
 });
 
+test("security board cards keep CJK headlines and status badges readable", () => {
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+  const securityBoardSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/securityBoard.css"), "utf8");
+
+  assert.match(securityAppSource, /className="security-page__status-strip"/);
+  assert.match(securityAppSource, /className="security-page__status-badge"/);
+  assert.match(securityAppSource, /className="security-page__card-badge"/);
+  assert.match(securityBoardSource, /--security-font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun"/);
+  assert.match(securityBoardSource, /\.security-page__card-line \{[\s\S]*line-height: 1\.18;/);
+  assert.match(securityBoardSource, /\.security-page__card-line \{[\s\S]*overflow-wrap: anywhere;/);
+  assert.match(securityBoardSource, /\.security-page__status-badge,[\s\S]*white-space: normal;/);
+});
+
+test("security board cards reserve a larger readable footprint", () => {
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+
+  assert.match(securityAppSource, /const DEFAULT_CARD_SIZE: CardSize = \{ width: 316, height: 236 \};/);
+  assert.match(securityAppSource, /width: clampValue\(width, 228, DEFAULT_CARD_SIZE\.width\)/);
+  assert.match(securityAppSource, /height: clampValue\(height, 172, DEFAULT_CARD_SIZE\.height\)/);
+});
+
+test("security board dragging keeps the path free until drop settles collisions", () => {
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+
+  assert.match(securityAppSource, /const getClampedCardPosition = useCallback/);
+  assert.match(securityAppSource, /Keep the drag path free while the card is moving/);
+  assert.match(securityAppSource, /handleCardPointerMove[\s\S]*getClampedCardPosition\(/);
+  assert.match(securityAppSource, /handleCardPointerUp[\s\S]*getSettledCardPosition\(key, currentPositions\[key\] \?\? FALLBACK_POSITION, currentPositions\)/);
+});
+
 test("SecurityApp keeps task-detail navigation hooks above the module-data early return", () => {
   const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
   const earlyReturnIndex = securityAppSource.search(/if \(!moduleData\) \{\s*return \(\s*<main className="app-shell security-page">/);
