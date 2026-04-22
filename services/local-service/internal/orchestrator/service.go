@@ -6430,6 +6430,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		},
 	})
 	processingTask = s.recordExecutionToolCalls(processingTask, executionResult.ToolCalls)
+	s.persistExecutionToolCallEvents(processingTask, taskIntent, executionResult.ToolCalls)
 	auditDeliveryResult := executionResult.DeliveryResult
 	if err != nil {
 		auditDeliveryResult = nil
@@ -6465,6 +6466,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
 	}
+	s.persistExecutionDeliveryResult(updatedTask, taskIntent, executionResult.DeliveryResult)
 	updatedTask = s.attachFormalCitations(processingTask, updatedTask, executionResult.ToolCalls, executionResult.ToolOutput, executionResult.DeliveryResult, executionArtifacts)
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
@@ -6853,6 +6855,125 @@ func (s *Service) recordExecutionToolCalls(task runengine.TaskRecord, toolCalls 
 		}
 	}
 	return task
+}
+
+func (s *Service) persistExecutionToolCallEvents(task runengine.TaskRecord, taskIntent map[string]any, toolCalls []tools.ToolCallRecord) {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || isAgentLoopTaskIntent(taskIntent) || len(toolCalls) == 0 {
+		return
+	}
+	startedAt := time.Now().UTC()
+	records := make([]storage.EventRecord, 0, len(toolCalls))
+	for index, toolCall := range toolCalls {
+		if strings.TrimSpace(toolCall.ToolName) == "" {
+			continue
+		}
+		createdAt := startedAt.Add(time.Duration(index) * time.Millisecond)
+		records = append(records, storage.EventRecord{
+			EventID:     fmt.Sprintf("evt_%s_%s_%d", task.TaskID, strings.ReplaceAll(toolCall.ToolCallID, ".", "_"), index),
+			RunID:       task.RunID,
+			TaskID:      task.TaskID,
+			StepID:      toolCall.StepID,
+			Type:        "tool_call.completed",
+			Level:       executionToolCallEventLevel(toolCall),
+			PayloadJSON: marshalOrchestratorEventPayload(executionToolCallEventPayload(task.TaskID, toolCall)),
+			CreatedAt:   createdAt.Format(time.RFC3339Nano),
+		})
+	}
+	if len(records) == 0 {
+		return
+	}
+	_ = s.storage.LoopRuntimeStore().SaveEvents(context.Background(), records)
+}
+
+func (s *Service) persistExecutionDeliveryResult(task runengine.TaskRecord, taskIntent map[string]any, deliveryResult map[string]any) {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || isAgentLoopTaskIntent(taskIntent) || len(deliveryResult) == 0 {
+		return
+	}
+	createdAt := time.Now().UTC()
+	deliveryResultID := fmt.Sprintf("delivery_result_%s_%d", task.TaskID, createdAt.UnixNano())
+	payloadJSON := marshalOrchestratorEventPayload(mapValue(deliveryResult, "payload"))
+	_ = s.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: deliveryResultID,
+		TaskID:           task.TaskID,
+		Type:             stringValue(deliveryResult, "type", "bubble"),
+		Title:            stringValue(deliveryResult, "title", ""),
+		PayloadJSON:      payloadJSON,
+		PreviewText:      stringValue(deliveryResult, "preview_text", ""),
+		CreatedAt:        createdAt.Format(time.RFC3339Nano),
+	})
+	_ = s.storage.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{{
+		EventID:     fmt.Sprintf("evt_%s_delivery_ready_%d", task.TaskID, createdAt.UnixNano()),
+		RunID:       task.RunID,
+		TaskID:      task.TaskID,
+		Type:        "delivery.ready",
+		Level:       "info",
+		PayloadJSON: marshalOrchestratorEventPayload(executionDeliveryReadyPayload(task.TaskID, deliveryResultID, deliveryResult)),
+		CreatedAt:   createdAt.Add(time.Millisecond).Format(time.RFC3339Nano),
+	}})
+}
+
+func executionToolCallEventLevel(toolCall tools.ToolCallRecord) string {
+	if toolCall.Status == tools.ToolCallStatusFailed || toolCall.Status == tools.ToolCallStatusTimeout {
+		return "error"
+	}
+	return "info"
+}
+
+func executionToolCallEventPayload(taskID string, toolCall tools.ToolCallRecord) map[string]any {
+	payload := map[string]any{
+		"task_id":      taskID,
+		"tool_call_id": toolCall.ToolCallID,
+		"tool_name":    toolCall.ToolName,
+		"tool_status":  string(toolCall.Status),
+		"duration_ms":  toolCall.DurationMS,
+	}
+	if toolCall.ErrorCode != nil {
+		payload["error_code"] = *toolCall.ErrorCode
+	}
+	for _, key := range []string{"path", "url", "output_path", "output_dir", "source", "execution_backend", "page_count", "frame_count"} {
+		if value, ok := toolCall.Output[key]; ok {
+			payload[key] = value
+			continue
+		}
+		if value, ok := toolCall.Input[key]; ok {
+			payload[key] = value
+		}
+	}
+	if summaryOutput, ok := toolCall.Output["summary_output"].(map[string]any); ok && len(summaryOutput) > 0 {
+		payload["summary_output"] = cloneMap(summaryOutput)
+	}
+	return payload
+}
+
+func executionDeliveryReadyPayload(taskID, deliveryResultID string, deliveryResult map[string]any) map[string]any {
+	payload := map[string]any{
+		"task_id":            taskID,
+		"delivery_result_id": deliveryResultID,
+		"delivery_type":      stringValue(deliveryResult, "type", "bubble"),
+		"preview_text":       stringValue(deliveryResult, "preview_text", ""),
+	}
+	deliveryPayload := mapValue(deliveryResult, "payload")
+	for _, key := range []string{"path", "url"} {
+		if value, ok := deliveryPayload[key]; ok {
+			payload[key] = value
+		}
+	}
+	return payload
+}
+
+func marshalOrchestratorEventPayload(payload map[string]any) string {
+	if len(payload) == 0 {
+		return "{}"
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "{}"
+	}
+	return string(encoded)
+}
+
+func isAgentLoopTaskIntent(taskIntent map[string]any) bool {
+	return stringValue(taskIntent, "name", "") == "agent_loop"
 }
 
 func executionStepName(taskIntent map[string]any) string {

@@ -460,7 +460,7 @@ func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, execut
 	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
 		t.Fatalf("register media tools: %v", err)
 	}
-	toolExecutor := tools.NewToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())))
 	pluginService := plugin.NewService()
 	seedTestExtensionAssets(t, storageService, pluginService)
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
@@ -506,7 +506,7 @@ func newTestServiceWithModelService(t *testing.T, modelService *model.Service) (
 	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
 		t.Fatalf("register media tools: %v", err)
 	}
-	toolExecutor := tools.NewToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())))
 	pluginService := plugin.NewService()
 	seedTestExtensionAssets(t, storageService, pluginService)
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
@@ -2959,6 +2959,92 @@ func TestServiceStartTaskRespectsPreferredDelivery(t *testing.T) {
 	}
 	if record.StorageWritePlan != nil || len(record.ArtifactPlans) != 0 {
 		t.Fatal("expected bubble delivery not to create document persistence plans")
+	}
+}
+
+func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "unused")
+	readPath := filepath.Join(workspaceRoot, "notes", "source.txt")
+	if err := os.MkdirAll(filepath.Dir(readPath), 0o755); err != nil {
+		t.Fatalf("create notes dir: %v", err)
+	}
+	if err := os.WriteFile(readPath, []byte("hello from formal sample chain"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_read_file_sample",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请读取这个文件",
+		},
+		"intent": map[string]any{
+			"name": "read_file",
+			"arguments": map[string]any{
+				"path": "notes/source.txt",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+
+	toolCallsResult, err := service.TaskToolCallsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	toolCalls := toolCallsResult["items"].([]map[string]any)
+	if len(toolCalls) != 1 || toolCalls[0]["tool_name"] != "read_file" {
+		t.Fatalf("expected one persisted read_file tool call, got %+v", toolCalls)
+	}
+	if mapValue(toolCalls[0], "input")["path"] != "notes/source.txt" {
+		t.Fatalf("expected persisted read_file path, got %+v", toolCalls[0])
+	}
+
+	eventsResult, err := service.TaskEventsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task events list failed: %v", err)
+	}
+	events := eventsResult["items"].([]map[string]any)
+	if len(events) != 2 {
+		t.Fatalf("expected tool_call.completed plus delivery.ready, got %+v", events)
+	}
+	foundToolCompleted := false
+	foundDeliveryReady := false
+	for _, event := range events {
+		switch event["type"] {
+		case "tool_call.completed":
+			foundToolCompleted = true
+		case "delivery.ready":
+			foundDeliveryReady = true
+		}
+	}
+	if !foundToolCompleted || !foundDeliveryReady {
+		t.Fatalf("expected persisted read_file runtime events, got %+v", events)
+	}
+
+	deliveryRecord, ok, err := service.storage.LoopRuntimeStore().GetLatestDeliveryResult(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("get latest delivery result failed: %v", err)
+	}
+	if !ok || deliveryRecord.Type != "bubble" || !strings.Contains(deliveryRecord.PreviewText, "hello from formal sample chain") {
+		t.Fatalf("expected persisted direct delivery result, ok=%v record=%+v", ok, deliveryRecord)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["events_count"] != 2 || runtimeSummary["latest_event_type"] != "delivery.ready" {
+		t.Fatalf("expected task detail runtime summary to prefer formal event chain, got %+v", runtimeSummary)
+	}
+	deliveryResult := detailResult["delivery_result"].(map[string]any)
+	if deliveryResult["type"] != "bubble" {
+		t.Fatalf("expected task detail to expose formal delivery_result, got %+v", deliveryResult)
 	}
 }
 
