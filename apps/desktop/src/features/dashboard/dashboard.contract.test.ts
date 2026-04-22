@@ -1808,6 +1808,20 @@ test("task page adopts rpc output helpers directly in the task detail panel", ()
   assert.match(taskDetailNavigationSource, /requestDashboardTaskDetailOpen/);
 });
 
+test("dashboard task-detail routing deduplicates retry request ids and accepts tasks outside loaded buckets", () => {
+  const dashboardRootSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardRoot.tsx"), "utf8");
+  const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+
+  assert.match(dashboardRootSource, /handledTaskDetailRequestIdsRef = useRef<Map<string, number>>\(new Map\(\)\)/);
+  assert.match(dashboardRootSource, /function rememberHandledTaskDetailRequest\(requestId: string\)/);
+  assert.match(dashboardRootSource, /if \(!rememberHandledTaskDetailRequest\(payload\.request_id\)\) \{/);
+  assert.doesNotMatch(dashboardRootSource, /handledTaskDetailRequestIdRef\.current === payload\.request_id/);
+
+  assert.match(taskPageSource, /const detailRouteState = readDashboardTaskDetailRouteState\(location\.state\);[\s\S]*if \(detailRouteState\) \{[\s\S]*setSelectedTaskId\(detailRouteState\.focusTaskId\);[\s\S]*navigate\(location\.pathname, \{ replace: true, state: null \}\);[\s\S]*return;/);
+  assert.doesNotMatch(taskPageSource, /detailRouteState && allTasks\.some\(\(item\) => item\.task\.task_id === detailRouteState\.focusTaskId\)/);
+  assert.match(taskPageSource, /if \(selectedTaskId && detailOpen\) \{/);
+});
+
 test("note page consumes note query helpers instead of inlining note bucket contracts", () => {
   const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
   const noteServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.service.ts"), "utf8");

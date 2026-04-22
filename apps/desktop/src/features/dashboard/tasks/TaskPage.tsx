@@ -94,17 +94,26 @@ export function TaskPage() {
   }, [selectedTaskId]);
 
   useEffect(() => {
-    if (allTasks.length === 0) {
-      return;
-    }
-
     const detailRouteState = readDashboardTaskDetailRouteState(location.state);
-    if (detailRouteState && allTasks.some((item) => item.task.task_id === detailRouteState.focusTaskId)) {
+    /**
+     * Routed task-detail opens can legitimately target tasks outside the
+     * currently loaded preview buckets. Accept the routed task id first and let
+     * the canonical detail query load it instead of blocking on paginated list data.
+     */
+    if (detailRouteState) {
       setSelectedTaskId(detailRouteState.focusTaskId);
       if (detailRouteState.openDetail) {
         setDetailOpen(true);
       }
       navigate(location.pathname, { replace: true, state: null });
+      return;
+    }
+
+    if (allTasks.length === 0) {
+      return;
+    }
+
+    if (selectedTaskId && detailOpen) {
       return;
     }
 
@@ -117,7 +126,7 @@ export function TaskPage() {
     if (nextTask) {
       setSelectedTaskId(nextTask.task.task_id);
     }
-  }, [allTasks, finishedTasks, location.pathname, location.state, navigate, selectedTaskId, unfinishedTasks]);
+  }, [allTasks, detailOpen, finishedTasks, location.pathname, location.state, navigate, selectedTaskId, unfinishedTasks]);
 
   const taskDetailQuery = useQuery({
     enabled: shouldEnableDashboardTaskDetailQuery(selectedTaskId, detailOpen),

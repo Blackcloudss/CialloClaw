@@ -21,6 +21,7 @@ const TasksPage = lazy(() => import("@/features/dashboard/tasks/TasksPage").then
 const NotesPage = lazy(() => import("@/features/dashboard/notes/NotesPage").then((module) => ({ default: module.NotesPage })));
 const MemoryPage = lazy(() => import("@/features/dashboard/memory/MemoryPage").then((module) => ({ default: module.MemoryPage })));
 const SafetyPage = lazy(() => import("@/features/dashboard/safety/SafetyPage").then((module) => ({ default: module.SafetyPage })));
+const DASHBOARD_TASK_DETAIL_REQUEST_MEMORY_MS = 5_000;
 
 function DashboardRouteFallback() {
   return <div className="dashboard-route-layer" aria-live="polite">Loading module…</div>;
@@ -80,7 +81,7 @@ function DashboardRoutes() {
   const queryClient = useQueryClient();
   const isOpening = useDashboardDomainExpansion();
   const [voiceOpen, setVoiceOpen] = useState(false);
-  const handledTaskDetailRequestIdRef = useRef<string | null>(null);
+  const handledTaskDetailRequestIdsRef = useRef<Map<string, number>>(new Map());
   const dashboardHomeQuery = useQuery({
     queryKey: ["dashboard", "home"],
     queryFn: loadDashboardHomeData,
@@ -103,17 +104,40 @@ function DashboardRoutes() {
     },
   });
 
+  /**
+   * Retries for task-detail open requests intentionally reuse the same
+   * `request_id`, so the dashboard must remember more than the latest value.
+   * Otherwise an older delayed retry can arrive after a newer request and
+   * incorrectly navigate the window back to the stale task detail.
+   */
+  function rememberHandledTaskDetailRequest(requestId: string) {
+    const now = Date.now();
+    const handledRequestIds = handledTaskDetailRequestIdsRef.current;
+
+    for (const [handledRequestId, handledAt] of handledRequestIds) {
+      if (now - handledAt > DASHBOARD_TASK_DETAIL_REQUEST_MEMORY_MS) {
+        handledRequestIds.delete(handledRequestId);
+      }
+    }
+
+    if (handledRequestIds.has(requestId)) {
+      return false;
+    }
+
+    handledRequestIds.set(requestId, now);
+    return true;
+  }
+
   useEffect(() => {
     let disposed = false;
     let cleanup: (() => void) | null = null;
 
     void getCurrentWindow()
       .listen<DashboardTaskDetailOpenRequest>(dashboardTaskDetailNavigationEvent, ({ payload }) => {
-        if (handledTaskDetailRequestIdRef.current === payload.request_id) {
+        if (!rememberHandledTaskDetailRequest(payload.request_id)) {
           return;
         }
 
-        handledTaskDetailRequestIdRef.current = payload.request_id;
         setVoiceOpen(false);
         navigateToDashboardTaskDetail(navigate, payload.task_id);
       })
