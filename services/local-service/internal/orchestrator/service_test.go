@@ -78,6 +78,19 @@ type stubMediaWorkerClient struct {
 	err             error
 }
 
+type screenSessionAction struct {
+	sessionID string
+	reason    string
+}
+
+type recordingScreenCaptureClient struct {
+	base         tools.ScreenCaptureClient
+	startCalls   []tools.ScreenSessionStartInput
+	stopCalls    []screenSessionAction
+	expireCalls  []screenSessionAction
+	cleanupCalls []tools.ScreenCleanupInput
+}
+
 func (b successfulExecutionBackend) RunCommand(_ context.Context, _ string, _ []string, _ string) (tools.CommandExecutionResult, error) {
 	if b.result.ExitCode == 0 && b.result.Stdout == "" && b.result.Stderr == "" {
 		return tools.CommandExecutionResult{Stdout: "ok", ExitCode: 0}, nil
@@ -134,6 +147,42 @@ func (localHTTPPlaywrightClient) InteractPage(_ context.Context, _ string, _ []m
 
 func (localHTTPPlaywrightClient) StructuredDOM(_ context.Context, _ string) (tools.BrowserStructuredDOMResult, error) {
 	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (c *recordingScreenCaptureClient) StartSession(ctx context.Context, input tools.ScreenSessionStartInput) (tools.ScreenSessionState, error) {
+	c.startCalls = append(c.startCalls, input)
+	return c.base.StartSession(ctx, input)
+}
+
+func (c *recordingScreenCaptureClient) GetSession(ctx context.Context, screenSessionID string) (tools.ScreenSessionState, error) {
+	return c.base.GetSession(ctx, screenSessionID)
+}
+
+func (c *recordingScreenCaptureClient) StopSession(ctx context.Context, screenSessionID, reason string) (tools.ScreenSessionState, error) {
+	c.stopCalls = append(c.stopCalls, screenSessionAction{sessionID: screenSessionID, reason: reason})
+	return c.base.StopSession(ctx, screenSessionID, reason)
+}
+
+func (c *recordingScreenCaptureClient) ExpireSession(ctx context.Context, screenSessionID, reason string) (tools.ScreenSessionState, error) {
+	c.expireCalls = append(c.expireCalls, screenSessionAction{sessionID: screenSessionID, reason: reason})
+	return c.base.ExpireSession(ctx, screenSessionID, reason)
+}
+
+func (c *recordingScreenCaptureClient) CaptureScreenshot(ctx context.Context, input tools.ScreenCaptureInput) (tools.ScreenFrameCandidate, error) {
+	return c.base.CaptureScreenshot(ctx, input)
+}
+
+func (c *recordingScreenCaptureClient) CaptureKeyframe(ctx context.Context, input tools.ScreenCaptureInput) (tools.KeyframeCaptureResult, error) {
+	return c.base.CaptureKeyframe(ctx, input)
+}
+
+func (c *recordingScreenCaptureClient) CleanupSessionArtifacts(ctx context.Context, input tools.ScreenCleanupInput) (tools.ScreenCleanupResult, error) {
+	c.cleanupCalls = append(c.cleanupCalls, input)
+	return c.base.CleanupSessionArtifacts(ctx, input)
+}
+
+func (c *recordingScreenCaptureClient) CleanupExpiredScreenTemps(ctx context.Context, input tools.ScreenCleanupInput) (tools.ScreenCleanupResult, error) {
+	return c.base.CleanupExpiredScreenTemps(ctx, input)
 }
 
 func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, limit int) (tools.BrowserPageSearchResult, error) {
@@ -447,6 +496,10 @@ func newTestServiceWithExecutionAndPlaywright(t *testing.T, modelOutput string, 
 }
 
 func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, executionBackend tools.ExecutionCapability, checkpointWriter checkpoint.Writer, playwrightClient tools.PlaywrightSidecarClient, ocrClient tools.OCRWorkerClient, mediaClient tools.MediaWorkerClient) (*Service, string) {
+	return newTestServiceWithExecutionWorkersAndScreen(t, modelOutput, executionBackend, checkpointWriter, playwrightClient, ocrClient, mediaClient, nil)
+}
+
+func newTestServiceWithExecutionWorkersAndScreen(t *testing.T, modelOutput string, executionBackend tools.ExecutionCapability, checkpointWriter checkpoint.Writer, playwrightClient tools.PlaywrightSidecarClient, ocrClient tools.OCRWorkerClient, mediaClient tools.MediaWorkerClient, screenClient tools.ScreenCaptureClient) (*Service, string) {
 	t.Helper()
 
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
@@ -479,7 +532,10 @@ func newTestServiceWithExecutionWorkers(t *testing.T, modelOutput string, execut
 	pluginService := plugin.NewService()
 	seedTestExtensionAssets(t, storageService, pluginService)
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, sidecarclient.NewLocalScreenCaptureClient(fileSystem), modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
+	if screenClient == nil {
+		screenClient = sidecarclient.NewLocalScreenCaptureClient(fileSystem)
+	}
+	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, screenClient, modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
 
 	service := NewService(
 		contextsvc.NewService(),
@@ -5683,6 +5739,94 @@ func TestServiceStartTaskInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T)
 	}
 	if stringValue(record.PendingExecution, "target_object", "") != "Build Dashboard" {
 		t.Fatalf("expected inferred screen target to use page context, got %+v", record.PendingExecution)
+	}
+}
+
+func TestServiceScreenAnalyzeStopsSessionAfterSuccessfulApproval(t *testing.T) {
+	screenClient := &recordingScreenCaptureClient{base: sidecarclient.NewInMemoryScreenCaptureClient()}
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_sess_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
+	service, _ := newTestServiceWithExecutionWorkersAndScreen(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient(), screenClient)
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_stop",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析屏幕中的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start screen analyze task failed: %v", err)
+	}
+	_, err = service.SecurityRespond(map[string]any{
+		"task_id":  result["task"].(map[string]any)["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond allow_once failed: %v", err)
+	}
+	if len(screenClient.stopCalls) != 1 || screenClient.stopCalls[0].reason != "analysis_completed" {
+		t.Fatalf("expected one successful screen session stop, got %+v", screenClient.stopCalls)
+	}
+	if len(screenClient.expireCalls) != 0 || len(screenClient.cleanupCalls) != 0 {
+		t.Fatalf("expected successful screen analysis to avoid expire/cleanup, got expire=%+v cleanup=%+v", screenClient.expireCalls, screenClient.cleanupCalls)
+	}
+	if _, err := screenClient.GetSession(context.Background(), screenClient.stopCalls[0].sessionID); !errors.Is(err, tools.ErrScreenCaptureSessionExpired) {
+		t.Fatalf("expected stopped session to become terminal, got err=%v", err)
+	}
+}
+
+func TestServiceScreenAnalyzeFailureExpiresAndCleansSession(t *testing.T) {
+	screenClient := &recordingScreenCaptureClient{base: sidecarclient.NewInMemoryScreenCaptureClient()}
+	ocrStub := stubOCRWorkerClient{err: tools.ErrOCRWorkerFailed}
+	service, _ := newTestServiceWithExecutionWorkersAndScreen(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient(), screenClient)
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_cleanup",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析屏幕中的错误",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start screen analyze task failed: %v", err)
+	}
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":  result["task"].(map[string]any)["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond should surface task-centric failure result, got %v", err)
+	}
+	if respondResult["task"].(map[string]any)["status"] != "failed" {
+		t.Fatalf("expected screen analysis failure to end in failed status, got %+v", respondResult)
+	}
+	if len(screenClient.stopCalls) != 0 {
+		t.Fatalf("expected failed screen analysis to avoid stop semantics, got %+v", screenClient.stopCalls)
+	}
+	if len(screenClient.expireCalls) != 1 || screenClient.expireCalls[0].reason != "analysis_failed" {
+		t.Fatalf("expected failed screen analysis to expire session, got %+v", screenClient.expireCalls)
+	}
+	if len(screenClient.cleanupCalls) != 1 || screenClient.cleanupCalls[0].Reason != "analysis_failed" || screenClient.cleanupCalls[0].ScreenSessionID != screenClient.expireCalls[0].sessionID {
+		t.Fatalf("expected failed screen analysis to cleanup the expired session, got %+v", screenClient.cleanupCalls)
+	}
+	if _, err := screenClient.GetSession(context.Background(), screenClient.expireCalls[0].sessionID); !errors.Is(err, tools.ErrScreenCaptureSessionExpired) {
+		t.Fatalf("expected expired session to become terminal, got err=%v", err)
 	}
 }
 
