@@ -64,4 +64,36 @@ func TestSupplementalExecutionBoundaryAssetsSkipsUnusedBoundaries(t *testing.T) 
 	if snapshotUsesPerceptionBoundary(contextsvc.TaskContextSnapshot{}) {
 		t.Fatal("expected empty snapshot not to require perception package attribution")
 	}
+	if snapshotUsesPerceptionBoundary(contextsvc.TaskContextSnapshot{SelectionText: "selected text only"}) {
+		t.Fatal("expected pure selection text not to trigger perception package attribution")
+	}
+	if snapshotUsesPerceptionBoundary(contextsvc.TaskContextSnapshot{ErrorText: "runtime error text only"}) {
+		t.Fatal("expected pure error text not to trigger perception package attribution")
+	}
+}
+
+func TestExecuteDoesNotAttachPerceptionPackageForSelectionOnlyInput(t *testing.T) {
+	service, _ := newTestExecutionServiceWithConfig(t, serviceconfig.ModelConfig{
+		Provider: model.OpenAIResponsesProvider,
+		ModelID:  "gpt-5.4",
+		Endpoint: "https://api.openai.com/v1/responses",
+	}, "Selection-only summary")
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_selection_only_boundary",
+		RunID:        "run_selection_only_boundary",
+		Title:        "Selection-only boundary test",
+		Intent:       map[string]any{"name": "explain", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text_selection", SelectionText: "selected sentence only"},
+		DeliveryType: "bubble",
+		ResultTitle:  "Selection-only boundary result",
+	})
+	if err != nil {
+		t.Fatalf("execute returned error: %v", err)
+	}
+	for _, asset := range result.ExtensionAssets {
+		if asset["asset_kind"] == storage.ExtensionAssetKindPerceptionPackage {
+			t.Fatalf("expected selection-only execution not to attach perception package asset, got %+v", result.ExtensionAssets)
+		}
+	}
 }

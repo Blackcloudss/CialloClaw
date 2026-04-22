@@ -68,10 +68,10 @@ func perceptionPackageRef(request Request) (storage.ExtensionAssetReference, boo
 	}, true
 }
 
+// snapshotUsesPerceptionBoundary keeps perception-package attribution scoped to
+// actual page/screen/clipboard/behavior signals instead of generic text input.
 func snapshotUsesPerceptionBoundary(snapshot contextsvc.TaskContextSnapshot) bool {
-	return strings.TrimSpace(snapshot.SelectionText) != "" ||
-		strings.TrimSpace(snapshot.ErrorText) != "" ||
-		strings.TrimSpace(snapshot.PageTitle) != "" ||
+	return strings.TrimSpace(snapshot.PageTitle) != "" ||
 		strings.TrimSpace(snapshot.PageURL) != "" ||
 		strings.TrimSpace(snapshot.AppName) != "" ||
 		strings.TrimSpace(snapshot.WindowTitle) != "" ||
