@@ -785,6 +785,22 @@ func TestExecutePreservesTypedSecretErrorsWhenPromptFallbackOccurs(t *testing.T)
 	}
 }
 
+func TestExecuteFailsWhenModelReturnsEmptyPromptOutput(t *testing.T) {
+	service, _ := newTestExecutionServiceWithModelClient(t, &stubModelClient{output: ""})
+	_, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_prompt_empty_output",
+		RunID:        "run_prompt_empty_output",
+		Title:        "Prompt empty output",
+		Intent:       map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please summarize this content."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Empty output result",
+	})
+	if !errors.Is(err, tools.ErrToolOutputInvalid) {
+		t.Fatalf("expected ErrToolOutputInvalid, got %v", err)
+	}
+}
+
 func TestExecuteBudgetDowngradeAllowsReadOnlyAgentLoopTools(t *testing.T) {
 	modelClient := &stubModelClient{
 		toolCalls: []model.ToolCallResult{{
@@ -940,6 +956,57 @@ func TestExecuteBudgetDowngradeRecognizesJoinedSecretFallbackReason(t *testing.T
 	reason, _ := result.BudgetFailure["reason"].(string)
 	if !strings.Contains(reason, model.ErrSecretSourceFailed.Error()) || !strings.Contains(reason, model.ErrSecretNotFound.Error()) {
 		t.Fatalf("expected joined secret fallback reason to be preserved, got %+v", result.BudgetFailure)
+	}
+}
+
+func TestModelFallbackErrorFromToolOutputDefaultsToClientNotConfigured(t *testing.T) {
+	err := modelFallbackErrorFromToolOutput(map[string]any{})
+	if !errors.Is(err, model.ErrClientNotConfigured) {
+		t.Fatalf("expected ErrClientNotConfigured, got %v", err)
+	}
+}
+
+func TestModelFallbackErrorFromToolOutputRecognizesToolOutputInvalid(t *testing.T) {
+	err := modelFallbackErrorFromToolOutput(map[string]any{"fallback_reason": tools.ErrToolOutputInvalid.Error()})
+	if !errors.Is(err, tools.ErrToolOutputInvalid) {
+		t.Fatalf("expected ErrToolOutputInvalid, got %v", err)
+	}
+}
+
+func TestBudgetDowngradeGenerationFallbackBuildsStructuredFallback(t *testing.T) {
+	trace, ok := budgetDowngradeGenerationFallback(Request{
+		TaskID:          "task_budget_helper",
+		BudgetDowngrade: map[string]any{"applied": true, "trigger_reason": "provider_unavailable", "summary": "Budget downgrade fallback applied."},
+		DeliveryType:    "bubble",
+		ResultTitle:     "Budget helper result",
+		Snapshot:        contextsvc.TaskContextSnapshot{InputType: "text", Text: "Explain this content."},
+		Intent:          map[string]any{"name": "summarize", "arguments": map[string]any{}},
+	}, "Explain this content.", model.ErrClientNotConfigured)
+	if !ok {
+		t.Fatal("expected budget fallback to be generated")
+	}
+	if trace.ModelInvocation["provider"] != "budget_downgrade_fallback" {
+		t.Fatalf("expected budget fallback provider marker, got %+v", trace.ModelInvocation)
+	}
+	if trace.GenerationOutput["fallback"] != true {
+		t.Fatalf("expected fallback generation output marker, got %+v", trace.GenerationOutput)
+	}
+}
+
+func TestIsBudgetFailureReasonRecognizesFormalFailureStrings(t *testing.T) {
+	for _, reason := range []string{
+		model.ErrClientNotConfigured.Error(),
+		model.ErrToolCallingNotSupported.Error(),
+		model.ErrModelProviderUnsupported.Error(),
+		model.ErrSecretNotFound.Error(),
+		model.ErrSecretSourceFailed.Error(),
+	} {
+		if !isBudgetFailureReason(reason) {
+			t.Fatalf("expected budget failure reason %q to be recognized", reason)
+		}
+	}
+	if isBudgetFailureReason("some unrelated failure") {
+		t.Fatal("expected unrelated error string to be ignored")
 	}
 }
 

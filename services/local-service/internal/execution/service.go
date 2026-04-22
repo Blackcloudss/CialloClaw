@@ -1569,6 +1569,7 @@ func modelFallbackErrorFromToolOutput(raw map[string]any) error {
 		model.ErrModelProviderUnsupported,
 		model.ErrSecretSourceFailed,
 		model.ErrSecretNotFound,
+		tools.ErrToolOutputInvalid,
 	} {
 		if strings.Contains(reason, candidate.Error()) {
 			matched = append(matched, candidate)
