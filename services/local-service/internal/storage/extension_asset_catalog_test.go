@@ -70,3 +70,43 @@ func TestExtensionAssetCatalogHandlesEmptyAndMalformedPluginData(t *testing.T) {
 		t.Fatalf("expected malformed plugin manifest capabilities to be ignored, refs=%+v err=%v", pluginRefs, err)
 	}
 }
+
+func TestServiceCurrentExecutionAssetsSkipsNewerUnsupportedStoreRows(t *testing.T) {
+	service := NewService(nil)
+	ctx := context.Background()
+	builtinSkill := builtinSkillManifestRecord("2026-04-22T10:00:00Z")
+	builtinBlueprint := builtinBlueprintDefinitionRecord("2026-04-22T10:00:00Z")
+	builtinPrompt := builtinPromptTemplateVersionRecord("2026-04-22T10:00:00Z")
+	if err := service.SkillManifestStore().WriteSkillManifest(ctx, builtinSkill); err != nil {
+		t.Fatalf("write builtin skill manifest: %v", err)
+	}
+	if err := service.BlueprintDefinitionStore().WriteBlueprintDefinition(ctx, builtinBlueprint); err != nil {
+		t.Fatalf("write builtin blueprint definition: %v", err)
+	}
+	if err := service.PromptTemplateVersionStore().WritePromptTemplateVersion(ctx, builtinPrompt); err != nil {
+		t.Fatalf("write builtin prompt template version: %v", err)
+	}
+	if err := service.SkillManifestStore().WriteSkillManifest(ctx, SkillManifestRecord{
+		SkillManifestID: "skill_community_latest",
+		Name:            "community_skill",
+		Version:         "v2",
+		Source:          extensionAssetSourceGitHub,
+		Summary:         "community skill should stay outside the current execution boundary",
+		ManifestJSON:    `{}`,
+		CreatedAt:       "2026-04-22T11:00:00Z",
+		UpdatedAt:       "2026-04-22T11:00:00Z",
+	}); err != nil {
+		t.Fatalf("write community skill manifest: %v", err)
+	}
+
+	refs, err := service.CurrentExecutionAssets(ctx)
+	if err != nil {
+		t.Fatalf("current execution assets: %v", err)
+	}
+	if len(refs) != 3 {
+		t.Fatalf("expected fallback to supported builtin execution assets, got %+v", refs)
+	}
+	if refs[0].AssetKind != ExtensionAssetKindSkillManifest || refs[0].AssetID != builtinSkill.SkillManifestID {
+		t.Fatalf("expected builtin skill manifest to remain the selected execution asset, got %+v", refs[0])
+	}
+}

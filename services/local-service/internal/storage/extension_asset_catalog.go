@@ -130,57 +130,72 @@ func latestSkillManifestRef(ctx context.Context, store SkillManifestStore) (Exte
 	if store == nil {
 		return ExtensionAssetReference{}, false, nil
 	}
-	items, _, err := store.ListSkillManifests(ctx, 1, 0)
-	if err != nil || len(items) == 0 {
+	items, _, err := store.ListSkillManifests(ctx, 0, 0)
+	if err != nil {
 		return ExtensionAssetReference{}, false, err
 	}
-	item := items[0]
-	return ExtensionAssetReference{
-		AssetKind: ExtensionAssetKindSkillManifest,
-		AssetID:   item.SkillManifestID,
-		Name:      item.Name,
-		Version:   item.Version,
-		Source:    item.Source,
-		Summary:   item.Summary,
-	}, true, nil
+	for _, item := range items {
+		refs := NormalizeExtensionAssetReferences([]ExtensionAssetReference{{
+			AssetKind: ExtensionAssetKindSkillManifest,
+			AssetID:   item.SkillManifestID,
+			Name:      item.Name,
+			Version:   item.Version,
+			Source:    item.Source,
+			Summary:   item.Summary,
+		}})
+		if len(refs) == 1 {
+			return refs[0], true, nil
+		}
+	}
+	return ExtensionAssetReference{}, false, nil
 }
 
 func latestBlueprintDefinitionRef(ctx context.Context, store BlueprintDefinitionStore) (ExtensionAssetReference, bool, error) {
 	if store == nil {
 		return ExtensionAssetReference{}, false, nil
 	}
-	items, _, err := store.ListBlueprintDefinitions(ctx, 1, 0)
-	if err != nil || len(items) == 0 {
+	items, _, err := store.ListBlueprintDefinitions(ctx, 0, 0)
+	if err != nil {
 		return ExtensionAssetReference{}, false, err
 	}
-	item := items[0]
-	return ExtensionAssetReference{
-		AssetKind: ExtensionAssetKindBlueprintDefinition,
-		AssetID:   item.BlueprintDefinitionID,
-		Name:      item.Name,
-		Version:   item.Version,
-		Source:    item.Source,
-		Summary:   item.Summary,
-	}, true, nil
+	for _, item := range items {
+		refs := NormalizeExtensionAssetReferences([]ExtensionAssetReference{{
+			AssetKind: ExtensionAssetKindBlueprintDefinition,
+			AssetID:   item.BlueprintDefinitionID,
+			Name:      item.Name,
+			Version:   item.Version,
+			Source:    item.Source,
+			Summary:   item.Summary,
+		}})
+		if len(refs) == 1 {
+			return refs[0], true, nil
+		}
+	}
+	return ExtensionAssetReference{}, false, nil
 }
 
 func latestPromptTemplateVersionRef(ctx context.Context, store PromptTemplateVersionStore) (ExtensionAssetReference, bool, error) {
 	if store == nil {
 		return ExtensionAssetReference{}, false, nil
 	}
-	items, _, err := store.ListPromptTemplateVersions(ctx, 1, 0)
-	if err != nil || len(items) == 0 {
+	items, _, err := store.ListPromptTemplateVersions(ctx, 0, 0)
+	if err != nil {
 		return ExtensionAssetReference{}, false, err
 	}
-	item := items[0]
-	return ExtensionAssetReference{
-		AssetKind: ExtensionAssetKindPromptTemplateVersion,
-		AssetID:   item.PromptTemplateVersionID,
-		Name:      item.TemplateName,
-		Version:   item.Version,
-		Source:    item.Source,
-		Summary:   item.Summary,
-	}, true, nil
+	for _, item := range items {
+		refs := NormalizeExtensionAssetReferences([]ExtensionAssetReference{{
+			AssetKind: ExtensionAssetKindPromptTemplateVersion,
+			AssetID:   item.PromptTemplateVersionID,
+			Name:      item.TemplateName,
+			Version:   item.Version,
+			Source:    item.Source,
+			Summary:   item.Summary,
+		}})
+		if len(refs) == 1 {
+			return refs[0], true, nil
+		}
+	}
+	return ExtensionAssetReference{}, false, nil
 }
 
 func pluginManifestReference(item PluginManifestRecord) ExtensionAssetReference {
