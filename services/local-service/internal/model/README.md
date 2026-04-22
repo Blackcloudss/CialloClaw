@@ -24,7 +24,7 @@ This module is the only backend entry point for LLM provider access inside `serv
 - Multi-modal input
 - Structured JSON output contracts
 - Provider failover or routing strategies
-- Stronghold-backed API key loading
+- Stronghold lifecycle completion and hot-reload semantics across the full settings flow
 - Protocol-layer error code mapping
 
 ## Boundary Rules
@@ -62,13 +62,15 @@ Inside the current module-only scope, the package now preserves `task_id`, `run_
 
 - Unit tests cover the minimal request/response path with `httptest`
 - `bootstrap` now wires model service through `NewServiceFromConfig(...)` and fails fast on invalid configuration
+- `orchestrator` integration tests now cover one `agent.input.submit` mainline path that uses a configured OpenAI Responses client instead of a stub model
+- `execution` tests now ensure the formal prompt path surfaces provider/secret/model failures instead of silently returning the local fallback text
 - An opt-in live smoke test can be run with:
   - `RUN_LIVE_OPENAI_RESPONSES_TEST=1`
   - `OPENAI_API_KEY`
   - optional `OPENAI_RESPONSES_ENDPOINT`
   - optional `OPENAI_RESPONSES_MODEL`
 
-The live smoke test stays skipped by default unless `RUN_LIVE_OPENAI_RESPONSES_TEST=1`, so CI remains deterministic even when a shell or CI runner happens to export `OPENAI_API_KEY`.
+The live smoke tests cover both `GenerateText(...)` and `GenerateToolCalls(...)`. They stay skipped by default unless `RUN_LIVE_OPENAI_RESPONSES_TEST=1`, so CI remains deterministic even when a shell or CI runner happens to export `OPENAI_API_KEY`.
 
 ## Current Protocol Alignment
 
@@ -82,15 +84,16 @@ The live smoke test stays skipped by default unless `RUN_LIVE_OPENAI_RESPONSES_T
   - `provider`
   - `model_id`
   - `endpoint`
-  - `api_key`
   - `single_task_limit`
   - `daily_limit`
   - `budget_auto_downgrade`
   - `max_tool_iterations`
+  - `planner_retry_budget`
+  - `tool_retry_budget`
   - `context_compress_chars`
   - `context_keep_recent`
-- `bootstrap` consumes the config-backed API key instead of directly reading the environment
-- `ServiceConfig.APIKey` remains as a temporary fallback input so the module can migrate without breaking existing tests and callers in one step
+- `bootstrap` resolves provider secrets through the storage-backed `SecretSource` boundary instead of reading the environment directly
+- `ServiceConfig.APIKey` remains the explicit per-process override used by tests and controlled bootstrap paths
 
 The loop-related fields are consumed by the execution layer through `model.Service`
 so the first Agent Loop runtime remains configurable without wiring a second
@@ -102,7 +105,6 @@ parallel config object through every caller.
 - `SecretSource` is a Stronghold-ready boundary for resolving provider API keys without binding this module to a concrete secret backend yet
 - Current resolution order is:
   1. `ServiceConfig.APIKey`
-  2. `ModelConfig.APIKey`
-  3. `SecretSource.ResolveModelAPIKey(provider)`
+  2. `SecretSource.ResolveModelAPIKey(provider)`
 
 This keeps the module ready for Stronghold integration while avoiding direct coupling before the secret-management path is frozen.
