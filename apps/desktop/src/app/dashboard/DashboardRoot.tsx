@@ -14,6 +14,7 @@ import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/fe
 import { cn } from "@/utils/cn";
 import { DashboardHome } from "./DashboardHome";
 import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
+import { rememberConversationSessionFromTaskUpdated } from "@/services/conversationSessionService";
 import "./dashboard.css";
 
 const TasksPage = lazy(() => import("@/features/dashboard/tasks/TasksPage").then((module) => ({ default: module.TasksPage })));
@@ -135,7 +136,8 @@ function DashboardRoutes() {
   }, [navigate]);
 
   useEffect(() => {
-    const clearTaskSubscription = subscribeTaskUpdated(() => {
+    const clearTaskSubscription = subscribeTaskUpdated((payload) => {
+      rememberConversationSessionFromTaskUpdated(payload);
       void queryClient.invalidateQueries({ queryKey: ["dashboard", "home"] });
     });
 

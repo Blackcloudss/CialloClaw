@@ -232,7 +232,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleInputFocusRequest,
     setInputValue,
     acknowledgeFinalizedSpeechPayload,
-    ensureConversationSessionId,
+    getCurrentConversationSessionId,
     handleForceState,
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
@@ -280,7 +280,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     onInputFocusChange: handleInputFocusChange,
     onSubmitText: handleSubmitText,
     onSubmitVoiceText: handleSubmitVoiceText,
-    ensureConversationSessionId: ensureConversationSessionId,
+    getCurrentConversationSessionId,
     onAttachFile: handleAttachFile,
     onPrimaryClick: handlePrimaryClick,
   });
@@ -655,9 +655,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       }
 
       setSelectionPrompt(null);
-      handleInputFocusRequest();
-      handleCoordinatorSelectedTextPrompt(selectionPrompt.text);
-      void emitShellBallInputRequestFocus(Date.now());
+      void handleCoordinatorSelectedTextPrompt(selectionPrompt);
       return;
     }
 
@@ -673,7 +671,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     }
 
     handlePrimaryClick();
-  }, [clipboardPrompt, handleCoordinatorClipboardPrompt, handleCoordinatorSelectedTextPrompt, handleInputFocusRequest, handlePrimaryClick, selectionPrompt]);
+  }, [clipboardPrompt, handleCoordinatorClipboardPrompt, handleCoordinatorSelectedTextPrompt, handlePrimaryClick, selectionPrompt]);
 
   return (
     <ShellBallSurface

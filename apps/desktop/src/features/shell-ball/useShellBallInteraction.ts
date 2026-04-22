@@ -27,6 +27,7 @@ import {
   type ShellBallSpeechRecognition,
 } from "./shellBall.speech";
 import { startTaskFromFiles } from "@/services/taskService";
+import { getCurrentConversationSessionId } from "@/services/conversationSessionService";
 import type { ShellBallInteractionEvent, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 import { useShellBallStore } from "../../stores/shellBallStore";
 
@@ -55,7 +56,10 @@ const SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS = new Set([
  * Describes the normalized submission result shape reused by shell-ball follow-up
  * UI such as local bubbles and delivery previews.
  */
-export type ShellBallInputSubmitResult = NonNullable<Awaited<ReturnType<typeof submitTextInput>>> & {
+export type ShellBallInputSubmitResult = (
+  | NonNullable<Awaited<ReturnType<typeof submitTextInput>>>
+  | Awaited<ReturnType<typeof startTaskFromFiles>>
+) & {
   delivery_result?: {
     type?: string;
     preview_text?: string | null;
@@ -70,8 +74,6 @@ type ShellBallPostSubmitReset = {
   nextPendingFiles: string[];
   nextFocused: false;
 };
-
-const SHELL_BALL_CONVERSATION_SESSION_PREFIX = "sess_shell_ball";
 
 function createShellBallRequestMeta(): RequestMeta {
   const now = new Date().toISOString();
@@ -171,19 +173,6 @@ export function createShellBallInputSubmitParams(input: {
 }
 
 /**
- * Builds a frontend-managed collaboration session id for shell-ball direct
- * input. The backend already understands `session_id`; this helper only gives
- * the near-field entry a stable local anchor to reuse across voice follow-ups.
- */
-export function createShellBallConversationSessionId() {
-  const randomSuffix = typeof globalThis.crypto?.randomUUID === "function"
-    ? globalThis.crypto.randomUUID()
-    : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-
-  return `${SHELL_BALL_CONVERSATION_SESSION_PREFIX}_${randomSuffix}`;
-}
-
-/**
  * Builds the formal `agent.task.start` payload used when shell-ball submission
  * includes file attachments.
  *
@@ -238,6 +227,7 @@ async function submitShellBallInput(input: {
 async function startShellBallFileTask(input: {
   text: string;
   files: string[];
+  sessionId?: string;
 }): Promise<ShellBallInputSubmitResult | null> {
   const normalizedFiles = normalizeShellBallPendingFiles(input.files);
 
@@ -250,6 +240,7 @@ async function startShellBallFileTask(input: {
       preferred: "bubble",
       fallback: "task_detail",
     },
+    sessionId: input.sessionId,
     source: "floating_ball",
   }, input.text);
 }
@@ -436,8 +427,6 @@ export function useShellBallInteraction() {
   const voiceBaseDraftRef = useRef("");
   const voiceTranscriptRef = useRef("");
   const voiceStartStateRef = useRef<ShellBallVisualState>(visualState);
-  const conversationSessionIdRef = useRef<string | null>(null);
-
   if (controllerRef.current === null) {
     controllerRef.current = createShellBallInteractionController({
       initialState: visualState,
@@ -461,19 +450,6 @@ export function useShellBallInteraction() {
       regionActive: regionActiveRef.current,
     });
     syncVisualState();
-  }
-
-  /**
-   * Shell-ball direct input does not receive a formal session handle back from
-   * task payloads yet, so the frontend keeps one local conversation id alive
-   * until the orb is explicitly reset.
-   */
-  function ensureConversationSessionId() {
-    if (conversationSessionIdRef.current === null) {
-      conversationSessionIdRef.current = createShellBallConversationSessionId();
-    }
-
-    return conversationSessionIdRef.current;
   }
 
   const clearLongPressTimer = useCallback(() => {
@@ -807,12 +783,13 @@ export function useShellBallInteraction() {
           ? await startShellBallFileTask({
               text: currentDraft,
               files: pendingFiles,
+              sessionId: getCurrentConversationSessionId(),
             })
           : await submitShellBallInput({
               text: currentDraft,
               trigger: "hover_text_input",
               inputMode: "text",
-              sessionId: ensureConversationSessionId(),
+              sessionId: getCurrentConversationSessionId(),
             });
       dispatch("submit_text");
       setInputValue(reset.nextInputValue);
@@ -847,7 +824,7 @@ export function useShellBallInteraction() {
         text: normalizedText,
         trigger: "voice_commit",
         inputMode: "voice",
-        sessionId: ensureConversationSessionId(),
+        sessionId: getCurrentConversationSessionId(),
       });
 
       if (result !== null) {
@@ -1127,9 +1104,6 @@ export function useShellBallInteraction() {
   function handleForceState(state: ShellBallVisualState) {
     clearLongPressTimer();
     disposeVoiceRecognition();
-    if (state === "idle") {
-      conversationSessionIdRef.current = null;
-    }
     setInteractionConsumed(mapShellBallInteractionConsumedEventToFlag("force_state_reset"));
     pressStartXRef.current = null;
     pressStartYRef.current = null;
@@ -1166,7 +1140,6 @@ export function useShellBallInteraction() {
   useUnmount(() => {
     clearLongPressTimer();
     disposeVoiceRecognition();
-    conversationSessionIdRef.current = null;
     pressStartXRef.current = null;
     pressStartYRef.current = null;
     voicePreviewRef.current = null;
@@ -1209,7 +1182,7 @@ export function useShellBallInteraction() {
     handleInputHoverChange,
     handleInputFocusChange,
     handleInputFocusRequest,
-    ensureConversationSessionId,
+    getCurrentConversationSessionId,
     handleForceState,
   };
 }

@@ -103,7 +103,6 @@ import {
 import { respondSecurity } from "./test-stubs/rpcMethods";
 import {
   appendShellBallDroppedText,
-  createShellBallConversationSessionId,
   createShellBallInputSubmitParams,
   createShellBallTaskStartParams,
   getShellBallPostSubmitInputReset,
@@ -2221,10 +2220,6 @@ test("shell-ball submit params route text and voice through the formal input con
   assert.equal(createShellBallInputSubmitParams({ text: "   ", trigger: "hover_text_input", inputMode: "text" }), null);
 });
 
-test("shell-ball conversation session ids stay in the formal session namespace", () => {
-  assert.match(createShellBallConversationSessionId(), /^sess_shell_ball_/);
-});
-
 test("shell-ball file task params preserve attachment descriptions for agent.task.start", () => {
   const fileParams = createShellBallTaskStartParams({
     text: "  explain these files  ",
@@ -2358,11 +2353,13 @@ test("task-entry services keep rpc transport failures visible and forward file d
       await service.startTaskFromFiles(
         ["  C:\\workspace\\notes.md  ", "C:\\workspace\\spec.md"],
         {
+          sessionId: "sess_shell_ball_files",
           source: "floating_ball",
         },
         "  explain these files  ",
       );
 
+      assert.equal(startTaskCalls[0]?.session_id, "sess_shell_ball_files");
       assert.equal(startTaskCalls[0]?.trigger, "file_drop");
       assert.deepEqual(startTaskCalls[0]?.input, {
         type: "file",
@@ -2375,11 +2372,33 @@ test("task-entry services keep rpc transport failures visible and forward file d
         },
       });
 
+      await service.startTaskFromSelectedText("  selected text  ", {
+        pageContext: {
+          app_name: "notepad",
+          title: "Notes",
+          url: "native://windows-uia-selection",
+        },
+        sessionId: "sess_shell_ball_selection",
+        source: "floating_ball",
+      });
+
+      assert.equal(startTaskCalls[1]?.session_id, "sess_shell_ball_selection");
+      assert.equal(startTaskCalls[1]?.trigger, "text_selected_click");
+      assert.deepEqual(startTaskCalls[1]?.input, {
+        type: "text_selection",
+        text: "selected text",
+        page_context: {
+          app_name: "notepad",
+          title: "Notes",
+          url: "native://windows-uia-selection",
+        },
+      });
+
       await service.bootstrapTask("  summarize this  ");
     },
   );
 
-  assert.equal(startTaskCalls.length, 1);
+  assert.equal(startTaskCalls.length, 2);
   assert.equal(bootstrapSubmitCalls.length, 1);
   assert.equal(bootstrapSubmitCalls[0]?.trigger, "hover_text_input");
 
@@ -5578,18 +5597,21 @@ test("shell-ball region leave keeps hover input visible while the text field is 
   assert.match(interactionSource, /function handleRegionLeave\(\) \{[\s\S]*hoverRetained: getHoverRetained\(\),[\s\S]*\}/);
 });
 
-test("shell-ball direct input reuses one local conversation session across text, voice, and clipboard submits", () => {
+test("shell-ball direct input only reuses backend-owned conversation sessions", () => {
   const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
+  const sessionServiceSource = readFileSync(resolve(desktopRoot, "src/services/conversationSessionService.ts"), "utf8");
   const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
 
-  assert.match(interactionSource, /function ensureConversationSessionId\(\) \{/);
-  assert.match(interactionSource, /trigger: "hover_text_input",[\s\S]*sessionId: ensureConversationSessionId\(\),/);
-  assert.match(interactionSource, /trigger: "voice_commit",[\s\S]*sessionId: ensureConversationSessionId\(\),/);
-  assert.match(appSource, /ensureConversationSessionId,/);
-  assert.match(appSource, /ensureConversationSessionId: ensureConversationSessionId,/);
-  assert.match(coordinatorSource, /ensureConversationSessionId\?: \(\) => string;/);
-  assert.match(coordinatorSource, /sessionId: handlersRef\.current\.ensureConversationSessionId\?\.\(\),/);
+  assert.match(sessionServiceSource, /export function getCurrentConversationSessionId\(\) \{/);
+  assert.match(sessionServiceSource, /export function rememberConversationSessionFromTask\(task: Task \| null \| undefined\) \{/);
+  assert.doesNotMatch(interactionSource, /function ensureConversationSessionId\(\) \{/);
+  assert.doesNotMatch(interactionSource, /createShellBallConversationSessionId/);
+  assert.match(interactionSource, /trigger: "hover_text_input",[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
+  assert.match(interactionSource, /trigger: "voice_commit",[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
+  assert.match(appSource, /getCurrentConversationSessionId,/);
+  assert.match(coordinatorSource, /getCurrentConversationSessionId\?: \(\) => string \| undefined;/);
+  assert.match(coordinatorSource, /sessionId: handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
 });
 
 test("shell-ball surface passes mascot double-click and drag wiring through the mascot only", () => {
@@ -5791,7 +5813,7 @@ test("shell-ball selected-text prompt only surfaces in resting states", () => {
   );
 });
 
-test("shell-ball app routes real selection snapshots into input focus and an acknowledgement bubble", () => {
+test("shell-ball app routes real selection snapshots into the formal selected-text task flow", () => {
   const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
   const providersSource = readFileSync(resolve(desktopRoot, "src/features/shared/AppProviders.tsx"), "utf8");
@@ -5799,9 +5821,12 @@ test("shell-ball app routes real selection snapshots into input focus and an ack
 
   assert.match(appSource, /listen<ShellBallSelectionSnapshotPayload>\(shellBallWindowSyncEvents\.selectionSnapshot/);
   assert.match(appSource, /const handleMascotPrimaryAction = useCallback\(\(\) => \{/);
-  assert.match(appSource, /handleInputFocusRequest\(\);\s*handleCoordinatorSelectedTextPrompt\(selectionPrompt\.text\);\s*void emitShellBallInputRequestFocus\(Date\.now\(\)\);/);
-  assert.match(coordinatorSource, /const handleSelectedTextPrompt = useCallback\(\(text: string\) => \{/);
+  assert.match(appSource, /void handleCoordinatorSelectedTextPrompt\(selectionPrompt\);/);
+  assert.match(coordinatorSource, /const handleSelectedTextPrompt = useCallback\(async \(selection: ShellBallSelectionSnapshot \| string\) => \{/);
   assert.match(coordinatorSource, /createShellBallSelectedTextPreview\(text\)/);
+  assert.match(coordinatorSource, /startTaskFromSelectedText\(normalizedText, \{/);
+  assert.match(coordinatorSource, /pageContext,/);
+  assert.match(coordinatorSource, /sessionId: handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
   assert.match(providersSource, /<ShellBallSelectionProvider \/>/);
   assert.match(selectionProviderSource, /shellBallWindowSyncEvents\.selectionSnapshot/);
   assert.doesNotMatch(selectionProviderSource, /readShellBallSelectionSnapshot/);

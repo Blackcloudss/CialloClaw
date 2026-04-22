@@ -18,11 +18,12 @@ import {
 } from "../../platform/shellBallWindowController";
 import { cloneShellBallBubbleItems, type ShellBallBubbleItem } from "./shellBall.bubble";
 import type { ShellBallVoicePreview } from "./shellBall.interaction";
-import type { ShellBallInputBarMode, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
+import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
+import type { ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 import type { ShellBallInputSubmitResult } from "./useShellBallInteraction";
-import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
+import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import { readClipboardText } from "@/services/clipboardService";
-import { startTaskFromFiles } from "@/services/taskService";
+import { startTaskFromSelectedText } from "@/services/taskService";
 import { requestDashboardTaskDetailOpen } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import {
   createDefaultShellBallWindowSnapshot,
@@ -41,7 +42,6 @@ import {
   type ShellBallInputFocusPayload,
   type ShellBallInputHoverPayload,
   type ShellBallPendingFileActionPayload,
-  type ShellBallInputRequestFocusPayload,
   type ShellBallPinnedWindowDetachedPayload,
   type ShellBallPinnedWindowReadyPayload,
   type ShellBallPrimaryAction,
@@ -71,7 +71,7 @@ type ShellBallCoordinatorInput = {
   onInputFocusChange: (focused: boolean) => void;
   onSubmitText: () => Promise<ShellBallInputSubmitResult | null> | ShellBallInputSubmitResult | null | void;
   onSubmitVoiceText?: (text: string) => Promise<ShellBallInputSubmitResult | null> | ShellBallInputSubmitResult | null;
-  ensureConversationSessionId?: () => string;
+  getCurrentConversationSessionId?: () => string | undefined;
   onAttachFile: () => void;
   onPrimaryClick: () => void;
 };
@@ -582,7 +582,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onInputFocusChange: input.onInputFocusChange,
     onSubmitText: input.onSubmitText,
     onSubmitVoiceText: input.onSubmitVoiceText ?? defaultSubmitVoiceText,
-    ensureConversationSessionId: input.ensureConversationSessionId,
+    getCurrentConversationSessionId: input.getCurrentConversationSessionId,
     onAttachFile: input.onAttachFile,
     onPrimaryClick: input.onPrimaryClick,
   });
@@ -601,7 +601,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onInputFocusChange: input.onInputFocusChange,
     onSubmitText: input.onSubmitText,
     onSubmitVoiceText: input.onSubmitVoiceText ?? defaultSubmitVoiceText,
-    ensureConversationSessionId: input.ensureConversationSessionId,
+    getCurrentConversationSessionId: input.getCurrentConversationSessionId,
     onAttachFile: input.onAttachFile,
     onPrimaryClick: input.onPrimaryClick,
   };
@@ -772,23 +772,101 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     }
   }, []);
 
-  const handleSelectedTextPrompt = useCallback((text: string) => {
+  /**
+   * Selected-text intake should enter the same formal task pipeline as other
+   * shell-ball entries. The orb click is only the acceptance gesture; the
+   * actual selected content must continue through `agent.task.start`.
+   */
+  const handleSelectedTextPrompt = useCallback(async (selection: ShellBallSelectionSnapshot | string) => {
+    const text = typeof selection === "string" ? selection : selection.text;
+    const pageContext = typeof selection === "string" ? undefined : selection.page_context;
+    const normalizedText = text.trim();
+    const createdAt = new Date().toISOString();
     const turnIndex = allocateBubbleTurnIndex();
+    const previewBubbleItem = createShellBallTextBubbleItem({
+      role: "agent",
+      text: createShellBallSelectedTextPreview(text),
+      bubbleType: "status",
+      createdAt,
+      turnIndex,
+      turnPhase: 0,
+    });
+
+    if (normalizedText === "") {
+      setBubbleItems((currentItems) =>
+        sortShellBallBubbleItemsByTimestamp([
+          ...currentItems,
+          previewBubbleItem,
+        ]),
+      );
+      revealBubbleRegion();
+      return;
+    }
+
+    const pendingAgentBubbleItem = createShellBallAgentLoadingBubbleItem({
+      createdAt: new Date().toISOString(),
+      turnIndex,
+      turnPhase: 1,
+    });
+
     setBubbleItems((currentItems) =>
       sortShellBallBubbleItemsByTimestamp([
         ...currentItems,
-        createShellBallTextBubbleItem({
-          role: "agent",
-          text: createShellBallSelectedTextPreview(text),
-          bubbleType: "status",
-          createdAt: new Date().toISOString(),
-          turnIndex,
-          turnPhase: 0,
-        }),
+        previewBubbleItem,
+        pendingAgentBubbleItem,
       ]),
     );
     revealBubbleRegion();
-  }, [revealBubbleRegion]);
+
+    try {
+      const result = await startTaskFromSelectedText(normalizedText, {
+        delivery: {
+          preferred: "bubble",
+          fallback: "task_detail",
+        },
+        pageContext,
+        sessionId: handlersRef.current.getCurrentConversationSessionId?.(),
+        source: "floating_ball",
+      });
+
+      if (!isShellBallInputSubmitResult(result)) {
+        setBubbleItems((currentItems) =>
+          replaceShellBallPendingBubble(currentItems, pendingAgentBubbleItem.bubble.bubble_id),
+        );
+        return;
+      }
+
+      shellBallTaskIdsRef.current.add(result.task.task_id);
+      bindTaskToBubbleTurn(result.task.task_id, turnIndex);
+      setBubbleItems((currentItems) =>
+        replaceShellBallPendingBubble(
+          currentItems,
+          pendingAgentBubbleItem.bubble.bubble_id,
+          createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+            turnIndex,
+            turnPhase: 1,
+          }),
+        ),
+      );
+      revealBubbleRegion();
+      void autoOpenShellBallDeliveryResult(result.task.task_id, result.delivery_result);
+    } catch (error) {
+      console.warn("shell-ball selected text submit failed", error);
+      setBubbleItems((currentItems) =>
+        replaceShellBallPendingBubble(
+          currentItems,
+          pendingAgentBubbleItem.bubble.bubble_id,
+          createShellBallTaskErrorBubbleItem({
+            createdAt: new Date().toISOString(),
+            error,
+            turnIndex,
+            turnPhase: 1,
+          }),
+        ),
+      );
+      revealBubbleRegion();
+    }
+  }, [autoOpenShellBallDeliveryResult, revealBubbleRegion]);
 
   /**
    * Submits clipboard text through the formal shell-ball text input path while
@@ -828,7 +906,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         source: "floating_ball",
         trigger: "hover_text_input",
         inputMode: "text",
-        sessionId: handlersRef.current.ensureConversationSessionId?.(),
+        sessionId: handlersRef.current.getCurrentConversationSessionId?.(),
         options: {
           confirm_required: false,
           preferred_delivery: "bubble",
