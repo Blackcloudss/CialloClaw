@@ -184,11 +184,17 @@ func TestLocalScreenCaptureClientCleansOrphanTempFiles(t *testing.T) {
 	if err := fileSystem.MkdirAll("temp/orphan_session"); err != nil {
 		t.Fatalf("mkdir orphan temp dir failed: %v", err)
 	}
+	if err := fileSystem.MkdirAll("temp/orphan_session/frame_0001_clip_frames"); err != nil {
+		t.Fatalf("mkdir orphan nested temp dir failed: %v", err)
+	}
 	if err := fileSystem.MkdirAll("inputs"); err != nil {
 		t.Fatalf("mkdir inputs failed: %v", err)
 	}
 	if err := fileSystem.WriteFile("temp/orphan_session/orphan.png", []byte("orphan")); err != nil {
 		t.Fatalf("write orphan temp file failed: %v", err)
+	}
+	if err := fileSystem.WriteFile("temp/orphan_session/frame_0001_clip_frames/frame-001.jpg", []byte("orphan-frame")); err != nil {
+		t.Fatalf("write orphan nested temp file failed: %v", err)
 	}
 	if err := fileSystem.WriteFile("inputs/live.png", []byte("live")); err != nil {
 		t.Fatalf("write live source file failed: %v", err)
@@ -207,13 +213,28 @@ func TestLocalScreenCaptureClientCleansOrphanTempFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cleanup expired temps failed: %v", err)
 	}
-	if cleanup.DeletedCount != 1 || cleanup.DeletedPaths[0] != "temp/orphan_session/orphan.png" {
+	if cleanup.DeletedCount != 2 {
 		t.Fatalf("expected orphan temp cleanup to remove only orphan file, got %+v", cleanup)
+	}
+	if !containsString(cleanup.DeletedPaths, "temp/orphan_session/orphan.png") || !containsString(cleanup.DeletedPaths, "temp/orphan_session/frame_0001_clip_frames/frame-001.jpg") {
+		t.Fatalf("expected orphan temp cleanup to remove both top-level and nested orphan files, got %+v", cleanup)
 	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash("temp/orphan_session/orphan.png"))); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected orphan temp file to be removed, got %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash("temp/orphan_session/frame_0001_clip_frames/frame-001.jpg"))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected orphan nested temp file to be removed, got %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(liveCandidate.Path))); err != nil {
 		t.Fatalf("expected tracked live temp file to remain, got %v", err)
 	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

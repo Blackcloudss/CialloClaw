@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -301,25 +302,52 @@ func (c *localScreenCaptureClient) cleanupOrphanTempPathsLocked(expiredBefore ti
 			continue
 		}
 		sessionDir := filepath.ToSlash(filepath.Join("temp", sessionID))
-		files, err := fs.ReadDir(c.fileSystem, sessionDir)
-		if err != nil {
-			continue
+		sessionDeleted, sessionSkipped := cleanupNestedOrphanTempPaths(c.fileSystem, sessionDir, expiredBefore)
+		deleted = append(deleted, sessionDeleted...)
+		skipped = append(skipped, sessionSkipped...)
+	}
+	return deleted, skipped
+}
+
+// cleanupNestedOrphanTempPaths reclaims nested clip-frame directories after the
+// owning session record disappears so temp growth does not survive crashes.
+func cleanupNestedOrphanTempPaths(fileSystem platform.FileSystemAdapter, sessionDir string, expiredBefore time.Time) ([]string, []string) {
+	if fileSystem == nil || strings.TrimSpace(sessionDir) == "" {
+		return nil, nil
+	}
+	deleted := make([]string, 0)
+	skipped := make([]string, 0)
+	directories := make([]string, 0)
+	if err := fs.WalkDir(fileSystem, sessionDir, func(candidatePath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
 		}
-		for _, fileEntry := range files {
-			if fileEntry.IsDir() {
-				continue
+		normalizedPath := filepath.ToSlash(candidatePath)
+		if entry.IsDir() {
+			if normalizedPath != sessionDir {
+				directories = append(directories, normalizedPath)
 			}
-			candidatePath := filepath.ToSlash(filepath.Join(sessionDir, fileEntry.Name()))
-			info, err := fs.Stat(c.fileSystem, candidatePath)
-			if err != nil || info.ModTime().After(expiredBefore) {
-				continue
-			}
-			if err := c.fileSystem.Remove(candidatePath); err != nil {
-				skipped = append(skipped, candidatePath)
-				continue
-			}
-			deleted = append(deleted, candidatePath)
+			return nil
 		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().After(expiredBefore) {
+			return nil
+		}
+		if err := fileSystem.Remove(normalizedPath); err != nil {
+			skipped = append(skipped, normalizedPath)
+			return nil
+		}
+		deleted = append(deleted, normalizedPath)
+		return nil
+	}); err != nil {
+		return deleted, skipped
+	}
+	directories = append(directories, sessionDir)
+	sort.SliceStable(directories, func(i, j int) bool {
+		return len(directories[i]) > len(directories[j])
+	})
+	for _, dirPath := range directories {
+		_ = fileSystem.Remove(dirPath)
 	}
 	return deleted, skipped
 }
