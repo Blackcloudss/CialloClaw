@@ -1987,6 +1987,22 @@ func TestExecuteInternalScreenAnalysisRetainsClipFrameCleanupPlan(t *testing.T) 
 	if len(paths) != 1 || paths[0] != "temp/screen_clip_exec/frames/frame-001.jpg" {
 		t.Fatalf("expected clip cleanup plan to retain extracted frame cleanup, got %+v", cleanupPlan)
 	}
+	hasOCRManifest := false
+	hasMediaManifest := false
+	for _, asset := range result.ExtensionAssets {
+		if asset["asset_kind"] != storage.ExtensionAssetKindPluginManifest {
+			continue
+		}
+		if asset["asset_id"] == "ocr" {
+			hasOCRManifest = true
+		}
+		if asset["asset_id"] == "media" {
+			hasMediaManifest = true
+		}
+	}
+	if !hasOCRManifest || !hasMediaManifest {
+		t.Fatalf("expected clip execution to attribute both OCR and media plugin manifests, assets=%+v", result.ExtensionAssets)
+	}
 	cleanupSummary := mapValue(result.ToolOutput, "cleanup_summary")
 	if cleanupSummary["deleted_count"] != 1 || cleanupSummary["skipped_count"] != 1 {
 		t.Fatalf("expected clip cleanup summary to merge promoted clip artifact and pending frame cleanup, got %+v", cleanupSummary)
@@ -2075,6 +2091,9 @@ func TestScreenHelpersCoverNilAndPendingBranches(t *testing.T) {
 	trimmedPlan := removeScreenCleanupPaths(map[string]any{"paths": []string{"temp/a.png", "temp/b.png"}}, []string{"temp/a.png"})
 	if len(stringSliceValue(trimmedPlan, "paths")) != 1 || stringSliceValue(trimmedPlan, "paths")[0] != "temp/b.png" {
 		t.Fatalf("expected cleanup plan path removal to keep remaining paths, got %+v", trimmedPlan)
+	}
+	if caps := internalScreenAnalysisCapabilities(Request{Intent: map[string]any{"arguments": map[string]any{"capture_mode": string(tools.ScreenCaptureModeClip)}}}); len(caps) != 2 || caps[1] != "extract_frames" {
+		t.Fatalf("expected clip capture mode to attribute media extraction capability, got %+v", caps)
 	}
 }
 

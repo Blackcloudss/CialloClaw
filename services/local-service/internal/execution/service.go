@@ -295,7 +295,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 	if result, ok, err := s.executeInternalScreenAnalysis(ctx, request); err != nil {
 		return result, err
 	} else if ok {
-		return s.finalizeExecutionResult(ctx, request, startedAt, result, "ocr_image"), nil
+		return s.finalizeExecutionResult(ctx, request, startedAt, result, internalScreenAnalysisCapabilities(request)...), nil
 	}
 	if result, ok, err := s.executeDirectBuiltinTool(ctx, request); err != nil {
 		return result, err
@@ -3060,6 +3060,15 @@ func latestToolCall(toolCalls []tools.ToolCallRecord) tools.ToolCallRecord {
 		return tools.ToolCallRecord{}
 	}
 	return toolCalls[len(toolCalls)-1]
+}
+
+func internalScreenAnalysisCapabilities(request Request) []string {
+	capabilities := []string{"ocr_image"}
+	arguments := mapValue(request.Intent, "arguments")
+	if tools.ScreenCaptureMode(stringValue(arguments, "capture_mode", string(tools.ScreenCaptureModeScreenshot))) == tools.ScreenCaptureModeClip {
+		capabilities = append(capabilities, "extract_frames")
+	}
+	return capabilities
 }
 
 func (s *Service) finalizeExecutionResult(ctx context.Context, _ Request, startedAt time.Time, result Result, directCapabilities ...string) Result {
