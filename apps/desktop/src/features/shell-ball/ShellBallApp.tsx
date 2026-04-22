@@ -308,9 +308,11 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const visibleBubbleItems = getShellBallVisibleBubbleItems(snapshot.bubbleItems);
   const {
     beginBallWindowPointerDrag,
+    edgeDockState,
     endBallWindowPointerDrag,
     freezeBallWindowPointerDrag,
     rootRef,
+    setEdgeDockRevealed,
     updateBallWindowPointerDrag,
     windowFrame,
   } = useShellBallWindowMetrics({
@@ -321,6 +323,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       voice: false,
     },
   });
+  const isEdgeDocked = edgeDockState.side !== null;
   const windowFrameRef = useRef(windowFrame);
   dragDropHandlersRef.current = {
     handleDroppedFiles: handleCoordinatorDroppedFiles,
@@ -339,6 +342,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       mascotRef.current?.querySelector<HTMLElement>(".shell-ball-mascot__hotspot") ?? null,
       rootRef.current?.querySelector<HTMLElement>(".shell-ball-window--input textarea") ?? null,
       ...Array.from(rootRef.current?.querySelectorAll<HTMLElement>(".shell-ball-window--input .shell-ball-uiverse-action") ?? []),
+      ...Array.from(rootRef.current?.querySelectorAll<HTMLElement>(".shell-ball-attachment-tray__item") ?? []),
+      ...Array.from(rootRef.current?.querySelectorAll<HTMLElement>(".shell-ball-attachment-tray__remove") ?? []),
       rootRef.current?.querySelector<HTMLElement>(".shell-ball-bubble-zone__scroll") ?? null,
     ].filter((element): element is HTMLElement => element !== null);
 
@@ -831,6 +836,16 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handlePrimaryClick();
   }, [clipboardPrompt, focusInlineInputField, handleCoordinatorClipboardPrompt, handleCoordinatorSelectedTextPrompt, handlePrimaryClick, selectionPrompt]);
 
+  const handleDockAwareRegionEnter = useCallback(() => {
+    setEdgeDockRevealed(true);
+    handleCoordinatorRegionEnter();
+  }, [handleCoordinatorRegionEnter, setEdgeDockRevealed]);
+
+  const handleDockAwareRegionLeave = useCallback(() => {
+    setEdgeDockRevealed(false);
+    handleCoordinatorRegionLeave();
+  }, [handleCoordinatorRegionLeave, setEdgeDockRevealed]);
+
   return (
     <ShellBallSurface
       containerRef={rootRef}
@@ -839,7 +854,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       fileDropActive={shouldShowShellBallFileDropOverlay({
         fileDropActive,
       })}
-      topContent={(
+      topContent={isEdgeDocked ? null : (
         <div className="shell-ball-surface__bubble-reserve" data-visible={snapshot.visibility.bubble && visibleBubbleItems.length > 0 ? "true" : "false"}>
           <div className="shell-ball-surface__bubble-reserve-content">
             {snapshot.visibility.bubble && visibleBubbleItems.length > 0 ? (
@@ -869,8 +884,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
           </div>
         </div>
       )}
-      overlayContent={snapshot.visibility.voice ? <div className="shell-ball-voice-window"><ShellBallVoiceHints hintMode={snapshot.voiceHintMode} voicePreview={snapshot.voicePreview} /></div> : null}
-      bottomContent={shouldRenderInlineInput ? (
+      overlayContent={!isEdgeDocked && snapshot.visibility.voice ? <div className="shell-ball-voice-window"><ShellBallVoiceHints hintMode={snapshot.voiceHintMode} voicePreview={snapshot.voicePreview} /></div> : null}
+      bottomContent={!isEdgeDocked && shouldRenderInlineInput ? (
         <div
           className="shell-ball-window shell-ball-window--input"
           data-shell-ball-input-window="true"
@@ -937,8 +952,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       }}
       onPrimaryClick={handleMascotPrimaryAction}
       onDoubleClick={handleDoubleClick}
-      onRegionEnter={handleCoordinatorRegionEnter}
-      onRegionLeave={handleCoordinatorRegionLeave}
+      onRegionEnter={handleDockAwareRegionEnter}
+      onRegionLeave={handleDockAwareRegionLeave}
       onTextDrop={handleSurfaceTextDrop}
       inputFocused={inputFocused}
       onPressStart={handleLockedPressStart}
