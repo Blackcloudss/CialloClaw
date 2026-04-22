@@ -59,8 +59,7 @@ const NOTE_CANVAS_SEED_POSITIONS = [
 export function NotePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const boardRef = useRef<HTMLElement | null>(null);
-  const boardLayerRef = useRef<HTMLDivElement | null>(null);
+  const boardLayerRef = useRef<HTMLElement | null>(null);
   const railRef = useRef<HTMLElement | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -74,7 +73,6 @@ export function NotePage() {
   const [drawerDragPreview, setDrawerDragPreview] = useState<NoteDrawerDragPreview | null>(null);
   const [draggingBoardItemId, setDraggingBoardItemId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
-  const [boardLayerBounds, setBoardLayerBounds] = useState<{ height: number; width: number } | null>(null);
   const [dataMode, setDataMode] = useState<NotePageDataMode>(() => loadDashboardDataMode("notes") as NotePageDataMode);
   const feedbackTimeoutRef = useRef<number | null>(null);
   const dragStateRef = useRef<{
@@ -211,10 +209,6 @@ export function NotePage() {
       x: Math.min(maxX, Math.max(0, placement.x)),
       y: Math.min(maxY, Math.max(0, placement.y)),
     };
-  }
-
-  function getBoardLayerRect() {
-    return boardLayerRef.current?.getBoundingClientRect() ?? null;
   }
 
   const convertMutation = useMutation({
@@ -413,60 +407,20 @@ export function NotePage() {
   );
 
   useEffect(() => {
-    if (!boardRef.current || typeof ResizeObserver === "undefined") {
-      return;
-    }
-
-    /**
-     * Canvas cards are positioned inside the board layer, so drag bounds and
-     * default seeds must follow the layer box instead of the outer board shell.
-     */
-    const updateBoardLayerBounds = () => {
-      if (!boardRef.current) {
-        return;
-      }
-
-      const boardRect = boardRef.current.getBoundingClientRect();
-      const layerRect = boardLayerRef.current?.getBoundingClientRect();
-      const width = layerRect?.width ?? boardRect.width;
-      const height = layerRect?.height ?? Math.max(0, boardRect.height - 64);
-      setBoardLayerBounds((current) => (current?.width === width && current?.height === height ? current : { height, width }));
-    };
-
-    updateBoardLayerBounds();
-    const resizeObserver = new ResizeObserver(() => {
-      updateBoardLayerBounds();
-    });
-    resizeObserver.observe(boardRef.current);
-    if (boardLayerRef.current) {
-      resizeObserver.observe(boardLayerRef.current);
-    }
-
-    return () => {
-      resizeObserver.disconnect();
-    };
-  }, [boardItems.length]);
-
-  useEffect(() => {
-    if (boardSeeded || defaultBoardItemIds.length === 0 || !boardLayerBounds) {
+    if (boardSeeded || defaultBoardItemIds.length === 0) {
       return;
     }
 
     setCanvasCards(
       defaultBoardItemIds.map((itemId, index) => ({
         itemId,
-        ...clampCanvasPlacement(
-          {
-            x: NOTE_CANVAS_SEED_POSITIONS[index]?.x ?? 120 + index * 36,
-            y: NOTE_CANVAS_SEED_POSITIONS[index]?.y ?? 120 + index * 28,
-          },
-          boardLayerBounds,
-        ),
+        x: NOTE_CANVAS_SEED_POSITIONS[index]?.x ?? 120 + index * 36,
+        y: NOTE_CANVAS_SEED_POSITIONS[index]?.y ?? 120 + index * 28,
         zIndex: index + 1,
       })),
     );
     setBoardSeeded(true);
-  }, [boardLayerBounds, boardSeeded, defaultBoardItemIds]);
+  }, [boardSeeded, defaultBoardItemIds]);
 
   useEffect(() => {
     // Keep the canvas purely local to this page. Once a card is placed, detail
@@ -481,19 +435,6 @@ export function NotePage() {
       dragStateRef.current = null;
     }
   }, [draggingBoardItemId, noteItemsById]);
-
-  useEffect(() => {
-    if (!boardLayerBounds) {
-      return;
-    }
-
-    setCanvasCards((current) =>
-      current.map((entry) => ({
-        ...entry,
-        ...clampCanvasPlacement(entry, boardLayerBounds),
-      })),
-    );
-  }, [boardLayerBounds]);
 
   function openNoteDetail(itemId: string) {
     setSelectedItemId(itemId);
@@ -511,9 +452,8 @@ export function NotePage() {
         x: NOTE_CANVAS_SEED_POSITIONS[seedIndex]?.x ?? 120 + current.length * 28,
         y: NOTE_CANVAS_SEED_POSITIONS[seedIndex]?.y ?? 110 + current.length * 24,
       };
-      const clampedPlacement = boardLayerBounds ? clampCanvasPlacement(nextPlacement, boardLayerBounds) : nextPlacement;
 
-      return [...current, { itemId, x: clampedPlacement.x, y: clampedPlacement.y, zIndex: getNextCanvasZIndex(current) }];
+      return [...current, { itemId, x: nextPlacement.x, y: nextPlacement.y, zIndex: getNextCanvasZIndex(current) }];
     });
   }
 
@@ -585,8 +525,8 @@ export function NotePage() {
       return;
     }
 
-    const boardRect = getBoardLayerRect();
-    if (boardRect) {
+    if (boardLayerRef.current) {
+      const boardRect = boardLayerRef.current.getBoundingClientRect();
       const overBoard = event.clientX >= boardRect.left && event.clientX <= boardRect.right && event.clientY >= boardRect.top && event.clientY <= boardRect.bottom;
       setIsBoardDropTarget(overBoard);
     }
@@ -606,8 +546,8 @@ export function NotePage() {
       return;
     }
 
-    const boardRect = getBoardLayerRect();
-    if (boardRect) {
+    if (boardLayerRef.current) {
+      const boardRect = boardLayerRef.current.getBoundingClientRect();
       const droppedOverBoard = event.clientX >= boardRect.left && event.clientX <= boardRect.right && event.clientY >= boardRect.top && event.clientY <= boardRect.bottom;
       if (droppedOverBoard) {
         pinNoteToCanvas(
@@ -635,10 +575,11 @@ export function NotePage() {
    * state for arranging preview cards and must not mutate formal note data.
    */
   function handleBoardCardPointerDown(itemId: string, event: ReactPointerEvent<HTMLButtonElement>) {
-    if (!event.isPrimary || event.button !== 0 || !boardLayerBounds) {
+    if (!event.isPrimary || event.button !== 0 || !boardLayerRef.current) {
       return;
     }
 
+    const boardRect = boardLayerRef.current.getBoundingClientRect();
     const cardRect = event.currentTarget.getBoundingClientRect();
     const currentCard = canvasCards.find((entry) => entry.itemId === itemId);
     const currentOffset = currentCard ? { x: currentCard.x, y: currentCard.y } : { x: 0, y: 0 };
@@ -652,10 +593,10 @@ export function NotePage() {
       startClientY: event.clientY,
       originX: currentOffset.x,
       originY: currentOffset.y,
-      minX: 0,
-      maxX: Math.max(0, boardLayerBounds.width - cardRect.width),
-      minY: 0,
-      maxY: Math.max(0, boardLayerBounds.height - cardRect.height),
+      minX: currentOffset.x + (boardRect.left - cardRect.left),
+      maxX: currentOffset.x + (boardRect.right - cardRect.right),
+      minY: currentOffset.y + (boardRect.top - cardRect.top),
+      maxY: currentOffset.y + (boardRect.bottom - cardRect.bottom),
       moved: false,
     };
     setDraggingBoardItemId(itemId);
@@ -931,7 +872,7 @@ export function NotePage() {
               <span>{drawerOpen ? "收起抽屉" : "展开抽屉"}</span>
             </button>
 
-            <section className={cn("note-preview-page__board", isBoardDropTarget && "is-drop-target")} ref={boardRef}>
+            <section className={cn("note-preview-page__board", isBoardDropTarget && "is-drop-target")} ref={boardLayerRef}>
               <div aria-hidden="true" className="note-preview-page__board-scene" />
               <div className="note-preview-page__board-heading">
                 <div className="note-preview-page__board-heading-copy">
@@ -940,15 +881,15 @@ export function NotePage() {
                 </div>
               </div>
 
-              <div className="note-preview-page__board-layer" ref={boardLayerRef}>
-                {boardItems.length > 0 ? (
+              {boardItems.length > 0 ? (
+                <div className="note-preview-page__board-layer">
                   {boardItems.map((entry) => renderBoardCard(entry.item, { x: entry.x, y: entry.y, zIndex: entry.zIndex }))}
-                ) : (
-                  <div className="note-preview-page__board-empty">
-                    <NoteEmptyState />
-                  </div>
-                )}
-              </div>
+                </div>
+              ) : (
+                <div className="note-preview-page__board-empty">
+                  <NoteEmptyState />
+                </div>
+              )}
             </section>
           </section>
         </section>
