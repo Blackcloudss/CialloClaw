@@ -929,6 +929,31 @@ unsafe fn sync_shell_ball_native_hit_testing(screen_point: POINT) {
 }
 
 #[cfg(windows)]
+unsafe fn update_shell_ball_native_tracking() {
+    let snapshot = match SHELL_BALL_INTERACTIVE_STATE.lock() {
+        Ok(state) => state.clone(),
+        Err(_) => return,
+    };
+
+    let Some(hwnd_value) = snapshot.hwnd else {
+        return;
+    };
+
+    let hwnd = HWND(hwnd_value as _);
+    let should_track = snapshot.press_lock || !snapshot.regions.is_empty();
+    set_forward_mouse_messages(hwnd, should_track);
+
+    if !should_track {
+        set_window_ignore_cursor_events(hwnd, false);
+        if let Ok(mut state) = SHELL_BALL_INTERACTIVE_STATE.lock() {
+            if state.hwnd == Some(hwnd_value) {
+                state.current_ignore = Some(false);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
 unsafe extern "system" fn mousemove_forward(
     n_code: i32,
     w_param: WPARAM,
@@ -1055,6 +1080,7 @@ fn shell_ball_set_interactive_regions(
 
     let mut point = POINT { x: 0, y: 0 };
     unsafe {
+        update_shell_ball_native_tracking();
         if GetCursorPos(&mut point).is_ok() {
             sync_shell_ball_native_hit_testing(point);
         }
@@ -1090,6 +1116,7 @@ fn shell_ball_set_press_lock(window: tauri::Window, locked: bool) -> Result<(), 
 
     let mut point = POINT { x: 0, y: 0 };
     unsafe {
+        update_shell_ball_native_tracking();
         if GetCursorPos(&mut point).is_ok() {
             sync_shell_ball_native_hit_testing(point);
         }
