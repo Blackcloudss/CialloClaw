@@ -10422,6 +10422,43 @@ func TestServiceSubmitInputDoesNotContinueWaitingAuthorizationTask(t *testing.T)
 	}
 }
 
+func TestServiceSubmitInputDoesNotContinuePausedTask(t *testing.T) {
+	service := newTestService()
+
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_paused_follow_up",
+		Title:       "Analyze the current failure",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		CurrentStep: "agent_loop",
+		RiskLevel:   "green",
+	})
+	if _, err := service.TaskControl(map[string]any{
+		"task_id": activeTask.TaskID,
+		"action":  "pause",
+	}); err != nil {
+		t.Fatalf("pause task failed: %v", err)
+	}
+
+	followUpResult, err := service.SubmitInput(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "重点看网络层，不要讲太泛",
+			"input_mode": "text",
+		},
+		"context": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("submit follow-up after pause failed: %v", err)
+	}
+	secondTask := followUpResult["task"].(map[string]any)
+	if secondTask["task_id"] == activeTask.TaskID {
+		t.Fatalf("expected paused task to reject implicit continuation, got %+v", secondTask)
+	}
+}
+
 func TestServiceSubmitInputStartsNewTaskForUnrelatedRequest(t *testing.T) {
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
 		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {

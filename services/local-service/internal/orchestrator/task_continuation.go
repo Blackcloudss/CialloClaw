@@ -123,11 +123,12 @@ func (s *Service) resolveTaskContinuationContext(explicitSessionID string) taskC
 }
 
 // canContinueTask keeps continuation scope limited to unfinished tasks that can
-// still absorb follow-up input without invalidating an approval boundary or
-// trapping the user inside a blocked state.
+// still absorb follow-up input without invalidating an approval boundary,
+// stashing guidance behind a paused resume-only transition, or trapping the
+// user inside a blocked state.
 func canContinueTask(task runengine.TaskRecord) bool {
 	switch task.Status {
-	case "confirming_intent", "processing", "waiting_input", "paused":
+	case "confirming_intent", "processing", "waiting_input":
 		return true
 	default:
 		return false

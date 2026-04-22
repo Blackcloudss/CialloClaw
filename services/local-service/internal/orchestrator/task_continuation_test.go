@@ -49,6 +49,23 @@ func TestResolveTaskContinuationContextSkipsWaitingAuthorizationTasks(t *testing
 	}
 }
 
+func TestResolveTaskContinuationContextSkipsPausedTasks(t *testing.T) {
+	service := newTestService()
+	service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_paused",
+		Title:       "Summarize the incident report",
+		SourceType:  "hover_input",
+		Status:      "paused",
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+	})
+
+	continuationContext := service.resolveTaskContinuationContext("")
+	if continuationContext.SessionID != "" || len(continuationContext.Candidates) != 0 {
+		t.Fatalf("expected paused task to stay out of implicit continuation candidates, got %+v", continuationContext)
+	}
+}
+
 func TestBuildTaskContinuationPromptRedactsSensitivePayloads(t *testing.T) {
 	snapshot := contextsvc.TaskContextSnapshot{
 		Trigger:       "hover_text_input",
