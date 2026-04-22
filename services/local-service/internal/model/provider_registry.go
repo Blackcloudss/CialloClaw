@@ -7,11 +7,22 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 )
 
+const (
+	// ProviderRoadmapStageStable marks a provider that is allowed on the current
+	// owner-5 mainline.
+	ProviderRoadmapStageStable = "stable"
+	// ProviderExposureSettingsOnly keeps provider selection behind the existing
+	// settings surface until the roadmap explicitly promotes dedicated model APIs.
+	ProviderExposureSettingsOnly = "settings_only"
+)
+
 // ProviderDescriptor reserves the future multi-provider contract without
 // enabling additional providers before the roadmap says the mainline is ready.
 type ProviderDescriptor struct {
 	Name                string
 	SupportsToolCalling bool
+	RoadmapStage        string
+	Exposure            string
 }
 
 type providerAdapter struct {
@@ -21,7 +32,12 @@ type providerAdapter struct {
 }
 
 var defaultProviderRegistry = newProviderRegistry([]providerAdapter{{
-	descriptor: ProviderDescriptor{Name: OpenAIResponsesProvider, SupportsToolCalling: true},
+	descriptor: ProviderDescriptor{
+		Name:                OpenAIResponsesProvider,
+		SupportsToolCalling: true,
+		RoadmapStage:        ProviderRoadmapStageStable,
+		Exposure:            ProviderExposureSettingsOnly,
+	},
 	validate: func(cfg config.ModelConfig) error {
 		if strings.TrimSpace(cfg.Endpoint) == "" {
 			return ErrOpenAIEndpointRequired
