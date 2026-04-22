@@ -70,6 +70,7 @@ export function NotePage() {
   const [boardSeeded, setBoardSeeded] = useState(false);
   const [isBoardDropTarget, setIsBoardDropTarget] = useState(false);
   const [isRailDropTarget, setIsRailDropTarget] = useState(false);
+  const [isCompactBoard, setIsCompactBoard] = useState<boolean>(() => (typeof window !== "undefined" ? window.matchMedia("(max-width: 720px)").matches : false));
   const [drawerDragPreview, setDrawerDragPreview] = useState<NoteDrawerDragPreview | null>(null);
   const [draggingBoardItemId, setDraggingBoardItemId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -453,6 +454,24 @@ export function NotePage() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia("(max-width: 720px)");
+    const updateCompactBoard = () => setIsCompactBoard(mediaQuery.matches);
+    updateCompactBoard();
+
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", updateCompactBoard);
+      return () => mediaQuery.removeEventListener("change", updateCompactBoard);
+    }
+
+    mediaQuery.addListener(updateCompactBoard);
+    return () => mediaQuery.removeListener(updateCompactBoard);
+  }, []);
+
+  useEffect(() => {
     if (boardSeeded || defaultBoardItemIds.length === 0 || !boardLayerSize) {
       return;
     }
@@ -779,7 +798,7 @@ export function NotePage() {
         onPointerDown={(event) => handleBoardCardPointerDown(item.item.item_id, event)}
         onPointerMove={(event) => handleBoardCardPointerMove(item.item.item_id, event)}
         onPointerUp={(event) => finishBoardCardDrag(item.item.item_id, event)}
-        style={{ left: placement.x, top: placement.y, zIndex: placement.zIndex }}
+        style={isCompactBoard ? { zIndex: placement.zIndex } : { left: placement.x, top: placement.y, zIndex: placement.zIndex }}
         type="button"
       >
         <div className="note-preview-page__board-card-top">

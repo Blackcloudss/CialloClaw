@@ -281,19 +281,6 @@ export function TaskPage() {
   }, [location.pathname, navigate, routeFocusState?.openDetail, routeFocusTaskId]);
 
   useEffect(() => {
-    if (!requestedTaskId) {
-      return;
-    }
-
-    const taskBecameVisible = allTasks.some((item) => item.task.task_id === requestedTaskId);
-    if (!taskBecameVisible && selectedDetailTaskId !== requestedTaskId) {
-      return;
-    }
-
-    setRequestedTaskId(null);
-  }, [allTasks, requestedTaskId, selectedDetailTaskId]);
-
-  useEffect(() => {
     if (routeFocusTaskId) {
       return;
     }
@@ -304,7 +291,8 @@ export function TaskPage() {
     }
 
     const selectedExists = allTasks.some((item) => item.task.task_id === selectedTaskId);
-    if (selectedExists || requestedTaskId === selectedTaskId || selectedDetailTaskId === selectedTaskId) {
+    const stageTaskStillResolved = selectedDetailTaskId === selectedTaskId;
+    if (selectedExists || requestedTaskId === selectedTaskId || stageTaskStillResolved) {
       return;
     }
 
