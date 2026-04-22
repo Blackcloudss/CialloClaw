@@ -850,6 +850,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     <ShellBallSurface
       containerRef={rootRef}
       dashboardTransitionPhase={dashboardTransitionPhase}
+      edgeDockRevealed={edgeDockState.revealed}
+      edgeDockSide={edgeDockState.side}
       mascotRef={mascotRef}
       fileDropActive={shouldShowShellBallFileDropOverlay({
         fileDropActive,

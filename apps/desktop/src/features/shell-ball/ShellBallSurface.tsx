@@ -8,6 +8,8 @@ type ShellBallSurfaceProps = {
   children?: ReactNode;
   containerRef?: RefObject<HTMLDivElement>;
   dashboardTransitionPhase?: "idle" | "opening" | "hidden" | "closing";
+  edgeDockRevealed?: boolean;
+  edgeDockSide?: "left" | "right" | null;
   fileDropActive?: boolean;
   mascotRef?: RefObject<HTMLDivElement>;
   overlayContent?: ReactNode;
@@ -82,6 +84,8 @@ export function ShellBallSurface({
   children,
   containerRef,
   dashboardTransitionPhase = "idle",
+  edgeDockRevealed = false,
+  edgeDockSide = null,
   fileDropActive = false,
   mascotRef,
   overlayContent,
@@ -173,9 +177,11 @@ export function ShellBallSurface({
                   ref={mascotRef}
                   className="shell-ball-surface__mascot-shell"
                 >
-                  <ShellBallMascot
-                    visualState={visualState}
-                    voicePreview={voicePreview}
+                    <ShellBallMascot
+                      edgeDockRevealed={edgeDockRevealed}
+                      edgeDockSide={edgeDockSide}
+                      visualState={visualState}
+                      voicePreview={voicePreview}
                     selectionIndicatorVisible={selectionIndicatorVisible}
                     voiceHoldProgress={voiceHoldProgress}
                     motionConfig={motionConfig}

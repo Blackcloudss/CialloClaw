@@ -28,6 +28,7 @@ export const SHELL_BALL_BUBBLE_REPOSITION_DURATION_MS = 180;
 export const SHELL_BALL_INPUT_GAP_PX = 4;
 export const SHELL_BALL_COMPACT_WINDOW_SAFE_MARGIN_PX = 50;
 const SHELL_BALL_EDGE_DOCK_RELEASE_DISTANCE_PX = 28;
+const SHELL_BALL_EDGE_DOCK_ANIMATION_DURATION_MS = 180;
 
 type ShellBallContentSize = {
   width: number;
@@ -341,6 +342,21 @@ function resolveShellBallDockedHostPosition(input: {
   };
 }
 
+function shouldApplyShellBallDockedPosition(input: {
+  dragging: boolean;
+  edgeDockState: ShellBallEdgeDockState;
+}) {
+  if (input.edgeDockState.side === null) {
+    return false;
+  }
+
+  if (input.dragging && !input.edgeDockState.revealed) {
+    return false;
+  }
+
+  return true;
+}
+
 function getShellBallBubbleFrame(input: {
   ballFrame: ShellBallWindowFrame;
   helperFrame: ShellBallWindowSize;
@@ -550,6 +566,8 @@ export function useShellBallWindowMetrics({
   const appliedAnchorOffsetRef = useRef<ShellBallAnchorOffset | null>(null);
   const globalAnchorRef = useRef<ShellBallGlobalAnchor | null>(null);
   const edgeDockStateRef = useRef<ShellBallEdgeDockState>({ side: null, revealed: false });
+  const previousEdgeDockStateRef = useRef<ShellBallEdgeDockState>({ side: null, revealed: false });
+  const ballDockAnimationFrameRef = useRef<number | null>(null);
   const helperWindowMoveAnimationFrameRef = useRef<number | null>(null);
   const helperWindowMoveAnimationResolveRef = useRef<(() => void) | null>(null);
   const helperWindowMoveAnimationTokenRef = useRef(0);
@@ -580,6 +598,13 @@ export function useShellBallWindowMetrics({
     }
   }, []);
 
+  const cancelBallDockAnimation = useCallback(() => {
+    if (ballDockAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(ballDockAnimationFrameRef.current);
+      ballDockAnimationFrameRef.current = null;
+    }
+  }, []);
+
   const cancelBallGeometryEmitAnimation = useCallback(() => {
     if (ballGeometryEmitAnimationFrameRef.current !== null) {
       window.cancelAnimationFrame(ballGeometryEmitAnimationFrameRef.current);
@@ -601,6 +626,52 @@ export function useShellBallWindowMetrics({
     await setShellBallWindowPosition(role, createShellBallLogicalPosition(nextFrame.x, nextFrame.y));
     helperWindowFrameRef.current = nextFrame;
   }
+
+  const animateBallWindowToFrame = useCallback(async (currentFrame: ShellBallWindowFrame, nextFrame: ShellBallWindowFrame) => {
+    cancelBallDockAnimation();
+
+    const currentWindow = getCurrentWindow();
+    if (currentWindow.label !== shellBallWindowLabels.ball) {
+      return;
+    }
+
+    const startX = currentFrame.x;
+    const startY = currentFrame.y;
+    const deltaX = nextFrame.x - startX;
+    const deltaY = nextFrame.y - startY;
+    const startTime = performance.now();
+
+    await new Promise<void>((resolve) => {
+      const step = (timestamp: number) => {
+        const progress = Math.min(1, (timestamp - startTime) / SHELL_BALL_EDGE_DOCK_ANIMATION_DURATION_MS);
+        const eased = 1 - (1 - progress) ** 3;
+        const frame = {
+          ...nextFrame,
+          x: Math.round(startX + deltaX * eased),
+          y: Math.round(startY + deltaY * eased),
+        };
+
+        void currentWindow.setPosition(createShellBallLogicalPosition(frame.x, frame.y));
+
+        if (geometryRef.current !== null) {
+          geometryRef.current = {
+            ...geometryRef.current,
+            ballFrame: frame,
+          };
+        }
+
+        if (progress >= 1) {
+          ballDockAnimationFrameRef.current = null;
+          resolve();
+          return;
+        }
+
+        ballDockAnimationFrameRef.current = window.requestAnimationFrame(step);
+      };
+
+      ballDockAnimationFrameRef.current = window.requestAnimationFrame(step);
+    });
+  }, [cancelBallDockAnimation]);
 
   const emitBallGeometry = useCallback(async (geometry: ShellBallWindowGeometry) => {
     if (role !== "ball") {
@@ -674,11 +745,15 @@ export function useShellBallWindowMetrics({
     });
   }, [emitBallGeometry, role]);
 
-  const resolveEdgeDockedFrame = useCallback((hostFrame: ShellBallWindowFrame, bounds: ShellBallWindowBounds) => {
+  const resolveEdgeDockedFrame = useCallback((input: {
+    hostFrame: ShellBallWindowFrame;
+    bounds: ShellBallWindowBounds;
+    dragging: boolean;
+  }) => {
     const nextDockSide = resolveShellBallEdgeDockSide({
-      bounds,
+      bounds: input.bounds,
       current: edgeDockStateRef.current,
-      hostFrame,
+      hostFrame: input.hostFrame,
       mascotFrame: measuredMascotFrameRef.current,
     });
     const nextEdgeDockState: ShellBallEdgeDockState = nextDockSide === null
@@ -696,18 +771,25 @@ export function useShellBallWindowMetrics({
       setEdgeDockState(nextEdgeDockState);
     }
 
+    if (!shouldApplyShellBallDockedPosition({
+      dragging: input.dragging,
+      edgeDockState: nextEdgeDockState,
+    })) {
+      return input.hostFrame;
+    }
+
     const dockedHostPosition = resolveShellBallDockedHostPosition({
-      bounds,
+      bounds: input.bounds,
       currentPosition: {
-        x: hostFrame.x,
-        y: hostFrame.y,
+        x: input.hostFrame.x,
+        y: input.hostFrame.y,
       },
       edgeDockState: nextEdgeDockState,
       mascotFrame: measuredMascotFrameRef.current,
     });
 
     return {
-      ...hostFrame,
+      ...input.hostFrame,
       x: dockedHostPosition.x,
       y: dockedHostPosition.y,
     };
@@ -739,7 +821,11 @@ export function useShellBallWindowMetrics({
       width: windowFrame.width,
       height: windowFrame.height,
     };
-    const effectiveHostFrame = resolveEdgeDockedFrame(hostFrame, bounds);
+    const effectiveHostFrame = resolveEdgeDockedFrame({
+      hostFrame,
+      bounds,
+      dragging: false,
+    });
     const geometry = createShellBallWindowGeometry({
       position: {
         x: effectiveHostFrame.x,
@@ -765,11 +851,19 @@ export function useShellBallWindowMetrics({
     }
 
     if (input?.snapToBounds && (geometry.ballFrame.x !== logicalPosition.x || geometry.ballFrame.y !== logicalPosition.y)) {
-      await currentWindow.setPosition(createShellBallLogicalPosition(geometry.ballFrame.x, geometry.ballFrame.y));
+      await animateBallWindowToFrame(
+        {
+          x: logicalPosition.x,
+          y: logicalPosition.y,
+          width: windowFrame.width,
+          height: windowFrame.height,
+        },
+        geometry.ballFrame,
+      );
     }
 
     await emitBallGeometry(geometry);
-  }, [emitBallGeometry, resolveEdgeDockedFrame, role, windowFrame]);
+  }, [animateBallWindowToFrame, emitBallGeometry, resolveEdgeDockedFrame, role, windowFrame]);
 
   const scheduleBallGeometryPublish = useCallback((input?: { snapToBounds?: boolean }) => {
     if (role !== "ball") {
@@ -825,7 +919,11 @@ export function useShellBallWindowMetrics({
         const bounds = geometryRef.current?.bounds;
         const effectiveFrame = bounds === undefined
           ? frameToApply
-          : resolveEdgeDockedFrame(frameToApply, bounds);
+          : resolveEdgeDockedFrame({
+              hostFrame: frameToApply,
+              bounds,
+              dragging: ballDragSessionRef.current !== null,
+            });
 
         if (geometryRef.current !== null) {
           geometryRef.current = {
@@ -1171,6 +1269,62 @@ export function useShellBallWindowMetrics({
     if (currentWindow.label !== shellBallWindowLabels.ball) {
       return;
     }
+
+    const previousDockState = previousEdgeDockStateRef.current;
+    previousEdgeDockStateRef.current = edgeDockState;
+
+    if (
+      previousDockState.side === edgeDockState.side
+      && previousDockState.revealed === edgeDockState.revealed
+    ) {
+      return;
+    }
+
+    if (ballDragSessionRef.current !== null) {
+      return;
+    }
+
+    void (async () => {
+      const outerPosition = await currentWindow.outerPosition();
+      const scaleFactor = await currentWindow.scaleFactor();
+      const logicalPosition = outerPosition.toLogical(scaleFactor);
+      const monitor = await monitorFromPoint(
+        Math.round(outerPosition.x),
+        Math.round(outerPosition.y),
+      );
+      const currentFrame = {
+        x: logicalPosition.x,
+        y: logicalPosition.y,
+        width: windowFrame.width,
+        height: windowFrame.height,
+      };
+      const targetFrame = resolveEdgeDockedFrame({
+        hostFrame: currentFrame,
+        bounds: getShellBallBoundsFromMonitor(monitor, geometryRef.current),
+        dragging: false,
+      });
+
+      if (targetFrame.x === currentFrame.x && targetFrame.y === currentFrame.y) {
+        return;
+      }
+
+      await animateBallWindowToFrame(currentFrame, targetFrame);
+
+      if (geometryRef.current !== null) {
+        scheduleBallGeometryEmit(geometryRef.current);
+      }
+    })();
+  }, [animateBallWindowToFrame, edgeDockState, resolveEdgeDockedFrame, role, scheduleBallGeometryEmit, windowFrame]);
+
+  useEffect(() => {
+    if (role !== "ball" || windowFrame === null) {
+      return;
+    }
+
+    const currentWindow = getCurrentWindow();
+    if (currentWindow.label !== shellBallWindowLabels.ball) {
+      return;
+    }
     let disposed = false;
     let cleanupFns: Array<() => void> = [];
 
@@ -1201,11 +1355,13 @@ export function useShellBallWindowMetrics({
       disposed = true;
       cancelBallGeometryEmitAnimation();
       cancelBallGeometryPublishAnimation();
+      cancelBallDockAnimation();
       for (const cleanup of cleanupFns) {
         cleanup();
       }
     };
   }, [
+    cancelBallDockAnimation,
     cancelBallGeometryEmitAnimation,
     cancelBallGeometryPublishAnimation,
     publishBallGeometry,
@@ -1216,6 +1372,7 @@ export function useShellBallWindowMetrics({
 
   useEffect(() => {
     return () => {
+      cancelBallDockAnimation();
       cancelBallGeometryEmitAnimation();
       cancelBallGeometryPublishAnimation();
       cancelBallWindowDragAnimation();
@@ -1227,7 +1384,7 @@ export function useShellBallWindowMetrics({
       pendingBallDragFrameRef.current = null;
       ballDragPositionQueueRef.current = null;
     };
-  }, [cancelBallGeometryEmitAnimation, cancelBallGeometryPublishAnimation, cancelBallWindowDragAnimation]);
+  }, [cancelBallDockAnimation, cancelBallGeometryEmitAnimation, cancelBallGeometryPublishAnimation, cancelBallWindowDragAnimation]);
 
   useEffect(() => {
     if (role === "ball" || windowFrame === null) {

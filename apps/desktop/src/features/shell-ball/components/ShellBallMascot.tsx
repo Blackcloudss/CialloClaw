@@ -6,6 +6,8 @@ import { SHELL_BALL_PRESS_DRIFT_TOLERANCE_PX, type ShellBallVoicePreview } from 
 import type { ShellBallMotionConfig, ShellBallVisualState } from "../shellBall.types";
 
 type ShellBallMascotProps = {
+  edgeDockRevealed?: boolean;
+  edgeDockSide?: "left" | "right" | null;
   visualState: ShellBallVisualState;
   voicePreview?: ShellBallVoicePreview;
   showVoiceHints?: boolean;
@@ -98,6 +100,8 @@ export function shouldSuppressShellBallMascotHotspotGestures(input: {
 }
 
 export function ShellBallMascot({
+  edgeDockRevealed = false,
+  edgeDockSide = null,
   visualState,
   voicePreview = null,
   showVoiceHints = true,
@@ -131,8 +135,10 @@ export function ShellBallMascot({
     "--shell-ball-breathe-scale": String(motionConfig.breatheScale),
     "--shell-ball-breathe-duration": `${motionConfig.breatheDurationMs}ms`,
   };
+  const dockTiltDeg = edgeDockSide === null ? 0 : edgeDockSide === "left" ? (edgeDockRevealed ? 4 : 12) : (edgeDockRevealed ? -4 : -12);
+  const dockShiftPx = edgeDockSide === null ? 0 : edgeDockSide === "left" ? (edgeDockRevealed ? 2 : 6) : (edgeDockRevealed ? -2 : -6);
   const attitudeStyle: CSSProperties = {
-    transform: `rotate(${motionConfig.bodyTiltDeg}deg) scale(${motionConfig.bodyScale})`,
+    transform: `translateX(${dockShiftPx}px) rotate(${motionConfig.bodyTiltDeg + dockTiltDeg}deg) scale(${motionConfig.bodyScale})`,
   };
   const wingStyle: MotionStyle = {
     "--shell-ball-wing-lift": `${motionConfig.wingLiftDeg}deg`,
@@ -316,6 +322,8 @@ export function ShellBallMascot({
     <div
       className={cn("shell-ball-mascot", voicePreview !== null && `shell-ball-mascot--preview-${voicePreview}`)}
       data-state={visualState}
+      data-edge-dock-revealed={edgeDockRevealed ? "true" : "false"}
+      data-edge-dock-side={edgeDockSide ?? "none"}
       data-tone={motionConfig.accentTone}
       data-voice-hints={shouldRenderVoiceHints ? "true" : "false"}
       data-voice-preview={voicePreview ?? undefined}
