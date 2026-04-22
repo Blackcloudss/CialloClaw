@@ -1298,8 +1298,12 @@ func (s *Service) prepareScreenOCRInput(ctx context.Context, candidate tools.Scr
 	if len(framesResult.FramePaths) == 0 {
 		return nil, fmt.Errorf("%w: clip analysis produced no extracted frames", tools.ErrToolOutputInvalid)
 	}
+	normalizedFramePaths, ok := s.normalizeScreenWorkspacePaths(framesResult.FramePaths)
+	if !ok {
+		return nil, fmt.Errorf("%w: clip analysis returned invalid frame paths", tools.ErrToolOutputInvalid)
+	}
 	preparedInput := map[string]any{
-		"path": framesResult.FramePaths[0],
+		"path": normalizedFramePaths[0],
 	}
 	if strings.TrimSpace(language) != "" {
 		preparedInput["language"] = strings.TrimSpace(language)
@@ -1307,13 +1311,49 @@ func (s *Service) prepareScreenOCRInput(ctx context.Context, candidate tools.Scr
 	return &screenOCRPreparation{
 		Input: preparedInput,
 		ObservationPatch: map[string]any{
-			"analyzed_path":      framesResult.FramePaths[0],
+			"analyzed_path":      normalizedFramePaths[0],
 			"clip_frame_count":   framesResult.FrameCount,
 			"clip_output_dir":    framesResult.OutputDir,
 			"clip_worker_source": framesResult.Source,
 		},
-		CleanupPaths: append([]string(nil), framesResult.FramePaths...),
+		CleanupPaths: append([]string(nil), normalizedFramePaths...),
 	}, nil
+}
+
+func (s *Service) normalizeScreenWorkspacePaths(paths []string) ([]string, bool) {
+	if len(paths) == 0 {
+		return nil, false
+	}
+	if s == nil || s.fileSystem == nil {
+		return uniqueScreenCleanupPaths(paths), true
+	}
+	workspaceRoot := strings.TrimSpace(s.workspace)
+	if workspaceRoot == "" {
+		workspaceRoot = strings.TrimSpace(resolveWorkspaceRoot(s.fileSystem))
+	}
+	result := make([]string, 0, len(paths))
+	for _, pathValue := range paths {
+		trimmed := strings.TrimSpace(pathValue)
+		if trimmed == "" {
+			return nil, false
+		}
+		safePath, err := s.fileSystem.EnsureWithinWorkspace(trimmed)
+		if err != nil {
+			return nil, false
+		}
+		normalized := filepath.ToSlash(safePath)
+		if workspaceRoot != "" {
+			if relative, err := s.fileSystem.Rel(workspaceRoot, safePath); err == nil {
+				normalized = filepath.ToSlash(relative)
+			}
+		}
+		result = append(result, normalized)
+	}
+	result = uniqueScreenCleanupPaths(result)
+	if len(result) == 0 {
+		return nil, false
+	}
+	return result, true
 }
 
 func (s *Service) buildScreenAnalysisResult(ctx context.Context, taskID string, candidate tools.ScreenFrameCandidate, language string, evidenceRole string, extra map[string]any) (*screenAnalysisResult, error) {

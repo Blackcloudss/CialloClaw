@@ -1770,6 +1770,25 @@ func TestBuildScreenObservationFlowReturnsClipFramePreparationFailure(t *testing
 	}
 }
 
+func TestBuildScreenObservationFlowRejectsInvalidClipFramePath(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "../outside/frame-001.jpg", Text: "clip extracted frame shows error banner", Language: "eng", Source: "ocr_worker_text"}}
+	mediaStub := stubMediaWorkerClient{framesResult: tools.MediaFrameExtractResult{InputPath: "temp/screen_sess_clip_invalid/clip.webm", OutputDir: "temp/screen_sess_clip_invalid/frame_extract", FramePaths: []string{"../outside/frame-001.jpg"}, FrameCount: 1, Source: "media_worker_frames"}}
+	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, mediaStub)
+	_, err := service.buildScreenObservationFlow(context.Background(), "task_screen_clip_invalid", tools.ScreenFrameCandidate{
+		FrameID:         "frame_clip_invalid",
+		ScreenSessionID: "screen_sess_clip_invalid",
+		CaptureMode:     tools.ScreenCaptureModeClip,
+		Source:          "voice",
+		Path:            "temp/screen_sess_clip_invalid/clip.webm",
+		CapturedAt:      time.Date(2026, 4, 19, 9, 45, 0, 0, time.UTC),
+		RetentionPolicy: tools.ScreenRetentionReview,
+		CleanupRequired: true,
+	}, "eng", "error_evidence", nil)
+	if !errors.Is(err, tools.ErrToolOutputInvalid) {
+		t.Fatalf("expected invalid clip frame path to be rejected, got %v", err)
+	}
+}
+
 func TestBuildScreenAnalysisResultSucceeds(t *testing.T) {
 	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_sess_010/frame_010.png", Text: "build failed because dependency lockfile is missing", Language: "eng", Source: "ocr_worker_text"}}
 	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
