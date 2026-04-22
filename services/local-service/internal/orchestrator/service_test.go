@@ -10178,6 +10178,63 @@ func TestServiceTaskEventsListSupportsTimeWindowFilters(t *testing.T) {
 	}
 }
 
+func TestServiceTaskToolCallsListReturnsPersistedToolCalls(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "tool call list")
+	if service.storage == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected tool call store to be wired")
+	}
+	err := service.storage.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
+		ToolCallID: "tool_call_list_001",
+		RunID:      "run_tool_call_list_001",
+		TaskID:     "task_tool_call_list_001",
+		ToolName:   "read_file",
+		Status:     tools.ToolCallStatusSucceeded,
+		Input:      map[string]any{"path": "notes/source.txt"},
+		Output:     map[string]any{"path": "notes/source.txt", "summary_output": map[string]any{"path": "notes/source.txt"}},
+		DurationMS: 12,
+	})
+	if err != nil {
+		t.Fatalf("save tool call failed: %v", err)
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": "task_tool_call_list_001", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["tool_name"] != "read_file" {
+		t.Fatalf("expected persisted read_file tool call, got %+v", items)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 1 {
+		t.Fatalf("expected total 1, got %+v", page)
+	}
+}
+
+func TestServiceTaskToolCallsListSupportsRunFilter(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "tool call list filters")
+	if service.storage == nil || service.storage.ToolCallStore() == nil {
+		t.Fatal("expected tool call store to be wired")
+	}
+	for _, record := range []tools.ToolCallRecord{
+		{ToolCallID: "tool_call_filter_001", RunID: "run_filter_a", TaskID: "task_tool_call_filter_001", ToolName: "read_file", Status: tools.ToolCallStatusSucceeded, DurationMS: 5},
+		{ToolCallID: "tool_call_filter_002", RunID: "run_filter_b", TaskID: "task_tool_call_filter_001", ToolName: "read_file", Status: tools.ToolCallStatusFailed, DurationMS: 7},
+	} {
+		if err := service.storage.ToolCallStore().SaveToolCall(context.Background(), record); err != nil {
+			t.Fatalf("save filtered tool call failed: %v", err)
+		}
+	}
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": "task_tool_call_filter_001", "run_id": "run_filter_b", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list with run filter failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["run_id"] != "run_filter_b" || items[0]["status"] != string(tools.ToolCallStatusFailed) {
+		t.Fatalf("expected filtered tool call, got %+v", items)
+	}
+}
+
 func TestServiceTaskSteerPersistsFollowUpMessage(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "task steer")
 	startResult, err := service.StartTask(map[string]any{

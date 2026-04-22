@@ -1261,6 +1261,52 @@ func (s *Service) TaskEventsList(params map[string]any) (map[string]any, error) 
 	}, nil
 }
 
+// TaskToolCallsList handles agent.task.tool_calls.list and exposes persisted
+// tool_call records through one task-centric query surface.
+func (s *Service) TaskToolCallsList(params map[string]any) (map[string]any, error) {
+	limit := clampListLimit(intValue(params, "limit", 20))
+	offset := clampListOffset(intValue(params, "offset", 0))
+	taskID := stringValue(params, "task_id", "")
+	runID := stringValue(params, "run_id", "")
+	if strings.TrimSpace(taskID) == "" {
+		return nil, errors.New("task_id is required")
+	}
+	if s.storage == nil || s.storage.ToolCallStore() == nil {
+		return map[string]any{"items": []map[string]any{}, "page": pageMap(limit, offset, 0)}, nil
+	}
+	items, total, err := s.storage.ToolCallStore().ListToolCalls(context.Background(), taskID, runID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		stepID := any(nil)
+		if strings.TrimSpace(item.StepID) != "" {
+			stepID = item.StepID
+		}
+		errorCode := any(nil)
+		if item.ErrorCode != nil {
+			errorCode = *item.ErrorCode
+		}
+		result = append(result, map[string]any{
+			"tool_call_id": item.ToolCallID,
+			"run_id":       item.RunID,
+			"task_id":      item.TaskID,
+			"step_id":      stepID,
+			"tool_name":    item.ToolName,
+			"status":       string(item.Status),
+			"input":        cloneMap(item.Input),
+			"output":       cloneMap(item.Output),
+			"error_code":   errorCode,
+			"duration_ms":  item.DurationMS,
+		})
+	}
+	return map[string]any{
+		"items": result,
+		"page":  pageMap(limit, offset, total),
+	}, nil
+}
+
 func normalizeEventTimeFilter(value string) (string, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
