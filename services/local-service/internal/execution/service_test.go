@@ -1855,6 +1855,77 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 	}
 }
 
+func TestExecuteInternalScreenClipAnalysisUsesMediaWorkerOutputs(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_sess_clip_020/clip_020_frames/frame-001.jpg", Text: "release build failed after sign step", Language: "eng", Source: "ocr_worker_text"}}
+	mediaStub := stubMediaWorkerClient{
+		transcodeResult: tools.MediaTranscodeResult{InputPath: "temp/screen_sess_clip_020/clip_020.webm", OutputPath: "temp/screen_sess_clip_020/clip_020_normalized.mp4", Format: "mp4", Source: "media_worker_ffmpeg"},
+		framesResult:    tools.MediaFrameExtractResult{InputPath: "temp/screen_sess_clip_020/clip_020_normalized.mp4", OutputDir: "temp/screen_sess_clip_020/clip_020_frames", FramePaths: []string{"temp/screen_sess_clip_020/clip_020_frames/frame-001.jpg"}, FrameCount: 1, Source: "media_worker_frames"},
+	}
+	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, mediaStub)
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_screen_clip_exec_001",
+		RunID:        "run_screen_clip_exec_001",
+		Title:        "分析录屏片段",
+		Intent:       map[string]any{"name": internalScreenAnalyzeIntent, "arguments": map[string]any{"frame_id": "frame_clip_020", "screen_session_id": "screen_sess_clip_020", "path": "temp/screen_sess_clip_020/clip_020.webm", "capture_mode": "clip", "language": "eng", "evidence_role": "error_evidence"}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请分析录屏中的错误"},
+		DeliveryType: "bubble",
+		ResultTitle:  "录屏分析结果",
+	})
+	if err != nil {
+		t.Fatalf("internal screen clip analysis execute failed: %v", err)
+	}
+	if result.ToolName != internalScreenAnalyzeIntent || !strings.Contains(result.BubbleText, "release build failed") {
+		t.Fatalf("unexpected internal screen clip analysis result: %+v", result)
+	}
+	if len(result.Artifacts) != 1 || result.Artifacts[0]["mime_type"] != "video/webm" || result.Artifacts[0]["path"] != "temp/screen_sess_clip_020/clip_020.webm" {
+		t.Fatalf("expected one persisted clip artifact, got %+v", result.Artifacts)
+	}
+	auditRecord := result.AuditRecord
+	if auditRecord == nil || auditRecord["action"] != "screen.capture.clip_analyze" {
+		t.Fatalf("expected clip audit action, got %+v", auditRecord)
+	}
+	cleanupPlan := mapValue(result.ToolOutput, "cleanup_plan")
+	if cleanupPlan["reason"] != "screen_clip_pending_cleanup" {
+		t.Fatalf("expected clip cleanup reason, got %+v", cleanupPlan)
+	}
+	cleanupPaths := stringSliceValue(cleanupPlan, "paths")
+	if len(cleanupPaths) != 3 || cleanupPaths[0] != "temp/screen_sess_clip_020/clip_020.webm" {
+		t.Fatalf("expected clip cleanup plan to track clip, normalized media, and frame outputs, got %+v", cleanupPlan)
+	}
+	observationSummary := mapValue(result.ToolOutput, "observation_summary")
+	if observationSummary["clip_path"] != "temp/screen_sess_clip_020/clip_020.webm" || observationSummary["analysis_frame_path"] != "temp/screen_sess_clip_020/clip_020_frames/frame-001.jpg" {
+		t.Fatalf("expected clip observation summary to include media normalization metadata, got %+v", observationSummary)
+	}
+	recoveryPoint := mapValue(result.ToolOutput, "recovery_point")
+	if recoveryPoint["summary"] != "screen_cleanup_pending:screen_clip_pending_cleanup" || recoveryPoint["cleanup_status"] != "pending_retry" {
+		t.Fatalf("expected clip recovery point semantics, got %+v", recoveryPoint)
+	}
+	citationSeed := mapValue(result.ToolOutput, "citation_seed")
+	if citationSeed["artifact_type"] != "screen_capture" || citationSeed["ocr_excerpt"] == nil {
+		t.Fatalf("expected clip citation seed to stay artifact-backed, got %+v", citationSeed)
+	}
+}
+
+func TestExecuteInternalScreenClipAnalysisRejectsMissingFrames(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_sess_clip_021/clip_021_frames/frame-001.jpg", Text: "unused", Language: "eng", Source: "ocr_worker_text"}}
+	mediaStub := stubMediaWorkerClient{transcodeResult: tools.MediaTranscodeResult{InputPath: "temp/screen_sess_clip_021/clip_021.webm", OutputPath: "temp/screen_sess_clip_021/clip_021_normalized.mp4", Format: "mp4", Source: "media_worker_ffmpeg"}}
+	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, mediaStub)
+
+	_, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_screen_clip_exec_002",
+		RunID:        "run_screen_clip_exec_002",
+		Title:        "分析录屏片段",
+		Intent:       map[string]any{"name": internalScreenAnalyzeIntent, "arguments": map[string]any{"frame_id": "frame_clip_021", "screen_session_id": "screen_sess_clip_021", "path": "temp/screen_sess_clip_021/clip_021.webm", "capture_mode": "clip", "language": "eng", "evidence_role": "error_evidence"}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请分析录屏中的错误"},
+		DeliveryType: "bubble",
+		ResultTitle:  "录屏分析结果",
+	})
+	if !errors.Is(err, tools.ErrToolOutputInvalid) {
+		t.Fatalf("expected missing extracted frames to map to tool output invalid, got %v", err)
+	}
+}
+
 func TestExecuteInternalScreenAnalysisRejectsIncompleteCandidate(t *testing.T) {
 	service, _ := newTestExecutionService(t, "unused")
 	_, err := service.Execute(context.Background(), Request{

@@ -5059,6 +5059,16 @@ func TestLatestTaskFailurePrefersStructuredFailureMetadataOverBudgetSignals(t *t
 	}
 }
 
+func TestClassifyScreenFailureMapsMediaWorkerFailures(t *testing.T) {
+	failureCode, failureCategory := classifyScreenFailure(runengine.TaskRecord{
+		SourceType: "screen_capture",
+		Intent:     map[string]any{"name": "screen_analyze"},
+	}, tools.ErrMediaWorkerFailed)
+	if failureCode != "MEDIA_WORKER_FAILED" || failureCategory != "screen_media" {
+		t.Fatalf("expected media worker failures to map to screen media failure metadata, got code=%s category=%s", failureCode, failureCategory)
+	}
+}
+
 func TestBuildTaskCitationsPreservesDistinctFormalReferencesForSameArtifact(t *testing.T) {
 	task := runengine.TaskRecord{
 		TaskID: "task_screen_multi_citation",
@@ -5745,6 +5755,92 @@ func TestServiceStartTaskInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T)
 	}
 	if stringValue(record.PendingExecution, "target_object", "") != "Build Dashboard" {
 		t.Fatalf("expected inferred screen target to use page context, got %+v", record.PendingExecution)
+	}
+}
+
+func TestResolveScreenAnalyzeIntentInfersClipModeFromVideoPath(t *testing.T) {
+	service := newTestService()
+	resolvedIntent := service.resolveScreenAnalyzeIntent(contextsvc.TaskContextSnapshot{}, map[string]any{
+		"name": "screen_analyze",
+		"arguments": map[string]any{
+			"path": "clips/demo.webm",
+		},
+	})
+	arguments := mapValue(resolvedIntent, "arguments")
+	if arguments["capture_mode"] != "clip" {
+		t.Fatalf("expected video-backed screen analyze intent to infer clip capture mode, got %+v", arguments)
+	}
+}
+
+func TestServiceStartTaskHandlesClipScreenAnalyzePath(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_sess_0001/frame_0001_frames/frame-001.jpg", Text: "release validation failed in recording", Language: "eng", Source: "ocr_worker_text"}}
+	mediaStub := stubMediaWorkerClient{
+		transcodeResult: tools.MediaTranscodeResult{InputPath: "temp/screen_sess_0001/frame_0001.webm", OutputPath: "temp/screen_sess_0001/frame_0001_normalized.mp4", Format: "mp4", Source: "media_worker_ffmpeg"},
+		framesResult:    tools.MediaFrameExtractResult{InputPath: "temp/screen_sess_0001/frame_0001_normalized.mp4", OutputDir: "temp/screen_sess_0001/frame_0001_frames", FramePaths: []string{"temp/screen_sess_0001/frame_0001_frames/frame-001.jpg"}, FrameCount: 1, Source: "media_worker_frames"},
+	}
+	service, workspaceRoot := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, mediaStub)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "clips"), 0o755); err != nil {
+		t.Fatalf("mkdir clip source dir failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "clips", "demo.webm"), []byte("fake clip"), 0o644); err != nil {
+		t.Fatalf("write clip source failed: %v", err)
+	}
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_screen_clip_start",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请分析这段录屏",
+		},
+		"intent": map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "clips/demo.webm",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start clip screen analyze task failed: %v", err)
+	}
+	result, err = service.SecurityRespond(map[string]any{
+		"task_id":  result["task"].(map[string]any)["task_id"],
+		"decision": "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond for clip screen analyze failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" || task["source_type"] != "screen_capture" {
+		t.Fatalf("expected clip screen analyze task to complete on screen_capture path, got %+v", task)
+	}
+	taskID := task["task_id"].(string)
+	record, exists := service.runEngine.GetTask(taskID)
+	if !exists || len(record.Artifacts) != 1 {
+		t.Fatalf("expected clip screen analyze to persist one runtime artifact, got %+v", record)
+	}
+	if record.Artifacts[0]["mime_type"] != "video/webm" {
+		t.Fatalf("expected clip screen analyze to keep video artifact mime type, got %+v", record.Artifacts)
+	}
+	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, 20, 0)
+	if err != nil || total != 1 || len(artifacts) != 1 {
+		t.Fatalf("expected one persisted clip artifact, total=%d len=%d err=%v", total, len(artifacts), err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(artifacts[0].DeliveryPayloadJSON), &payload); err != nil {
+		t.Fatalf("decode persisted clip artifact payload failed: %v", err)
+	}
+	if payload["capture_mode"] != "clip" || payload["screen_session_id"] == "" {
+		t.Fatalf("expected clip artifact payload to preserve clip capture metadata, got %+v", payload)
+	}
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get for clip screen task failed: %v", err)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["artifact_type"] != "screen_capture" || citations[0]["excerpt_text"] == nil {
+		t.Fatalf("expected clip screen task detail to expose one formal citation, got %+v", citations)
 	}
 }
 
