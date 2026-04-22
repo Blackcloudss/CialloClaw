@@ -358,6 +358,16 @@ func (s *countingTaskRunStore) LoadTaskRuns(ctx context.Context) ([]storage.Task
 	return s.base.LoadTaskRuns(ctx)
 }
 
+func (s *countingTaskRunStore) GetTaskRun(ctx context.Context, taskID string) (storage.TaskRunRecord, error) {
+	s.loadCalls++
+	return s.base.GetTaskRun(ctx, taskID)
+}
+
+func (s *countingTaskRunStore) LoadLegacyTaskRuns(ctx context.Context, structuredTaskIDs []string) ([]storage.TaskRunRecord, error) {
+	s.loadCalls++
+	return s.base.LoadLegacyTaskRuns(ctx, structuredTaskIDs)
+}
+
 func (s *countingTaskStore) WriteTask(ctx context.Context, record storage.TaskRecord) error {
 	return s.base.WriteTask(ctx, record)
 }
@@ -7945,6 +7955,137 @@ func TestServiceTaskDetailGetPrefersStructuredTaskStoreFallback(t *testing.T) {
 	arguments := intent["arguments"].(map[string]any)
 	if arguments["style"] != "key_points" {
 		t.Fatalf("expected structured task detail to preserve intent arguments, got %+v", intent)
+	}
+}
+
+func TestServiceTaskDetailGetUsesStructuredSnapshotWithoutReloadingTaskRuns(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured snapshot detail")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.TaskRunStore()
+	defer replaceTaskRunStore(t, service.storage, originalStore)
+	countingStore := &countingTaskRunStore{base: originalStore}
+	replaceTaskRunStore(t, service.storage, countingStore)
+
+	if err := countingStore.SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_structured_snapshot",
+		SessionID:   "sess_structured_snapshot",
+		RunID:       "run_structured_snapshot",
+		Title:       "structured snapshot task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 15, 10, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 15, 10, 6, 0, 0, time.UTC)),
+		DeliveryResult: map[string]any{
+			"type":         "workspace_document",
+			"title":        "Structured snapshot result",
+			"preview_text": "snapshot-backed detail",
+			"payload": map[string]any{
+				"task_id": "task_structured_snapshot",
+				"path":    "workspace/structured-snapshot.md",
+				"url":     nil,
+			},
+		},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Source:  "floating_ball",
+			Trigger: "hover_text_input",
+			Text:    "snapshot-backed detail",
+		},
+		CurrentStepStatus: "completed",
+	}); err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+
+	result, err := service.TaskDetailGet(map[string]any{"task_id": "task_structured_snapshot"})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if countingStore.loadCalls != 0 {
+		t.Fatalf("expected structured snapshot detail to avoid task_run reload, got %d loads", countingStore.loadCalls)
+	}
+	deliveryResult := result["delivery_result"].(map[string]any)
+	if deliveryResult["preview_text"] != "snapshot-backed detail" {
+		t.Fatalf("expected delivery result to come from structured snapshot compatibility, got %+v", deliveryResult)
+	}
+}
+
+func TestServiceTaskDetailGetReloadsTaskRunWhenStructuredSnapshotIsInvalid(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured invalid snapshot detail")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.TaskRunStore()
+	defer replaceTaskRunStore(t, service.storage, originalStore)
+	countingStore := &countingTaskRunStore{base: originalStore}
+	replaceTaskRunStore(t, service.storage, countingStore)
+
+	if err := countingStore.SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      "task_structured_invalid_snapshot",
+		SessionID:   "sess_structured_invalid_snapshot",
+		RunID:       "run_structured_invalid_snapshot",
+		Title:       "structured invalid snapshot task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+		StartedAt:   time.Date(2026, 4, 15, 11, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 15, 11, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 15, 11, 6, 0, 0, time.UTC)),
+		DeliveryResult: map[string]any{
+			"type":         "workspace_document",
+			"title":        "Legacy reload result",
+			"preview_text": "legacy task_run detail",
+			"payload": map[string]any{
+				"task_id": "task_structured_invalid_snapshot",
+				"path":    "workspace/legacy-reload.md",
+				"url":     nil,
+			},
+		},
+		CurrentStepStatus: "completed",
+	}); err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              "task_structured_invalid_snapshot",
+		SessionID:           "sess_structured_invalid_snapshot",
+		RunID:               "run_structured_invalid_snapshot",
+		PrimaryRunID:        "run_structured_invalid_snapshot",
+		Title:               "structured invalid snapshot task",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		RequestSource:       "floating_ball",
+		RequestTrigger:      "hover_text_input",
+		StartedAt:           time.Date(2026, 4, 15, 11, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		UpdatedAt:           time.Date(2026, 4, 15, 11, 5, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		FinishedAt:          time.Date(2026, 4, 15, 11, 6, 0, 0, time.UTC).Format(time.RFC3339Nano),
+		SnapshotJSON:        "{invalid-json}",
+	}); err != nil {
+		t.Fatalf("overwrite structured task failed: %v", err)
+	}
+
+	result, err := service.TaskDetailGet(map[string]any{"task_id": "task_structured_invalid_snapshot"})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if countingStore.loadCalls != 1 {
+		t.Fatalf("expected invalid structured snapshot to trigger one task_run reload, got %d loads", countingStore.loadCalls)
+	}
+	deliveryResult := result["delivery_result"].(map[string]any)
+	if deliveryResult["preview_text"] != "legacy task_run detail" {
+		t.Fatalf("expected task detail to backfill delivery result from task_runs, got %+v", deliveryResult)
 	}
 }
 

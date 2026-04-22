@@ -306,6 +306,8 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	if s.intent.AnalyzeSnapshot(snapshot) == "waiting_input" {
 		task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 			SessionID:         stringValue(params, "session_id", ""),
+			RequestSource:     stringValue(params, "source", ""),
+			RequestTrigger:    stringValue(params, "trigger", ""),
 			Title:             "等待补充输入",
 			SourceType:        suggestion.TaskSourceType,
 			Status:            "waiting_input",
@@ -332,6 +334,8 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 		SessionID:         stringValue(params, "session_id", ""),
+		RequestSource:     stringValue(params, "source", ""),
+		RequestTrigger:    stringValue(params, "trigger", ""),
 		Title:             suggestion.TaskTitle,
 		SourceType:        suggestion.TaskSourceType,
 		Status:            taskStatusForSuggestion(suggestion.RequiresConfirm),
@@ -411,6 +415,8 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 		SessionID:         stringValue(params, "session_id", ""),
+		RequestSource:     stringValue(params, "source", ""),
+		RequestTrigger:    stringValue(params, "trigger", ""),
 		Title:             suggestion.TaskTitle,
 		SourceType:        suggestion.TaskSourceType,
 		Status:            taskStatusForSuggestion(suggestion.RequiresConfirm),
@@ -476,6 +482,8 @@ func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot conte
 	resolvedIntent := s.resolveScreenAnalyzeIntent(snapshot, explicitIntent)
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 		SessionID:         stringValue(params, "session_id", ""),
+		RequestSource:     stringValue(params, "source", ""),
+		RequestTrigger:    stringValue(params, "trigger", ""),
 		Title:             firstNonEmptyString(stringValue(resolvedIntent, "title", ""), inferredScreenTaskTitle(snapshot)),
 		SourceType:        "screen_capture",
 		Status:            "waiting_auth",
@@ -1752,13 +1760,14 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	itemTitle := stringValue(item, "title", "待办事项")
 	taskIntent := notepadIntent(item)
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
-		Title:       itemTitle,
-		SourceType:  "todo",
-		Status:      "confirming_intent",
-		Intent:      taskIntent,
-		CurrentStep: "intent_confirmation",
-		RiskLevel:   s.risk.DefaultLevel(),
-		Timeline:    initialTimeline("confirming_intent", "intent_confirmation"),
+		RequestSource: "dashboard",
+		Title:         itemTitle,
+		SourceType:    "todo",
+		Status:        "confirming_intent",
+		Intent:        taskIntent,
+		CurrentStep:   "intent_confirmation",
+		RiskLevel:     s.risk.DefaultLevel(),
+		Timeline:      initialTimeline("confirming_intent", "intent_confirmation"),
 	})
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, notepadSnapshot(item), taskIntent)
 	updatedItem, ok := s.runEngine.LinkNotepadItemTask(itemID, task.TaskID)
@@ -2287,18 +2296,11 @@ func (s *Service) SecurityRestoreApply(params map[string]any) (map[string]any, e
 	resolvedTaskID := firstNonEmptyString(strings.TrimSpace(taskID), point.TaskID)
 	task, ok := s.runEngine.GetTask(resolvedTaskID)
 	if !ok {
-		if s.storage == nil {
-			return nil, ErrTaskNotFound
-		}
-		persisted, loadErr := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
-		if loadErr != nil {
-			return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, loadErr)
-		}
-		loadedTask, found := findTaskRecordFromStorage(persisted, resolvedTaskID)
+		persistedTask, found := s.taskDetailFromStorage(resolvedTaskID)
 		if !found {
 			return nil, ErrTaskNotFound
 		}
-		task = s.runEngine.HydrateTaskFromStorage(loadedTask)
+		task = s.runEngine.HydrateTaskFromStorage(persistedTask)
 	}
 
 	recoveryPoint := recoveryPointMap(point)
@@ -2858,7 +2860,7 @@ func (s *Service) listTasksFromStructuredStorage(group, sortBy, sortOrder string
 	}
 	tasks := make([]runengine.TaskRecord, 0, len(records))
 	for _, record := range records {
-		task, ok := s.structuredTaskRecordToRuntime(record)
+		task, ok := s.structuredTaskRecordToRuntime(record, false)
 		if !ok {
 			continue
 		}
@@ -2890,14 +2892,14 @@ func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
 	if s.storage.TaskStore() != nil {
 		structuredTasks = s.loadAllTasksFromStructuredStorage()
 	}
-	taskRunTasks := s.loadAllTasksFromTaskRunStorage()
 	if len(structuredTasks) == 0 {
-		return taskRunTasks
+		return s.loadAllTasksFromTaskRunStorage()
 	}
-	if len(taskRunTasks) == 0 {
+	legacyTasks := s.loadLegacyTaskRunsFromStorage(structuredTasks)
+	if len(legacyTasks) == 0 {
 		return structuredTasks
 	}
-	return mergeStructuredTaskListCompatibility(structuredTasks, taskRunTasks)
+	return mergeStructuredTaskListCompatibility(structuredTasks, legacyTasks)
 }
 
 func (s *Service) loadAllTasksFromTaskRunStorage() []runengine.TaskRecord {
@@ -2905,6 +2907,28 @@ func (s *Service) loadAllTasksFromTaskRunStorage() []runengine.TaskRecord {
 		return nil
 	}
 	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
+	if err != nil || len(records) == 0 {
+		return nil
+	}
+	tasks := make([]runengine.TaskRecord, 0, len(records))
+	for _, record := range records {
+		tasks = append(tasks, taskRecordFromStorage(record))
+	}
+	return tasks
+}
+
+func (s *Service) loadLegacyTaskRunsFromStorage(structuredTasks []runengine.TaskRecord) []runengine.TaskRecord {
+	if s.storage == nil || s.storage.TaskRunStore() == nil {
+		return nil
+	}
+	structuredTaskIDs := make([]string, 0, len(structuredTasks))
+	for _, task := range structuredTasks {
+		if strings.TrimSpace(task.TaskID) == "" {
+			continue
+		}
+		structuredTaskIDs = append(structuredTaskIDs, task.TaskID)
+	}
+	records, err := s.storage.TaskRunStore().LoadLegacyTaskRuns(context.Background(), structuredTaskIDs)
 	if err != nil || len(records) == 0 {
 		return nil
 	}
@@ -2932,9 +2956,6 @@ func mergeStructuredTaskListCompatibility(structuredTasks, taskRunTasks []runeng
 	merged := make([]runengine.TaskRecord, 0, len(structuredTasks)+len(taskRunTasks))
 	seen := make(map[string]struct{}, len(structuredTasks)+len(taskRunTasks))
 	for _, task := range structuredTasks {
-		if taskRunTask, ok := taskRunByID[task.TaskID]; ok {
-			task = mergeStructuredTaskDetailCompatibility(task, taskRunTask)
-		}
 		merged = append(merged, task)
 		seen[task.TaskID] = struct{}{}
 	}
@@ -2954,7 +2975,7 @@ func (s *Service) loadAllTasksFromStructuredStorage() []runengine.TaskRecord {
 	}
 	tasks := make([]runengine.TaskRecord, 0, len(records))
 	for _, record := range records {
-		task, ok := s.structuredTaskRecordToRuntime(record)
+		task, ok := s.structuredTaskRecordToRuntime(record, false)
 		if !ok {
 			continue
 		}
@@ -3091,16 +3112,17 @@ func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bo
 	if s.storage == nil || strings.TrimSpace(taskID) == "" {
 		return runengine.TaskRecord{}, false
 	}
-	taskRunTask, taskRunOK := s.taskDetailFromTaskRunStorage(taskID)
 	if s.storage.TaskStore() != nil {
-		if task, ok := s.taskDetailFromStructuredStorage(taskID); ok {
-			if taskRunOK {
-				task = mergeStructuredTaskDetailCompatibility(task, taskRunTask)
+		if task, record, ok := s.taskDetailFromStructuredStorage(taskID); ok {
+			if structuredTaskNeedsTaskRunFallback(record, task) {
+				if taskRunTask, taskRunOK := s.taskDetailFromTaskRunStorage(taskID); taskRunOK {
+					task = mergeStructuredTaskDetailCompatibility(task, taskRunTask)
+				}
 			}
 			return task, true
 		}
 	}
-	if taskRunOK {
+	if taskRunTask, ok := s.taskDetailFromTaskRunStorage(taskID); ok {
 		return taskRunTask, true
 	}
 	return runengine.TaskRecord{}, false
@@ -3110,16 +3132,23 @@ func (s *Service) taskDetailFromTaskRunStorage(taskID string) (runengine.TaskRec
 	if s.storage == nil || s.storage.TaskRunStore() == nil || strings.TrimSpace(taskID) == "" {
 		return runengine.TaskRecord{}, false
 	}
-	records, err := s.storage.TaskRunStore().LoadTaskRuns(context.Background())
+	record, err := s.storage.TaskRunStore().GetTaskRun(context.Background(), taskID)
 	if err != nil {
 		return runengine.TaskRecord{}, false
 	}
-	for _, record := range records {
-		if record.TaskID == taskID {
-			return taskRecordFromStorage(record), true
+	return taskRecordFromStorage(record), true
+}
+
+func structuredTaskNeedsTaskRunFallback(record storage.TaskRecord, task runengine.TaskRecord) bool {
+	if strings.TrimSpace(record.SnapshotJSON) != "" {
+		if _, err := storageTaskRunRecordFromSnapshotJSON(record.SnapshotJSON); err == nil {
+			return false
 		}
 	}
-	return runengine.TaskRecord{}, false
+	if len(task.BubbleMessage) > 0 || len(task.DeliveryResult) > 0 || len(task.Artifacts) > 0 || len(task.Citations) > 0 || len(task.AuditRecords) > 0 || len(task.MirrorReferences) > 0 || len(task.PendingExecution) > 0 || len(task.Authorization) > 0 || len(task.ImpactScope) > 0 || len(task.MemoryReadPlans) > 0 || len(task.MemoryWritePlans) > 0 || len(task.StorageWritePlan) > 0 || len(task.ArtifactPlans) > 0 || len(task.LatestEvent) > 0 || len(task.LatestToolCall) > 0 || len(task.SteeringMessages) > 0 || !isEmptySnapshot(task.Snapshot) {
+		return false
+	}
+	return true
 }
 
 // mergeStructuredTaskDetailCompatibility fills task-detail fields that are
@@ -3261,15 +3290,16 @@ func (s *Service) loadTaskCitationsFromStorage(taskID string) []map[string]any {
 	return citations
 }
 
-func (s *Service) taskDetailFromStructuredStorage(taskID string) (runengine.TaskRecord, bool) {
+func (s *Service) taskDetailFromStructuredStorage(taskID string) (runengine.TaskRecord, storage.TaskRecord, bool) {
 	record, err := s.storage.TaskStore().GetTask(context.Background(), taskID)
 	if err != nil {
 		if storage.IsTaskRecordNotFound(err) {
-			return runengine.TaskRecord{}, false
+			return runengine.TaskRecord{}, storage.TaskRecord{}, false
 		}
-		return runengine.TaskRecord{}, false
+		return runengine.TaskRecord{}, storage.TaskRecord{}, false
 	}
-	return s.structuredTaskRecordToRuntime(record)
+	task, ok := s.structuredTaskRecordToRuntime(record, true)
+	return task, record, ok
 }
 
 func (s *Service) attachSensitiveSettingAvailability(settings map[string]any) (map[string]any, error) {
@@ -3629,6 +3659,8 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             record.RunID,
+		RequestSource:     firstNonEmptyString(strings.TrimSpace(record.RequestSource), strings.TrimSpace(record.Snapshot.Source)),
+		RequestTrigger:    firstNonEmptyString(strings.TrimSpace(record.RequestTrigger), strings.TrimSpace(record.Snapshot.Trigger)),
 		Title:             record.Title,
 		SourceType:        record.SourceType,
 		Status:            record.Status,
@@ -3666,9 +3698,9 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 }
 
 // structuredTaskRecordToRuntime hydrates one task-centric read model from the
-// new first-class tasks/task_steps tables while still honoring snapshot_json as
-// the compatibility bridge during the migration away from task_runs-only reads.
-func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (runengine.TaskRecord, bool) {
+// new first-class tasks/task_steps tables while still reusing snapshot_json as
+// the compatibility bridge for fields that are not fully normalized yet.
+func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord, includeCompatibility bool) (runengine.TaskRecord, bool) {
 	var snapshotCompatibility runengine.TaskRecord
 	var snapshotCompatibilityOK bool
 	if strings.TrimSpace(record.SnapshotJSON) != "" {
@@ -3702,7 +3734,9 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord) (rune
 	runtime := runengine.TaskRecord{
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
-		RunID:             record.RunID,
+		RunID:             firstNonEmptyString(strings.TrimSpace(record.PrimaryRunID), strings.TrimSpace(record.RunID)),
+		RequestSource:     record.RequestSource,
+		RequestTrigger:    record.RequestTrigger,
 		Title:             record.Title,
 		SourceType:        record.SourceType,
 		Status:            record.Status,
@@ -5538,6 +5572,7 @@ func (s *Service) assessTaskGovernance(task runengine.TaskRecord, taskIntent map
 	return s.executor.AssessGovernance(context.Background(), execution.Request{
 		TaskID:       task.TaskID,
 		RunID:        task.RunID,
+		SourceType:   task.SourceType,
 		Title:        task.Title,
 		Intent:       taskIntent,
 		Snapshot:     snapshotFromTask(task),
@@ -6337,6 +6372,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 	executionResult, err := s.executor.Execute(context.Background(), execution.Request{
 		TaskID:               processingTask.TaskID,
 		RunID:                processingTask.RunID,
+		SourceType:           processingTask.SourceType,
 		Title:                processingTask.Title,
 		Intent:               taskIntent,
 		AttemptIndex:         executionAttemptIndex(task, processingTask),

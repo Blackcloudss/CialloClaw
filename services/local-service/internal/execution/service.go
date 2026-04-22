@@ -110,6 +110,7 @@ func (s *Service) WithSteeringPoller(poller func(taskID string) []string) *Servi
 type Request struct {
 	TaskID               string
 	RunID                string
+	SourceType           string
 	Title                string
 	Intent               map[string]any
 	AttemptIndex         int
@@ -2299,6 +2300,7 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 		RunID:      request.RunID,
 		TaskID:     request.TaskID,
 		SessionID:  "",
+		SourceType: strings.TrimSpace(request.SourceType),
 		Status:     runStatusFromStopReason(result.StopReason),
 		IntentName: effectiveIntentName(request.Intent),
 		StartedAt:  updatedAt,
