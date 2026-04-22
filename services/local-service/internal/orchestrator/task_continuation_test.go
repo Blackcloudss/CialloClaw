@@ -59,7 +59,12 @@ func TestBuildTaskContinuationPromptRedactsSensitivePayloads(t *testing.T) {
 		},
 	}
 
-	prompt := buildTaskContinuationPrompt(snapshot, map[string]any{"name": "write_file"}, taskContinuationContext{
+	prompt := buildTaskContinuationPrompt(snapshot, map[string]any{
+		"name": "write_file",
+		"arguments": map[string]any{
+			"path": "C:/secrets/todo.md",
+		},
+	}, taskContinuationContext{
 		SessionMode: "implicit_active",
 		Candidates:  []runengine.TaskRecord{candidate},
 	})
@@ -71,6 +76,7 @@ func TestBuildTaskContinuationPromptRedactsSensitivePayloads(t *testing.T) {
 		snapshot.PageURL,
 		"logs/network.log",
 		"logs/private.log",
+		"C:/secrets/todo.md",
 		candidate.SessionID,
 		candidate.Title,
 	} {
@@ -90,7 +96,6 @@ func TestHeuristicTaskContinuationDecisionDoesNotAutoMergeBareFileDrop(t *testin
 			InputType: "file",
 			Files:     []string{"logs/network.log"},
 		},
-		nil,
 		taskContinuationContext{
 			Candidates: []runengine.TaskRecord{{
 				TaskID:      "task_001",
@@ -105,5 +110,38 @@ func TestHeuristicTaskContinuationDecisionDoesNotAutoMergeBareFileDrop(t *testin
 
 	if decision.Decision != "new_task" {
 		t.Fatalf("expected bare file drop to stay a new task when fallback runs, got %+v", decision)
+	}
+}
+
+func TestClassifyTaskContinuationDoesNotAutoMergeSameExplicitIntentName(t *testing.T) {
+	service := newTestService()
+	service.model = nil
+
+	decision := service.classifyTaskContinuation(
+		contextsvc.TaskContextSnapshot{
+			Trigger:   "hover_text_input",
+			InputType: "text",
+			Text:      "Draft a new release checklist.",
+		},
+		map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"path": "C:/secrets/release-checklist.md",
+			},
+		},
+		taskContinuationContext{
+			Candidates: []runengine.TaskRecord{{
+				TaskID:      "task_001",
+				Status:      "processing",
+				CurrentStep: "agent_loop",
+				SourceType:  "hover_input",
+				UpdatedAt:   time.Now().Add(-10 * time.Second),
+				Intent:      map[string]any{"name": "write_file"},
+			}},
+		},
+	)
+
+	if decision.Decision != "new_task" {
+		t.Fatalf("expected same explicit intent name to stay a new task in fallback mode, got %+v", decision)
 	}
 }

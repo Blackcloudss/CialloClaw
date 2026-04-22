@@ -140,7 +140,7 @@ func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapsh
 	if decision, ok := s.modelTaskContinuationDecision(snapshot, explicitIntent, continuationContext); ok {
 		return decision
 	}
-	return heuristicTaskContinuationDecision(snapshot, explicitIntent, continuationContext)
+	return heuristicTaskContinuationDecision(snapshot, continuationContext)
 }
 
 func (s *Service) modelTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) (taskContinuationDecision, bool) {
@@ -242,7 +242,7 @@ func parseTaskContinuationDecision(raw string, candidates []runengine.TaskRecord
 	return taskContinuationDecision{}, false
 }
 
-func heuristicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) taskContinuationDecision {
+func heuristicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, continuationContext taskContinuationContext) taskContinuationDecision {
 	if len(continuationContext.Candidates) != 1 {
 		return taskContinuationDecision{Decision: "new_task", Reason: "multiple unfinished candidates"}
 	}
