@@ -62,6 +62,23 @@ func TestServiceRuntimeLifecycleAndSnapshots(t *testing.T) {
 	if len(events) < 4 {
 		t.Fatalf("expected runtime events to be buffered, got %+v", events)
 	}
+	catalog := service.CatalogEntries()
+	if len(catalog) != 3 || catalog[0].PluginID != "playwright" || catalog[1].PluginID != "ocr" || catalog[2].PluginID != "media" {
+		t.Fatalf("expected stable builtin catalog order, got %+v", catalog)
+	}
+	if len(catalog[0].RuntimeRefs) != 2 || catalog[1].DisplayName != "OCR Worker" {
+		t.Fatalf("expected catalog to join static metadata and runtime refs, got %+v", catalog)
+	}
+	ocrSnapshot, ok := service.CatalogSnapshot("ocr")
+	if !ok {
+		t.Fatal("expected OCR catalog snapshot to resolve")
+	}
+	if ocrSnapshot.Manifest.PluginID != "ocr" || len(ocrSnapshot.Runtimes) != 1 || len(ocrSnapshot.Metrics) != 1 {
+		t.Fatalf("expected catalog snapshot to join manifest/runtime/metrics, got %+v", ocrSnapshot)
+	}
+	if len(ocrSnapshot.RecentEvents) == 0 || ocrSnapshot.RecentEvents[0].Name != "ocr_worker" {
+		t.Fatalf("expected catalog snapshot to include runtime events for matching plugin, got %+v", ocrSnapshot)
+	}
 }
 
 func TestServiceEventPayloadsAreCloned(t *testing.T) {
@@ -83,6 +100,43 @@ func TestServiceRuntimeEventsStayBounded(t *testing.T) {
 	events := service.RuntimeEvents()
 	if len(events) != maxRuntimeEvents {
 		t.Fatalf("expected runtime events to stay bounded at %d, got %d", maxRuntimeEvents, len(events))
+	}
+}
+
+func TestCatalogEntriesAndSnapshotsAreCloned(t *testing.T) {
+	service := NewService()
+	entries := service.CatalogEntries()
+	entries[0].DisplayName = "mutated"
+	entries[0].RuntimeRefs[0].Name = "mutated_runtime"
+	freshEntries := service.CatalogEntries()
+	if freshEntries[0].DisplayName == "mutated" || freshEntries[0].RuntimeRefs[0].Name == "mutated_runtime" {
+		t.Fatalf("expected catalog entries to be cloned, got %+v", freshEntries)
+	}
+	snapshot, ok := service.CatalogSnapshot("playwright")
+	if !ok {
+		t.Fatal("expected playwright catalog snapshot")
+	}
+	snapshot.Catalog.DisplayName = "mutated"
+	snapshot.Manifest.Name = "mutated"
+	snapshot.Runtimes[0].Name = "mutated"
+	freshSnapshot, ok := service.CatalogSnapshot("playwright")
+	if !ok {
+		t.Fatal("expected fresh playwright catalog snapshot")
+	}
+	if freshSnapshot.Catalog.DisplayName == "mutated" || freshSnapshot.Manifest.Name == "mutated" || freshSnapshot.Runtimes[0].Name == "mutated" {
+		t.Fatalf("expected catalog snapshots to be cloned, got %+v", freshSnapshot)
+	}
+}
+
+func TestNilServiceCatalogSnapshotsStillExposeBuiltinStaticView(t *testing.T) {
+	var service *Service
+	entries := service.CatalogEntries()
+	if len(entries) != 3 || entries[0].PluginID != "playwright" {
+		t.Fatalf("expected nil service to expose builtin catalog entries, got %+v", entries)
+	}
+	snapshot, ok := service.CatalogSnapshot("ocr")
+	if !ok || snapshot.Manifest.PluginID != "ocr" || len(snapshot.Runtimes) != 0 {
+		t.Fatalf("expected nil service catalog snapshot to expose static manifest only, got snapshot=%+v ok=%v", snapshot, ok)
 	}
 }
 
