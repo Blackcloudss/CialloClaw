@@ -10456,6 +10456,44 @@ func TestServiceSubmitInputDoesNotContinuePausedTask(t *testing.T) {
 	}
 }
 
+func TestServiceSubmitInputDoesNotContinueImplicitWaitingTaskWithoutAnchors(t *testing.T) {
+	service := newTestService()
+
+	firstResult, err := service.SubmitInput(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start waiting_input task failed: %v", err)
+	}
+	firstTask := firstResult["task"].(map[string]any)
+	if firstTask["status"] != "waiting_input" {
+		t.Fatalf("expected waiting_input task, got %+v", firstTask)
+	}
+
+	secondResult, err := service.SubmitInput(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "顺便帮我起草一份新的周报。",
+			"input_mode": "text",
+		},
+		"context": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("submit unrelated text after waiting_input failed: %v", err)
+	}
+	secondTask := secondResult["task"].(map[string]any)
+	if secondTask["task_id"] == firstTask["task_id"] {
+		t.Fatalf("expected implicit waiting task without anchors to open a new task, got %+v", secondTask)
+	}
+}
+
 func TestServiceSubmitInputStartsNewTaskForUnrelatedRequest(t *testing.T) {
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
 		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {

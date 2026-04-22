@@ -254,7 +254,10 @@ func parseTaskContinuationDecision(raw string, candidates []runengine.TaskRecord
 
 // deterministicTaskContinuationDecision handles the safe local decisions that
 // do not need model inference. The goal is to prefer formal waiting states and
-// strong context anchors over brittle free-text cue matching.
+// strong context anchors over brittle free-text cue matching. When the desktop
+// omits session_id, plain text without any shared anchor is not safe enough to
+// graft onto an old waiting task because the classifier prompt deliberately
+// redacts raw text semantics.
 func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, continuationContext taskContinuationContext) (taskContinuationDecision, bool) {
 	if len(continuationContext.Candidates) != 1 {
 		return taskContinuationDecision{}, false
@@ -277,11 +280,11 @@ func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapsh
 				Reason:   "explicit session task is already waiting for follow-up input",
 			}, true
 		}
-		if evidence.HasStrongAnchor || evidence.StructuredSupplement || (!evidence.CurrentHasContextAnchor && !evidence.PreviousHasContextAnchor) {
+		if evidence.HasStrongAnchor || evidence.StructuredSupplement {
 			return taskContinuationDecision{
 				Decision: "continue",
 				TaskID:   candidate.TaskID,
-				Reason:   "unfinished task is explicitly waiting for follow-up input",
+				Reason:   "unfinished task is explicitly waiting for anchored follow-up input",
 			}, true
 		}
 	case "processing":

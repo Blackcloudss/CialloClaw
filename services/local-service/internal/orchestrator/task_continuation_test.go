@@ -168,6 +168,33 @@ func TestClassifyTaskContinuationContinuesExplicitWaitingTaskWithoutSignalWords(
 	}
 }
 
+func TestClassifyTaskContinuationDoesNotAutoMergeImplicitWaitingTaskWithoutAnchors(t *testing.T) {
+	service := newTestService()
+	service.model = nil
+
+	decision := service.classifyTaskContinuation(
+		contextsvc.TaskContextSnapshot{
+			Trigger:   "hover_text_input",
+			InputType: "text",
+			Text:      "顺便帮我起草一份新的周报。",
+		},
+		nil,
+		taskContinuationContext{
+			SessionMode: "implicit_active",
+			Candidates: []runengine.TaskRecord{{
+				TaskID:      "task_001",
+				Status:      "waiting_input",
+				CurrentStep: "collect_input",
+				UpdatedAt:   time.Now().Add(-10 * time.Second),
+			}},
+		},
+	)
+
+	if decision.Decision != "new_task" {
+		t.Fatalf("expected implicit waiting task without anchors to stay a new task, got %+v", decision)
+	}
+}
+
 func TestClassifyTaskContinuationRejectsWaitingTaskWhenAnchorsConflict(t *testing.T) {
 	service := newTestService()
 	service.model = nil

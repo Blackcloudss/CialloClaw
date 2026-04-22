@@ -623,6 +623,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
 - 若客户端后续改为通过 `agent.task.start` 显式提交 `intent.name = screen_analyze`，后端应复用同一条主链路；`agent.input.submit` 不需要新增平行入口。
 - 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象，而不是要求前端自行猜测生命周期。
+- 当客户端省略 `session_id` 且输入仅为无共享锚点的纯文本时，后端不得把该输入隐式 graft 到旧的 `waiting_input / confirming_intent` task；此类续写必须依赖显式 session 作用域、共享上下文锚点或结构化补充证据。
 - 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
 
 ### agent.input.submit 入参示例
@@ -767,6 +768,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
 - 若客户端已显式提供 `intent.name = screen_analyze`，后端应复用同一条主链路；若客户端未显式提供 intent，也不应要求前端额外发明平行入口。
 - 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象；若判断为同一任务的补充输入，则应续到原 task 而不是机械新开 task。
+- 当客户端省略 `session_id` 且输入仅为无共享锚点的纯文本时，后端不得把该输入隐式 graft 到旧的 `waiting_input / confirming_intent` task；此类续写必须依赖显式 session 作用域、共享上下文锚点或结构化补充证据。
 - 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
 
 ### agent.task.start 入参示例
