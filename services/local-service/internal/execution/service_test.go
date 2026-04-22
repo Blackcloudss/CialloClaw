@@ -1096,12 +1096,32 @@ func TestModelFallbackErrorFromToolOutputRebuildsHTTPStatusErrors(t *testing.T) 
 	if !errors.Is(err, model.ErrOpenAIHTTPStatus) {
 		t.Fatalf("expected ErrOpenAIHTTPStatus, got %v", err)
 	}
+	if !model.IsProviderRuntimeUnavailable(err) {
+		t.Fatalf("expected reconstructed 503 error to remain runtime-unavailable, got %v", err)
+	}
 	var statusErr *model.OpenAIHTTPStatusError
 	if !errors.As(err, &statusErr) {
 		t.Fatalf("expected OpenAIHTTPStatusError, got %T", err)
 	}
 	if statusErr.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("expected status 503, got %d", statusErr.StatusCode)
+	}
+}
+
+func TestModelFallbackErrorFromToolOutputRebuildsHTTPStatusErrorsWithoutMessage(t *testing.T) {
+	err := modelFallbackErrorFromToolOutput(map[string]any{"fallback_reason": "openai responses returned http status 401"})
+	if !errors.Is(err, model.ErrOpenAIHTTPStatus) {
+		t.Fatalf("expected ErrOpenAIHTTPStatus, got %v", err)
+	}
+	if model.IsProviderRuntimeUnavailable(err) {
+		t.Fatalf("expected reconstructed 401 error to remain non-retryable, got %v", err)
+	}
+	var statusErr *model.OpenAIHTTPStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected OpenAIHTTPStatusError, got %T", err)
+	}
+	if statusErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d", statusErr.StatusCode)
 	}
 }
 
