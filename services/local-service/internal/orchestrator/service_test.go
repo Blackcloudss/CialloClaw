@@ -315,8 +315,11 @@ func (s failingAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Co
 }
 
 type countingTaskRunStore struct {
-	base      storage.TaskRunStore
-	loadCalls int
+	base            storage.TaskRunStore
+	loadCalls       int
+	loadAllCalls    int
+	legacyLoadCalls int
+	getCalls        int
 }
 
 type countingTaskStore struct {
@@ -355,16 +358,19 @@ func (s *countingTaskRunStore) SaveTaskRun(ctx context.Context, record storage.T
 
 func (s *countingTaskRunStore) LoadTaskRuns(ctx context.Context) ([]storage.TaskRunRecord, error) {
 	s.loadCalls++
+	s.loadAllCalls++
 	return s.base.LoadTaskRuns(ctx)
 }
 
 func (s *countingTaskRunStore) GetTaskRun(ctx context.Context, taskID string) (storage.TaskRunRecord, error) {
 	s.loadCalls++
+	s.getCalls++
 	return s.base.GetTaskRun(ctx, taskID)
 }
 
 func (s *countingTaskRunStore) LoadLegacyTaskRuns(ctx context.Context, structuredTaskIDs []string) ([]storage.TaskRunRecord, error) {
 	s.loadCalls++
+	s.legacyLoadCalls++
 	return s.base.LoadLegacyTaskRuns(ctx, structuredTaskIDs)
 }
 
@@ -7996,6 +8002,8 @@ func TestServiceTaskDetailGetUsesStructuredSnapshotWithoutReloadingTaskRuns(t *t
 			Trigger: "hover_text_input",
 			Text:    "snapshot-backed detail",
 		},
+		MirrorReferences:  []map[string]any{{"memory_id": "mem_structured_snapshot"}},
+		SteeringMessages:  []string{"keep the current structure"},
 		CurrentStepStatus: "completed",
 	}); err != nil {
 		t.Fatalf("save task run failed: %v", err)
@@ -8005,12 +8013,16 @@ func TestServiceTaskDetailGetUsesStructuredSnapshotWithoutReloadingTaskRuns(t *t
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
-	if countingStore.loadCalls != 0 {
-		t.Fatalf("expected structured snapshot detail to avoid task_run reload, got %d loads", countingStore.loadCalls)
+	if countingStore.loadCalls != 0 || countingStore.loadAllCalls != 0 || countingStore.legacyLoadCalls != 0 || countingStore.getCalls != 0 {
+		t.Fatalf("expected structured snapshot detail to avoid task_run reads, got total=%d full=%d legacy=%d get=%d", countingStore.loadCalls, countingStore.loadAllCalls, countingStore.legacyLoadCalls, countingStore.getCalls)
 	}
-	deliveryResult := result["delivery_result"].(map[string]any)
-	if deliveryResult["preview_text"] != "snapshot-backed detail" {
-		t.Fatalf("expected delivery result to come from structured snapshot compatibility, got %+v", deliveryResult)
+	mirrorReferences := result["mirror_references"].([]map[string]any)
+	if len(mirrorReferences) != 1 || mirrorReferences[0]["memory_id"] != "mem_structured_snapshot" {
+		t.Fatalf("expected task detail to reuse structured snapshot mirror references, got %+v", mirrorReferences)
+	}
+	runtimeSummary := result["runtime_summary"].(map[string]any)
+	if runtimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected runtime summary to expose structured snapshot steering count, got %+v", runtimeSummary)
 	}
 }
 
@@ -8047,6 +8059,8 @@ func TestServiceTaskDetailGetReloadsTaskRunWhenStructuredSnapshotIsInvalid(t *te
 				"url":     nil,
 			},
 		},
+		MirrorReferences:  []map[string]any{{"memory_id": "mem_legacy_snapshot"}},
+		SteeringMessages:  []string{"resume from legacy snapshot"},
 		CurrentStepStatus: "completed",
 	}); err != nil {
 		t.Fatalf("save task run failed: %v", err)
@@ -8080,12 +8094,61 @@ func TestServiceTaskDetailGetReloadsTaskRunWhenStructuredSnapshotIsInvalid(t *te
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
-	if countingStore.loadCalls != 1 {
-		t.Fatalf("expected invalid structured snapshot to trigger one task_run reload, got %d loads", countingStore.loadCalls)
+	if countingStore.loadCalls != 1 || countingStore.getCalls != 1 || countingStore.loadAllCalls != 0 || countingStore.legacyLoadCalls != 0 {
+		t.Fatalf("expected invalid structured snapshot to trigger one direct task_run lookup, got total=%d full=%d legacy=%d get=%d", countingStore.loadCalls, countingStore.loadAllCalls, countingStore.legacyLoadCalls, countingStore.getCalls)
 	}
-	deliveryResult := result["delivery_result"].(map[string]any)
-	if deliveryResult["preview_text"] != "legacy task_run detail" {
-		t.Fatalf("expected task detail to backfill delivery result from task_runs, got %+v", deliveryResult)
+	mirrorReferences := result["mirror_references"].([]map[string]any)
+	if len(mirrorReferences) != 1 || mirrorReferences[0]["memory_id"] != "mem_legacy_snapshot" {
+		t.Fatalf("expected invalid structured snapshot to backfill mirror references from task_runs, got %+v", mirrorReferences)
+	}
+	runtimeSummary := result["runtime_summary"].(map[string]any)
+	if runtimeSummary["active_steering_count"] != 1 {
+		t.Fatalf("expected invalid structured snapshot to backfill steering count, got %+v", runtimeSummary)
+	}
+}
+
+func TestServiceTaskListUsesLegacyTaskRunLoaderForLegacyOnlyRows(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "legacy task list loader")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.TaskRunStore()
+	defer replaceTaskRunStore(t, service.storage, originalStore)
+	countingStore := &countingTaskRunStore{base: originalStore}
+	replaceTaskRunStore(t, service.storage, countingStore)
+
+	legacyTask := storage.TaskRunRecord{
+		TaskID:            "task_legacy_list_only",
+		SessionID:         "sess_legacy_list_only",
+		RunID:             "run_legacy_list_only",
+		Title:             "legacy list task",
+		SourceType:        "hover_input",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "summarize"},
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "green",
+		StartedAt:         time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:         time.Date(2026, 4, 15, 12, 5, 0, 0, time.UTC),
+		FinishedAt:        timePointer(time.Date(2026, 4, 15, 12, 6, 0, 0, time.UTC)),
+		CurrentStepStatus: "completed",
+	}
+	if err := countingStore.SaveTaskRun(context.Background(), legacyTask); err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+	if err := service.storage.TaskStore().DeleteTask(context.Background(), legacyTask.TaskID); err != nil {
+		t.Fatalf("delete structured task failed: %v", err)
+	}
+
+	result, err := service.TaskList(map[string]any{"group": "finished"})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	if countingStore.legacyLoadCalls != 1 || countingStore.loadAllCalls != 0 || countingStore.getCalls != 0 {
+		t.Fatalf("expected legacy-only task list to use legacy loader once, got full=%d legacy=%d get=%d", countingStore.loadAllCalls, countingStore.legacyLoadCalls, countingStore.getCalls)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["task_id"] != legacyTask.TaskID {
+		t.Fatalf("expected task list to return legacy-only task row, got %+v", items)
 	}
 }
 
