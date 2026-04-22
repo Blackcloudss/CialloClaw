@@ -59,7 +59,7 @@ const NOTE_CANVAS_SEED_POSITIONS = [
 export function NotePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const boardLayerRef = useRef<HTMLElement | null>(null);
+  const boardLayerRef = useRef<HTMLDivElement | null>(null);
   const railRef = useRef<HTMLElement | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -208,6 +208,28 @@ export function NotePage() {
     return {
       x: Math.min(maxX, Math.max(0, placement.x)),
       y: Math.min(maxY, Math.max(0, placement.y)),
+    };
+  }
+
+  /**
+   * The note board cards are positioned relative to the dedicated board layer,
+   * not the outer board shell that also contains the heading. All drag math and
+   * seed placement must use this layer to avoid cursor offsets and clipping.
+   */
+  function getBoardLayerBounds() {
+    const layer = boardLayerRef.current;
+    if (!layer) {
+      return null;
+    }
+
+    const rect = layer.getBoundingClientRect();
+    return {
+      height: rect.height,
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      bottom: rect.bottom,
+      width: rect.width,
     };
   }
 
@@ -407,15 +429,21 @@ export function NotePage() {
   );
 
   useEffect(() => {
-    if (boardSeeded || defaultBoardItemIds.length === 0) {
+    const boardBounds = getBoardLayerBounds();
+    if (boardSeeded || defaultBoardItemIds.length === 0 || !boardBounds) {
       return;
     }
 
     setCanvasCards(
       defaultBoardItemIds.map((itemId, index) => ({
         itemId,
-        x: NOTE_CANVAS_SEED_POSITIONS[index]?.x ?? 120 + index * 36,
-        y: NOTE_CANVAS_SEED_POSITIONS[index]?.y ?? 120 + index * 28,
+        ...clampCanvasPlacement(
+          {
+            x: NOTE_CANVAS_SEED_POSITIONS[index]?.x ?? 120 + index * 36,
+            y: NOTE_CANVAS_SEED_POSITIONS[index]?.y ?? 120 + index * 28,
+          },
+          { height: boardBounds.height, width: boardBounds.width },
+        ),
         zIndex: index + 1,
       })),
     );
@@ -448,10 +476,13 @@ export function NotePage() {
       }
 
       const seedIndex = current.length % NOTE_CANVAS_SEED_POSITIONS.length;
-      const nextPlacement = placement ?? {
-        x: NOTE_CANVAS_SEED_POSITIONS[seedIndex]?.x ?? 120 + current.length * 28,
-        y: NOTE_CANVAS_SEED_POSITIONS[seedIndex]?.y ?? 110 + current.length * 24,
-      };
+      const nextPlacement = placement ?? clampCanvasPlacement(
+        {
+          x: NOTE_CANVAS_SEED_POSITIONS[seedIndex]?.x ?? 120 + current.length * 28,
+          y: NOTE_CANVAS_SEED_POSITIONS[seedIndex]?.y ?? 110 + current.length * 24,
+        },
+        getBoardLayerBounds() ?? { height: NOTE_CANVAS_CARD_HEIGHT * 2, width: NOTE_CANVAS_CARD_WIDTH * 2 },
+      );
 
       return [...current, { itemId, x: nextPlacement.x, y: nextPlacement.y, zIndex: getNextCanvasZIndex(current) }];
     });
@@ -525,9 +556,9 @@ export function NotePage() {
       return;
     }
 
-    if (boardLayerRef.current) {
-      const boardRect = boardLayerRef.current.getBoundingClientRect();
-      const overBoard = event.clientX >= boardRect.left && event.clientX <= boardRect.right && event.clientY >= boardRect.top && event.clientY <= boardRect.bottom;
+    const boardBounds = getBoardLayerBounds();
+    if (boardBounds) {
+      const overBoard = event.clientX >= boardBounds.left && event.clientX <= boardBounds.right && event.clientY >= boardBounds.top && event.clientY <= boardBounds.bottom;
       setIsBoardDropTarget(overBoard);
     }
 
@@ -546,18 +577,18 @@ export function NotePage() {
       return;
     }
 
-    if (boardLayerRef.current) {
-      const boardRect = boardLayerRef.current.getBoundingClientRect();
-      const droppedOverBoard = event.clientX >= boardRect.left && event.clientX <= boardRect.right && event.clientY >= boardRect.top && event.clientY <= boardRect.bottom;
+    const boardBounds = getBoardLayerBounds();
+    if (boardBounds) {
+      const droppedOverBoard = event.clientX >= boardBounds.left && event.clientX <= boardBounds.right && event.clientY >= boardBounds.top && event.clientY <= boardBounds.bottom;
       if (droppedOverBoard) {
         pinNoteToCanvas(
           itemId,
           clampCanvasPlacement(
             {
-              x: event.clientX - boardRect.left - dragState.offsetX,
-              y: event.clientY - boardRect.top - dragState.offsetY,
+              x: event.clientX - boardBounds.left - dragState.offsetX,
+              y: event.clientY - boardBounds.top - dragState.offsetY,
             },
-            { height: boardRect.height, width: boardRect.width },
+            { height: boardBounds.height, width: boardBounds.width },
             { height: dragState.height, width: dragState.width },
           ),
         );
@@ -575,11 +606,11 @@ export function NotePage() {
    * state for arranging preview cards and must not mutate formal note data.
    */
   function handleBoardCardPointerDown(itemId: string, event: ReactPointerEvent<HTMLButtonElement>) {
-    if (!event.isPrimary || event.button !== 0 || !boardLayerRef.current) {
+    const boardBounds = getBoardLayerBounds();
+    if (!event.isPrimary || event.button !== 0 || !boardBounds) {
       return;
     }
 
-    const boardRect = boardLayerRef.current.getBoundingClientRect();
     const cardRect = event.currentTarget.getBoundingClientRect();
     const currentCard = canvasCards.find((entry) => entry.itemId === itemId);
     const currentOffset = currentCard ? { x: currentCard.x, y: currentCard.y } : { x: 0, y: 0 };
@@ -593,10 +624,10 @@ export function NotePage() {
       startClientY: event.clientY,
       originX: currentOffset.x,
       originY: currentOffset.y,
-      minX: currentOffset.x + (boardRect.left - cardRect.left),
-      maxX: currentOffset.x + (boardRect.right - cardRect.right),
-      minY: currentOffset.y + (boardRect.top - cardRect.top),
-      maxY: currentOffset.y + (boardRect.bottom - cardRect.bottom),
+      minX: currentOffset.x + (boardBounds.left - cardRect.left),
+      maxX: currentOffset.x + (boardBounds.right - cardRect.right),
+      minY: currentOffset.y + (boardBounds.top - cardRect.top),
+      maxY: currentOffset.y + (boardBounds.bottom - cardRect.bottom),
       moved: false,
     };
     setDraggingBoardItemId(itemId);
@@ -872,7 +903,7 @@ export function NotePage() {
               <span>{drawerOpen ? "收起抽屉" : "展开抽屉"}</span>
             </button>
 
-            <section className={cn("note-preview-page__board", isBoardDropTarget && "is-drop-target")} ref={boardLayerRef}>
+            <section className={cn("note-preview-page__board", isBoardDropTarget && "is-drop-target")}>
               <div aria-hidden="true" className="note-preview-page__board-scene" />
               <div className="note-preview-page__board-heading">
                 <div className="note-preview-page__board-heading-copy">
@@ -881,15 +912,15 @@ export function NotePage() {
                 </div>
               </div>
 
-              {boardItems.length > 0 ? (
-                <div className="note-preview-page__board-layer">
-                  {boardItems.map((entry) => renderBoardCard(entry.item, { x: entry.x, y: entry.y, zIndex: entry.zIndex }))}
-                </div>
-              ) : (
-                <div className="note-preview-page__board-empty">
-                  <NoteEmptyState />
-                </div>
-              )}
+              <div className="note-preview-page__board-layer" ref={boardLayerRef}>
+                {boardItems.length > 0
+                  ? boardItems.map((entry) => renderBoardCard(entry.item, { x: entry.x, y: entry.y, zIndex: entry.zIndex }))
+                  : (
+                    <div className="note-preview-page__board-empty">
+                      <NoteEmptyState />
+                    </div>
+                  )}
+              </div>
             </section>
           </section>
         </section>

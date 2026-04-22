@@ -655,6 +655,8 @@
 
 .note-preview-page__board {
   border-radius: 2rem;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   overflow: hidden;
   padding: 1rem;
@@ -718,7 +720,8 @@
 }
 
 .note-preview-page__board-layer {
-  min-height: calc(100% - 3.2rem);
+  flex: 1 1 auto;
+  min-height: 18rem;
   position: relative;
 }
 
@@ -803,7 +806,7 @@
 .note-preview-page__board-empty {
   align-items: center;
   display: flex;
-  height: calc(100% - 3rem);
+  height: 100%;
   justify-content: center;
   position: relative;
   z-index: 1;
