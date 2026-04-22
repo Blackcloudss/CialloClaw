@@ -1,0 +1,336 @@
+name: Daily Release
+
+run-name: >-
+  Daily Release (${{
+    github.event_name == 'schedule' && 'scheduled' || 'manual'
+  }})
+
+on:
+  schedule:
+    # Avoid the top of the hour because scheduled workflows can be delayed there.
+    - cron: "7 7 * * *"
+      timezone: "Asia/Shanghai"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-release
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      commit_count: ${{ steps.check.outputs.commit_count }}
+      compare_url: ${{ steps.check.outputs.compare_url }}
+      release_sha: ${{ steps.check.outputs.release_sha }}
+      release_version: ${{ steps.meta.outputs.release_version }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      window_start_beijing: ${{ steps.meta.outputs.start_beijing }}
+      window_end_beijing: ${{ steps.meta.outputs.end_beijing }}
+      window_start_utc: ${{ steps.meta.outputs.start_utc }}
+      window_end_utc: ${{ steps.meta.outputs.end_utc }}
+
+    steps:
+      - name: Resolve the latest Beijing 07:00 release window
+        id: meta
+        shell: bash
+        run: |
+          now_epoch=$(TZ=Asia/Shanghai date +%s)
+          today_cutoff_epoch=$(TZ=Asia/Shanghai date -d "$(TZ=Asia/Shanghai date +%F) 07:00:00" +%s)
+
+          if [ "$now_epoch" -lt "$today_cutoff_epoch" ]; then
+            end_epoch=$(TZ=Asia/Shanghai date -d "yesterday 07:00:00" +%s)
+          else
+            end_epoch=$today_cutoff_epoch
+          fi
+
+          start_epoch=$((end_epoch - 86400))
+          release_version=$(TZ=Asia/Shanghai date -d "@$end_epoch" +%Y.%-m.%-d)
+          start_beijing=$(TZ=Asia/Shanghai date -d "@$start_epoch" +%Y-%m-%d\ %H:%M:%S\ %Z)
+          end_beijing=$(TZ=Asia/Shanghai date -d "@$end_epoch" +%Y-%m-%d\ %H:%M:%S\ %Z)
+
+          echo "release_version=$release_version" >> "$GITHUB_OUTPUT"
+          echo "release_tag=v$release_version" >> "$GITHUB_OUTPUT"
+          echo "start_beijing=$start_beijing" >> "$GITHUB_OUTPUT"
+          echo "end_beijing=$end_beijing" >> "$GITHUB_OUTPUT"
+          echo "start_utc=$(date -u -d "@$start_epoch" +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "end_utc=$(date -u -d "@$end_epoch" +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Detect main branch movement inside the release window
+        id: check
+        uses: actions/github-script@v7
+        env:
+          START_UTC: ${{ steps.meta.outputs.start_utc }}
+          END_UTC: ${{ steps.meta.outputs.end_utc }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const startUtc = process.env.START_UTC;
+            const endUtc = process.env.END_UTC;
+            const listLatestCommitAtOrBefore = async (cutoffUtc) => {
+              const { data } = await github.rest.repos.listCommits({
+                owner,
+                repo,
+                sha: "main",
+                until: cutoffUtc,
+                per_page: 1,
+              });
+              return data[0] ?? null;
+            };
+
+            const startSnapshot = await listLatestCommitAtOrBefore(startUtc);
+            const endSnapshot = await listLatestCommitAtOrBefore(endUtc);
+
+            if (!endSnapshot) {
+              core.setFailed(`No main branch commit was found at or before ${endUtc}.`);
+              return;
+            }
+
+            const releaseSha = endSnapshot.sha;
+            let commitCount = 0;
+            let compareUrl = "";
+
+            if (!startSnapshot) {
+              const historyUntilEnd = await github.paginate(github.rest.repos.listCommits, {
+                owner,
+                repo,
+                sha: "main",
+                until: endUtc,
+                per_page: 100,
+              });
+
+              commitCount = historyUntilEnd.length;
+              compareUrl = `${context.serverUrl}/${owner}/${repo}/commits/${releaseSha}`;
+            } else if (startSnapshot.sha !== endSnapshot.sha) {
+              const compare = await github.rest.repos.compareCommitsWithBasehead({
+                owner,
+                repo,
+                basehead: `${startSnapshot.sha}...${endSnapshot.sha}`,
+              });
+
+              commitCount = compare.data.ahead_by;
+              compareUrl = compare.data.html_url;
+            }
+
+            const shouldRelease = commitCount > 0;
+
+            core.info(`Release window: ${startUtc} -> ${endUtc}`);
+            core.info(`Window start snapshot: ${startSnapshot?.sha ?? "none"}`);
+            core.info(`Window end snapshot: ${endSnapshot.sha}`);
+            core.info(`Commits on main introduced in the release window: ${commitCount}`);
+            core.info(`Release candidate SHA: ${releaseSha}`);
+
+            core.setOutput("commit_count", String(commitCount));
+            core.setOutput("compare_url", compareUrl);
+            core.setOutput("release_sha", releaseSha);
+            core.setOutput("should_release", shouldRelease ? "true" : "false");
+
+      - name: Write detection summary
+        shell: bash
+        run: |
+          {
+            echo "## Daily Release Detection"
+            echo
+            echo "- Release tag: \`${{ steps.meta.outputs.release_tag }}\`"
+            echo "- Release version: \`${{ steps.meta.outputs.release_version }}\`"
+            echo "- Beijing window: \`${{ steps.meta.outputs.start_beijing }}\` -> \`${{ steps.meta.outputs.end_beijing }}\`"
+            echo "- UTC window: \`${{ steps.meta.outputs.start_utc }}\` -> \`${{ steps.meta.outputs.end_utc }}\`"
+            echo "- Release candidate SHA: \`${{ steps.check.outputs.release_sha }}\`"
+            echo "- Commit count on main in window: \`${{ steps.check.outputs.commit_count }}\`"
+            echo "- Should release: \`${{ steps.check.outputs.should_release }}\`"
+            if [ -n "${{ steps.check.outputs.compare_url }}" ]; then
+              echo "- Compare: ${{ steps.check.outputs.compare_url }}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release-windows:
+    needs: detect
+    if: needs.detect.outputs.should_release == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout the release candidate commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.detect.outputs.release_sha }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/desktop/src-tauri -> target
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.0"
+          cache-dependency-path: go.sum
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Rewrite the desktop version in release manifests
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.detect.outputs.release_version }}
+        run: |
+          node -e "
+          const fs = require('node:fs');
+          const version = process.env.RELEASE_VERSION;
+
+          const packageJsonPath = 'apps/desktop/package.json';
+          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+          packageJson.version = version;
+          fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
+
+          const tauriConfigPath = 'apps/desktop/src-tauri/tauri.conf.json';
+          const tauriConfig = JSON.parse(fs.readFileSync(tauriConfigPath, 'utf8'));
+          tauriConfig.version = version;
+          fs.writeFileSync(tauriConfigPath, JSON.stringify(tauriConfig, null, 2) + '\n');
+
+          const cargoTomlPath = 'apps/desktop/src-tauri/Cargo.toml';
+          let cargoToml = fs.readFileSync(cargoTomlPath, 'utf8');
+          cargoToml = cargoToml.replace(/^version = \".*\"/m, 'version = \"' + version + '\"');
+          fs.writeFileSync(cargoTomlPath, cargoToml);
+          "
+
+      - name: Verify rewritten release manifests
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.detect.outputs.release_version }}
+        run: |
+          node -e "
+          const fs = require('node:fs');
+          const version = process.env.RELEASE_VERSION;
+
+          const packageJson = JSON.parse(fs.readFileSync('apps/desktop/package.json', 'utf8'));
+          const tauriConfig = JSON.parse(fs.readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
+          const cargoToml = fs.readFileSync('apps/desktop/src-tauri/Cargo.toml', 'utf8');
+
+          if (packageJson.version !== version) {
+            throw new Error('apps/desktop/package.json was not rewritten to the release version.');
+          }
+
+          if (tauriConfig.version !== version) {
+            throw new Error('apps/desktop/src-tauri/tauri.conf.json was not rewritten to the release version.');
+          }
+
+          if (!cargoToml.includes('version = \\\"' + version + '\\\"')) {
+            throw new Error('apps/desktop/src-tauri/Cargo.toml was not rewritten to the release version.');
+          }
+          "
+
+      - name: Run desktop checks
+        run: |
+          pnpm --dir apps/desktop lint
+          pnpm --dir apps/desktop typecheck
+          pnpm --dir apps/desktop test:dashboard
+          pnpm --dir apps/desktop test:shell-ball
+          pnpm --dir apps/desktop test:memory
+
+      - name: Run local-service tests
+        run: go test ./services/local-service/...
+
+      - name: Build the Windows desktop bundles
+        working-directory: apps/desktop
+        run: pnpm exec tauri build
+
+      - name: Collect built Windows bundles
+        id: assets
+        shell: pwsh
+        run: |
+          $assetPatterns = @(
+            "apps/desktop/src-tauri/target/release/bundle/**/*.msi",
+            "apps/desktop/src-tauri/target/release/bundle/**/*-setup.exe"
+          )
+          $assets = @()
+          foreach ($pattern in $assetPatterns) {
+            $assets += Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue
+          }
+
+          if ($assets.Count -eq 0) {
+            throw "No Windows release bundles were found."
+          }
+
+          $assetList = ($assets | Sort-Object FullName | Select-Object -ExpandProperty FullName) -join "`n"
+          "asset_list<<EOF" >> $env:GITHUB_OUTPUT
+          $assetList >> $env:GITHUB_OUTPUT
+          "EOF" >> $env:GITHUB_OUTPUT
+
+          "## Built Assets" >> $env:GITHUB_STEP_SUMMARY
+          foreach ($asset in ($assets | Sort-Object FullName)) {
+            "- $($asset.FullName)" >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Compose release metadata
+        shell: bash
+        run: |
+          cat <<'EOF' > release-body.md
+          ## Release Metadata
+
+          - Release tag: `${{ needs.detect.outputs.release_tag }}`
+          - Release version: `${{ needs.detect.outputs.release_version }}`
+          - Release candidate SHA: `${{ needs.detect.outputs.release_sha }}`
+          - Triggered by: `${{ github.event_name }}`
+          - Commit count on `main` in the release window: `${{ needs.detect.outputs.commit_count }}`
+          - Beijing release window: `${{ needs.detect.outputs.window_start_beijing }}` -> `${{ needs.detect.outputs.window_end_beijing }}`
+          - UTC release window: `${{ needs.detect.outputs.window_start_utc }}` -> `${{ needs.detect.outputs.window_end_utc }}`
+          EOF
+
+          if [ -n "${{ needs.detect.outputs.compare_url }}" ]; then
+            echo "- Compare: ${{ needs.detect.outputs.compare_url }}" >> release-body.md
+          fi
+
+      - name: Publish the daily GitHub release
+        id: publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.detect.outputs.release_tag }}
+          name: ${{ needs.detect.outputs.release_tag }}
+          target_commitish: ${{ needs.detect.outputs.release_sha }}
+          body_path: release-body.md
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          preserve_order: true
+          make_latest: true
+          files: ${{ steps.assets.outputs.asset_list }}
+
+      - name: Write release summary
+        shell: bash
+        run: |
+          {
+            echo "## Published Release"
+            echo
+            echo "- Release URL: ${{ steps.publish.outputs.url }}"
+            echo "- Release ID: \`${{ steps.publish.outputs.id }}\`"
+            echo "- Target SHA: \`${{ needs.detect.outputs.release_sha }}\`"
+            echo "- Uploaded assets:"
+            while IFS= read -r asset; do
+              echo "  - \`$asset\`"
+            done <<'EOF'
+          ${{ steps.assets.outputs.asset_list }}
+          EOF
+          } >> "$GITHUB_STEP_SUMMARY"
