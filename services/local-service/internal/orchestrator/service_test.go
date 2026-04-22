@@ -9628,6 +9628,54 @@ func TestServicePluginDetailGetReturnsStructuredContracts(t *testing.T) {
 	}
 }
 
+func TestServicePluginListFallsBackToStaticCatalogWhenPluginRuntimeServiceMissing(t *testing.T) {
+	service := newTestService()
+	service.plugin = nil
+
+	result, err := service.PluginList(map[string]any{
+		"query": "media",
+		"page":  map[string]any{"limit": 10, "offset": 0},
+	})
+	if err != nil {
+		t.Fatalf("plugin list fallback failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["plugin_id"] != "media" {
+		t.Fatalf("expected static plugin catalog fallback to return media plugin, got %+v", items)
+	}
+	if len(items[0]["capabilities"].([]map[string]any)) == 0 {
+		t.Fatalf("expected static plugin list fallback to preserve capability metadata, got %+v", items[0])
+	}
+	if len(items[0]["runtimes"].([]map[string]any)) != 0 {
+		t.Fatalf("expected static plugin list fallback to omit runtime rows, got %+v", items[0])
+	}
+}
+
+func TestServicePluginDetailGetFallsBackToStaticCatalogWhenPluginRuntimeServiceMissing(t *testing.T) {
+	service := newTestService()
+	service.plugin = nil
+
+	result, err := service.PluginDetailGet(map[string]any{
+		"plugin_id":       "ocr",
+		"include_runtime": true,
+		"include_metrics": true,
+		"include_events":  true,
+	})
+	if err != nil {
+		t.Fatalf("plugin detail fallback failed: %v", err)
+	}
+	pluginValue := result["plugin"].(map[string]any)
+	if pluginValue["plugin_id"] != "ocr" || pluginValue["display_name"] != "OCR Worker" {
+		t.Fatalf("expected static plugin detail fallback header, got %+v", pluginValue)
+	}
+	if len(result["runtimes"].([]map[string]any)) != 0 || len(result["metrics"].([]map[string]any)) != 0 || len(result["recent_events"].([]map[string]any)) != 0 {
+		t.Fatalf("expected static plugin detail fallback to avoid runtime payloads, got %+v", result)
+	}
+	if len(result["tools"].([]map[string]any)) == 0 {
+		t.Fatalf("expected static plugin detail fallback to retain declared tool contracts, got %+v", result)
+	}
+}
+
 func TestServiceSnapshotUsesStablePrimaryWorker(t *testing.T) {
 	service := newTestService()
 	snapshot := service.Snapshot()

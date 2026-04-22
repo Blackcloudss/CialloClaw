@@ -2052,12 +2052,13 @@ func (s *Service) MirrorOverviewGet(params map[string]any) (map[string]any, erro
 // without depending on static worker declarations only.
 func (s *Service) PluginRuntimeList(params map[string]any) (map[string]any, error) {
 	_ = params
-	if s.plugin == nil {
+	snapshots := pluginCatalogSnapshots(s.plugin)
+	if len(snapshots) == 0 {
 		return map[string]any{"items": []map[string]any{}, "metrics": []map[string]any{}, "events": []map[string]any{}}, nil
 	}
-	runtimes := s.plugin.RuntimeStates()
-	metrics := s.plugin.MetricSnapshots()
-	events := s.plugin.RuntimeEvents()
+	runtimes := pluginSnapshotRuntimes(snapshots)
+	metrics := pluginSnapshotMetrics(snapshots)
+	events := pluginSnapshotEvents(snapshots)
 	return map[string]any{
 		"items":   pluginRuntimeItems(runtimes),
 		"metrics": pluginMetricItems(metrics),
@@ -2089,7 +2090,8 @@ func (s *Service) SecuritySummaryGet() (map[string]any, error) {
 }
 
 func (s *Service) pluginRuntimeSummary() map[string]any {
-	if s.plugin == nil {
+	snapshots := pluginCatalogSnapshots(s.plugin)
+	if len(snapshots) == 0 {
 		return map[string]any{
 			"total":       0,
 			"healthy":     0,
@@ -2097,7 +2099,7 @@ func (s *Service) pluginRuntimeSummary() map[string]any {
 			"unavailable": 0,
 		}
 	}
-	runtimes := s.plugin.RuntimeStates()
+	runtimes := pluginSnapshotRuntimes(snapshots)
 	summary := map[string]any{
 		"total":       len(runtimes),
 		"healthy":     0,
