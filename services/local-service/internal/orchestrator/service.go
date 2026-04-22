@@ -2644,7 +2644,8 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, tools.ErrScreenCaptureNotSupported)
 		return failedTask, failureBubble, nil, nil
 	}
-	screenSession, err := s.executor.ScreenClient().StartSession(context.Background(), tools.ScreenSessionStartInput{
+	screenClient := s.executor.ScreenClient()
+	screenSession, err := screenClient.StartSession(context.Background(), tools.ScreenSessionStartInput{
 		SessionID:   task.SessionID,
 		TaskID:      task.TaskID,
 		RunID:       task.RunID,
@@ -2655,7 +2656,7 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
 		return failedTask, failureBubble, nil, nil
 	}
-	candidate, err := s.executor.ScreenClient().CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{
+	candidate, err := screenClient.CaptureScreenshot(context.Background(), tools.ScreenCaptureInput{
 		ScreenSessionID: screenSession.ScreenSessionID,
 		TaskID:          task.TaskID,
 		RunID:           task.RunID,
@@ -2664,6 +2665,7 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 		SourcePath:      stringValue(pendingExecution, "source_path", ""),
 	})
 	if err != nil {
+		expireAndCleanupScreenSession(screenClient, screenSession.ScreenSessionID, "capture_failed")
 		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
 		return failedTask, failureBubble, nil, nil
 	}
@@ -2686,9 +2688,38 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 	}
 	updatedTask, bubble, deliveryResult, _, err := s.executeTask(task, snapshotFromTask(task), execIntent)
 	if err != nil {
+		expireAndCleanupScreenSession(screenClient, screenSession.ScreenSessionID, "analysis_failed")
 		return runengine.TaskRecord{}, nil, nil, err
 	}
+	// Successful analyses stop the session so stale authorizations do not linger.
+	// Failed terminal attempts still expire and clean temp session outputs because
+	// no durable artifact handoff completed for that branch.
+	if updatedTask.Status == "completed" {
+		stopScreenSession(screenClient, screenSession.ScreenSessionID, "analysis_completed")
+	} else if taskIsTerminal(updatedTask.Status) {
+		expireAndCleanupScreenSession(screenClient, screenSession.ScreenSessionID, "analysis_failed")
+	}
 	return updatedTask, bubble, deliveryResult, nil
+}
+
+func stopScreenSession(screenClient tools.ScreenCaptureClient, screenSessionID, reason string) {
+	if screenClient == nil || strings.TrimSpace(screenSessionID) == "" {
+		return
+	}
+	_, _ = screenClient.StopSession(context.Background(), screenSessionID, reason)
+}
+
+// expireAndCleanupScreenSession keeps failed screen-analysis attempts from
+// leaving temporary session state behind when no durable artifact is produced.
+func expireAndCleanupScreenSession(screenClient tools.ScreenCaptureClient, screenSessionID, reason string) {
+	if screenClient == nil || strings.TrimSpace(screenSessionID) == "" {
+		return
+	}
+	_, _ = screenClient.ExpireSession(context.Background(), screenSessionID, reason)
+	_, _ = screenClient.CleanupSessionArtifacts(context.Background(), tools.ScreenCleanupInput{
+		ScreenSessionID: screenSessionID,
+		Reason:          reason,
+	})
 }
 
 // taskMap converts a runengine task record into the protocol-facing task shape.
