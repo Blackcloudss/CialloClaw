@@ -119,3 +119,121 @@ func TestSQLiteLoopRuntimeStoreStructuredQueries(t *testing.T) {
 		t.Fatal("expected nullableRuntimeString to drop blank values and preserve non-blank strings")
 	}
 }
+
+func TestLoopRuntimeStoresCoverAdditionalPagingAndErrorBranches(t *testing.T) {
+	if _, err := NewSQLiteLoopRuntimeStore(""); err == nil {
+		t.Fatal("expected sqlite loop runtime constructor to reject empty path")
+	}
+
+	inMemory := newInMemoryLoopRuntimeStore()
+	if err := inMemory.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_mem_a", TaskID: "task_mem_a", Type: "bubble", Title: "A", CreatedAt: "2026-04-21T10:00:05Z"}); err != nil {
+		t.Fatalf("SaveDeliveryResult returned error: %v", err)
+	}
+	if err := inMemory.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_mem_b", TaskID: "task_mem_b", Type: "bubble", Title: "B", CreatedAt: "2026-04-21T10:00:06Z"}); err != nil {
+		t.Fatalf("SaveDeliveryResult returned error: %v", err)
+	}
+	results, total, err := inMemory.ListDeliveryResults(context.Background(), "", 0, 1)
+	if err != nil || total != 2 || len(results) != 1 || results[0].DeliveryResultID != "delivery_mem_a" {
+		t.Fatalf("expected unlimited in-memory delivery paging to return later page, total=%d items=%+v err=%v", total, results, err)
+	}
+	latest, ok, err := inMemory.GetLatestDeliveryResult(context.Background(), "missing_task")
+	if err != nil || ok || latest.DeliveryResultID != "" {
+		t.Fatalf("expected missing in-memory latest delivery query to return no record, record=%+v ok=%v err=%v", latest, ok, err)
+	}
+	if err := inMemory.SaveEvents(context.Background(), []EventRecord{
+		{EventID: "evt_mem_a", RunID: "run_mem_a", TaskID: "task_mem_a", Type: "loop.started", CreatedAt: "2026-04-21T10:00:01Z"},
+		{EventID: "evt_mem_b", RunID: "run_mem_a", TaskID: "task_mem_a", Type: "loop.completed", CreatedAt: "2026-04-21T10:00:03Z"},
+		{EventID: "evt_mem_c", RunID: "run_mem_b", TaskID: "task_mem_b", Type: "loop.completed", CreatedAt: "2026-04-21T10:00:02Z"},
+	}); err != nil {
+		t.Fatalf("SaveEvents returned error: %v", err)
+	}
+	events, total, err := inMemory.ListEvents(context.Background(), "", "", "", "2026-04-21T10:00:02Z", "2026-04-21T10:00:03Z", 0, 0)
+	if err != nil || total != 2 || len(events) != 2 || events[0].EventID != "evt_mem_b" {
+		t.Fatalf("expected in-memory ListEvents to honor time range and sort order, total=%d items=%+v err=%v", total, events, err)
+	}
+	if emptyEvents, total, err := inMemory.ListEvents(context.Background(), "", "", "", "", "", 1, 9); err != nil || total != 3 || len(emptyEvents) != 0 {
+		t.Fatalf("expected in-memory ListEvents overflow page to be empty, total=%d items=%+v err=%v", total, emptyEvents, err)
+	}
+	if err := inMemory.ReplaceTaskCitations(context.Background(), "task_mem_a", nil); err != nil {
+		t.Fatalf("ReplaceTaskCitations returned error: %v", err)
+	}
+	if citations, err := inMemory.ListTaskCitations(context.Background(), "task_mem_a"); err != nil || len(citations) != 0 {
+		t.Fatalf("expected empty citation replacement to clear in-memory citations, citations=%+v err=%v", citations, err)
+	}
+
+	sqliteStore, err := NewSQLiteLoopRuntimeStore(filepath.Join(t.TempDir(), "loop-runtime-errors.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteLoopRuntimeStore returned error: %v", err)
+	}
+	if err := sqliteStore.SaveRun(context.Background(), RunRecord{RunID: "run_sql_extra", TaskID: "task_sql_extra", SessionID: "sess_sql_extra", Status: "completed", IntentName: "summarize", StartedAt: "2026-04-21T10:00:00Z", UpdatedAt: "2026-04-21T10:00:01Z"}); err != nil {
+		t.Fatalf("SaveRun returned error: %v", err)
+	}
+	if err := sqliteStore.SaveEvents(context.Background(), []EventRecord{{EventID: "evt_sql_extra", RunID: "run_sql_extra", TaskID: "task_sql_extra", Type: "loop.started", CreatedAt: "2026-04-21T10:00:01Z"}}); err != nil {
+		t.Fatalf("SaveEvents returned error: %v", err)
+	}
+	if err := sqliteStore.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_sql_extra", TaskID: "task_sql_extra", Type: "bubble", Title: "extra", CreatedAt: "2026-04-21T10:00:02Z"}); err != nil {
+		t.Fatalf("SaveDeliveryResult returned error: %v", err)
+	}
+	if _, err := sqliteStore.GetRun(context.Background(), "missing_run"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected missing sqlite run to return sql.ErrNoRows, got %v", err)
+	}
+	if results, total, err := sqliteStore.ListDeliveryResults(context.Background(), "task_sql_extra", 0, 0); err != nil || total != 1 || len(results) != 1 {
+		t.Fatalf("expected sqlite delivery query without limit to return all rows, total=%d items=%+v err=%v", total, results, err)
+	}
+	if events, total, err := sqliteStore.ListEvents(context.Background(), "", "", "", "", "", 0, 0); err != nil || total != 1 || len(events) != 1 {
+		t.Fatalf("expected sqlite ListEvents without filters to return all rows, total=%d items=%+v err=%v", total, events, err)
+	}
+	if err := sqliteStore.ReplaceTaskCitations(context.Background(), "task_sql_extra", []CitationRecord{{CitationID: "cit_sql_extra", TaskID: "task_sql_extra", OrderIndex: 0}}); err != nil {
+		t.Fatalf("ReplaceTaskCitations returned error: %v", err)
+	}
+	if err := sqliteStore.ReplaceTaskCitations(context.Background(), "task_sql_extra", nil); err != nil {
+		t.Fatalf("expected empty sqlite citation replacement to succeed, got %v", err)
+	}
+	if citations, err := sqliteStore.ListTaskCitations(context.Background(), "task_sql_extra"); err != nil || len(citations) != 0 {
+		t.Fatalf("expected empty sqlite citation replacement to clear rows, citations=%+v err=%v", citations, err)
+	}
+	if err := sqliteStore.initialize(context.Background()); err != nil {
+		t.Fatalf("expected repeated sqlite loop runtime initialize to succeed, got %v", err)
+	}
+	if err := sqliteStore.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if err := sqliteStore.SaveRun(context.Background(), RunRecord{RunID: "run_closed", TaskID: "task_closed", SessionID: "sess_closed", Status: "failed", IntentName: "summarize", StartedAt: "2026-04-21T10:10:00Z", UpdatedAt: "2026-04-21T10:10:01Z"}); err == nil {
+		t.Fatal("expected SaveRun on closed sqlite loop runtime store to fail")
+	}
+	if err := sqliteStore.SaveSteps(context.Background(), []StepRecord{{StepID: "step_closed", RunID: "run_closed", TaskID: "task_closed", Name: "plan", Status: "failed", OrderIndex: 1}}); err == nil {
+		t.Fatal("expected SaveSteps on closed sqlite loop runtime store to fail")
+	}
+	if err := sqliteStore.SaveEvents(context.Background(), []EventRecord{{EventID: "evt_closed", RunID: "run_closed", TaskID: "task_closed", Type: "loop.failed", CreatedAt: "2026-04-21T10:10:02Z"}}); err == nil {
+		t.Fatal("expected SaveEvents on closed sqlite loop runtime store to fail")
+	}
+	if err := sqliteStore.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_closed", TaskID: "task_closed", Type: "bubble", Title: "closed", CreatedAt: "2026-04-21T10:10:03Z"}); err == nil {
+		t.Fatal("expected SaveDeliveryResult on closed sqlite loop runtime store to fail")
+	}
+	if _, err := sqliteStore.GetRun(context.Background(), "run_sql_extra"); err == nil {
+		t.Fatal("expected GetRun on closed sqlite loop runtime store to fail")
+	}
+	if _, _, err := sqliteStore.ListDeliveryResults(context.Background(), "task_sql_extra", 10, 0); err == nil {
+		t.Fatal("expected ListDeliveryResults on closed sqlite loop runtime store to fail")
+	}
+	if err := sqliteStore.ReplaceTaskCitations(context.Background(), "task_sql_extra", nil); err == nil {
+		t.Fatal("expected ReplaceTaskCitations on closed sqlite loop runtime store to fail")
+	}
+	if _, _, err := sqliteStore.GetLatestDeliveryResult(context.Background(), "task_sql_extra"); err == nil {
+		t.Fatal("expected GetLatestDeliveryResult on closed sqlite loop runtime store to fail")
+	}
+	if _, err := sqliteStore.ListTaskCitations(context.Background(), "task_sql_extra"); err == nil {
+		t.Fatal("expected ListTaskCitations on closed sqlite loop runtime store to fail")
+	}
+	if _, _, err := sqliteStore.ListEvents(context.Background(), "", "", "", "", "", 10, 0); err == nil {
+		t.Fatal("expected ListEvents on closed sqlite loop runtime store to fail")
+	}
+	if err := sqliteStore.initialize(context.Background()); err == nil {
+		t.Fatal("expected initialize on closed sqlite loop runtime store to fail")
+	}
+
+	var nilStore SQLiteLoopRuntimeStore
+	if err := nilStore.Close(); err != nil {
+		t.Fatalf("expected nil sqlite loop runtime close to succeed, got %v", err)
+	}
+}

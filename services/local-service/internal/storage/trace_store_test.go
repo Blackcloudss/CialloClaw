@@ -356,6 +356,9 @@ func TestTraceAndEvalPagingHelpersHandleOffsetsAndUnlimitedPages(t *testing.T) {
 	if got := pageEvalSnapshots(evalItems, 0, 2); len(got) != 1 || got[0].EvalSnapshotID != "eval_3" {
 		t.Fatalf("expected unlimited eval page from offset, got %+v", got)
 	}
+	if got := pageEvalSnapshots(evalItems, 2, 5); len(got) != 0 {
+		t.Fatalf("expected empty eval page beyond range, got %+v", got)
+	}
 }
 
 func TestSQLiteTraceAndEvalStoreConstructorsAndHelpers(t *testing.T) {
@@ -417,5 +420,93 @@ func TestSQLiteTraceAndEvalStoreConstructorsAndHelpers(t *testing.T) {
 	}
 	if err := evalStore.initialize(context.Background()); err != nil {
 		t.Fatalf("expected repeated eval initialize to succeed, got %v", err)
+	}
+}
+
+func TestTraceAndEvalStoresCoverAdditionalPagingAndErrorBranches(t *testing.T) {
+	traceStore := newInMemoryTraceStore()
+	evalStore := newInMemoryEvalStore()
+	if err := traceStore.WriteTraceRecord(context.Background(), TraceRecord{TraceID: "trace_a", TaskID: "task_a", CreatedAt: "2026-04-17T10:00:00Z"}); err != nil {
+		t.Fatalf("write in-memory trace record failed: %v", err)
+	}
+	if err := traceStore.WriteTraceRecord(context.Background(), TraceRecord{TraceID: "trace_b", TaskID: "task_b", CreatedAt: "2026-04-17T10:01:00Z"}); err != nil {
+		t.Fatalf("write in-memory trace record failed: %v", err)
+	}
+	if err := evalStore.WriteEvalSnapshot(context.Background(), EvalSnapshotRecord{EvalSnapshotID: "eval_a", TraceID: "trace_a", TaskID: "task_a", Status: "passed", MetricsJSON: `{"latency_ms":1}`, CreatedAt: "2026-04-17T10:00:00Z"}); err != nil {
+		t.Fatalf("write in-memory eval snapshot failed: %v", err)
+	}
+	if err := evalStore.WriteEvalSnapshot(context.Background(), EvalSnapshotRecord{EvalSnapshotID: "eval_b", TraceID: "trace_b", TaskID: "task_b", Status: "passed", MetricsJSON: `{"latency_ms":2}`, CreatedAt: "2026-04-17T10:01:00Z"}); err != nil {
+		t.Fatalf("write in-memory eval snapshot failed: %v", err)
+	}
+	if err := traceStore.DeleteTraceRecord(context.Background(), "trace_missing"); err != nil {
+		t.Fatalf("delete missing in-memory trace record failed: %v", err)
+	}
+	traces, total, err := traceStore.ListTraceRecords(context.Background(), "", 0, 1)
+	if err != nil || total != 2 || len(traces) != 1 || traces[0].TraceID != "trace_a" {
+		t.Fatalf("expected unlimited in-memory trace paging from offset, total=%d traces=%+v err=%v", total, traces, err)
+	}
+	evals, total, err := evalStore.ListEvalSnapshots(context.Background(), "", 0, 0)
+	if err != nil || total != 2 || len(evals) != 2 || evals[0].EvalSnapshotID != "eval_b" {
+		t.Fatalf("expected unlimited in-memory eval paging to preserve sort order, total=%d evals=%+v err=%v", total, evals, err)
+	}
+
+	databasePath := filepath.Join(t.TempDir(), "trace-eval-errors.db")
+	sqliteTraceStore, err := NewSQLiteTraceStore(databasePath)
+	if err != nil {
+		t.Fatalf("NewSQLiteTraceStore returned error: %v", err)
+	}
+	sqliteEvalStore, err := NewSQLiteEvalStore(databasePath)
+	if err != nil {
+		t.Fatalf("NewSQLiteEvalStore returned error: %v", err)
+	}
+	if traces, total, err := sqliteTraceStore.ListTraceRecords(context.Background(), "", 0, 0); err != nil || total != 0 || len(traces) != 0 {
+		t.Fatalf("expected empty sqlite trace list without limit to succeed, total=%d traces=%+v err=%v", total, traces, err)
+	}
+	if evals, total, err := sqliteEvalStore.ListEvalSnapshots(context.Background(), "", 0, 0); err != nil || total != 0 || len(evals) != 0 {
+		t.Fatalf("expected empty sqlite eval list without limit to succeed, total=%d evals=%+v err=%v", total, evals, err)
+	}
+	if err := sqliteTraceStore.Close(); err != nil {
+		t.Fatalf("Close trace store returned error: %v", err)
+	}
+	if err := sqliteEvalStore.Close(); err != nil {
+		t.Fatalf("Close eval store returned error: %v", err)
+	}
+	if err := sqliteTraceStore.WriteTraceRecord(context.Background(), TraceRecord{TraceID: "trace_closed", TaskID: "task_closed", CreatedAt: "2026-04-17T11:00:00Z"}); err == nil {
+		t.Fatal("expected WriteTraceRecord on closed sqlite trace store to fail")
+	}
+	if err := sqliteTraceStore.DeleteTraceRecord(context.Background(), "trace_closed"); err == nil {
+		t.Fatal("expected DeleteTraceRecord on closed sqlite trace store to fail")
+	}
+	if _, _, err := sqliteTraceStore.ListTraceRecords(context.Background(), "", 10, 0); err == nil {
+		t.Fatal("expected ListTraceRecords on closed sqlite trace store to fail")
+	}
+	if err := sqliteTraceStore.initialize(context.Background()); err == nil {
+		t.Fatal("expected initialize on closed sqlite trace store to fail")
+	}
+	if err := sqliteEvalStore.WriteEvalSnapshot(context.Background(), EvalSnapshotRecord{EvalSnapshotID: "eval_closed", TraceID: "trace_closed", TaskID: "task_closed", Status: "failed", MetricsJSON: `{"latency_ms":3}`, CreatedAt: "2026-04-17T11:00:01Z"}); err == nil {
+		t.Fatal("expected WriteEvalSnapshot on closed sqlite eval store to fail")
+	}
+	if _, _, err := sqliteEvalStore.ListEvalSnapshots(context.Background(), "", 10, 0); err == nil {
+		t.Fatal("expected ListEvalSnapshots on closed sqlite eval store to fail")
+	}
+	if err := sqliteEvalStore.initialize(context.Background()); err == nil {
+		t.Fatal("expected initialize on closed sqlite eval store to fail")
+	}
+
+	helperDB, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "trace-helper-errors.db"))
+	if err != nil {
+		t.Fatalf("open sqlite helper db failed: %v", err)
+	}
+	if err := helperDB.Close(); err != nil {
+		t.Fatalf("close sqlite helper db failed: %v", err)
+	}
+	if err := ensureEvalSnapshotForeignKey(context.Background(), helperDB); err == nil {
+		t.Fatal("expected ensureEvalSnapshotForeignKey on closed db to fail")
+	}
+	if err := ensureTraceEvalColumns(context.Background(), helperDB, "trace_records", map[string]string{"asset_refs_json": "TEXT"}); err == nil {
+		t.Fatal("expected ensureTraceEvalColumns on closed db to fail")
+	}
+	if _, err := traceEvalTableColumns(context.Background(), helperDB, "trace_records"); err == nil {
+		t.Fatal("expected traceEvalTableColumns on closed db to fail")
 	}
 }
