@@ -1887,6 +1887,13 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 	if result.ToolName != internalScreenAnalyzeIntent || !strings.Contains(result.BubbleText, "已分析屏幕内容") {
 		t.Fatalf("unexpected internal screen analysis result: %+v", result)
 	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Status != tools.ToolCallStatusSucceeded {
+		t.Fatalf("expected successful internal screen analysis tool call, got %+v", result.ToolCalls)
+	}
+	auditCandidate := mapValue(result.ToolCalls[0].Output, "audit_candidate")
+	if auditCandidate["action"] != "screen.capture.screenshot_analyze" || auditCandidate["result"] != "success" {
+		t.Fatalf("expected successful screen audit candidate on tool call, got %+v", result.ToolCalls[0].Output)
+	}
 	if len(result.Artifacts) != 1 || result.Artifacts[0]["artifact_type"] != "screen_capture" {
 		t.Fatalf("expected one screen capture artifact, got %+v", result.Artifacts)
 	}
@@ -2017,6 +2024,47 @@ func TestExecuteInternalScreenAnalysisRetainsClipFrameCleanupPlan(t *testing.T) 
 	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, "temp", "screen_clip_exec", "frames", "frame-001.jpg")); err != nil {
 		t.Fatalf("expected extracted clip frame to remain pending cleanup, got %v", err)
+	}
+}
+
+func TestExecuteInternalScreenAnalysisReturnsFailedAuditTrailOnOCRFailure(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{err: tools.ErrOCRWorkerFailed}
+	service, workspaceRoot := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "temp", "screen_fail_exec"), 0o755); err != nil {
+		t.Fatalf("mkdir screen failure temp dir failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "temp", "screen_fail_exec", "frame_fail.png"), []byte("fake screen capture"), 0o644); err != nil {
+		t.Fatalf("write screen failure temp file failed: %v", err)
+	}
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_screen_exec_fail",
+		RunID:        "run_screen_exec_fail",
+		Title:        "分析失败截图",
+		Intent:       map[string]any{"name": internalScreenAnalyzeIntent, "arguments": map[string]any{"frame_id": "frame_fail", "screen_session_id": "screen_fail_exec", "path": "temp/screen_fail_exec/frame_fail.png", "capture_mode": "screenshot", "language": "eng", "evidence_role": "error_evidence"}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请分析截图中的错误"},
+		DeliveryType: "bubble",
+		ResultTitle:  "屏幕分析失败结果",
+	})
+	if !errors.Is(err, tools.ErrOCRWorkerFailed) {
+		t.Fatalf("expected OCR worker failure, got result=%+v err=%v", result, err)
+	}
+	if result.ToolName != internalScreenAnalyzeIntent || len(result.ToolCalls) != 1 || result.ToolCalls[0].Status != tools.ToolCallStatusFailed {
+		t.Fatalf("expected failed screen analysis tool trace, got %+v", result)
+	}
+	auditCandidate := mapValue(result.ToolCalls[0].Output, "audit_candidate")
+	if auditCandidate["result"] != "failed" || auditCandidate["action"] != "screen.capture.screenshot_analyze" {
+		t.Fatalf("expected failed screen audit candidate, got %+v", result.ToolCalls[0].Output)
+	}
+	cleanupPlan := mapValue(result.ToolOutput, "cleanup_plan")
+	if len(stringSliceValue(cleanupPlan, "paths")) != 1 || stringSliceValue(cleanupPlan, "paths")[0] != "temp/screen_fail_exec/frame_fail.png" {
+		t.Fatalf("expected failure cleanup plan to retain screenshot temp path, got %+v", result.ToolOutput)
+	}
+	recoveryPoint := mapValue(result.ToolOutput, "recovery_point")
+	if recoveryPoint["kind"] != "screen_cleanup" || recoveryPoint["cleanup_status"] != "pending_retry" {
+		t.Fatalf("expected failure recovery point for pending cleanup, got %+v", result.ToolOutput)
+	}
+	if result.AuditRecord == nil || result.AuditRecord["result"] != "failed" {
+		t.Fatalf("expected failed screen audit record, got %+v", result.AuditRecord)
 	}
 }
 

@@ -419,11 +419,12 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 	args := mapValue(request.Intent, "arguments")
 	candidate, ok := screenFrameCandidateFromArgs(request, args)
 	if !ok {
-		return Result{}, false, fmt.Errorf("screen analysis candidate arguments are incomplete")
+		err := fmt.Errorf("screen analysis candidate arguments are incomplete")
+		return s.screenAnalysisFailureResult(ctx, request, tools.ScreenFrameCandidate{}, err), false, err
 	}
 	analysis, err := s.buildScreenAnalysisResult(ctx, request.TaskID, candidate, stringValue(args, "language", ""), stringValue(args, "evidence_role", "error_evidence"), mapValue(args, "extra"))
 	if err != nil {
-		return Result{}, false, err
+		return s.screenAnalysisFailureResult(ctx, request, candidate, err), false, err
 	}
 	promotedArtifact, promotedCleanup := s.promoteScreenArtifactForPersistence(ctx, request.TaskID, analysis.Artifact)
 	analysis.Artifact = promotedArtifact
@@ -432,6 +433,7 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 	analysis.CitationSeed["screen_session_id"] = stringValue(mapValue(analysis.Artifact, "delivery_payload"), "screen_session_id", "")
 	analysis.CitationSeed["evidence_role"] = stringValue(mapValue(analysis.Artifact, "delivery_payload"), "evidence_role", "")
 	auditRecord := s.screenAnalysisAuditRecord(request.TaskID, candidate, analysis.PreviewText)
+	auditCandidate := screenAnalysisAuditCandidate(candidate, analysis.PreviewText, "success")
 	cleanupPlan := s.screenAnalysisCleanupPlan(candidate, analysis.CleanupPaths)
 	cleanupSummary := s.screenAnalysisCleanupSummary(cleanupPlan)
 	cleanupExecuted := pendingScreenCleanupExecution(cleanupPlan)
@@ -457,6 +459,7 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 			"observation_summary": cloneMap(analysis.ObservationSummary),
 			"citation_seed":       cloneMap(analysis.CitationSeed),
 			"preview_text":        analysis.PreviewText,
+			"audit_candidate":     cloneMap(auditCandidate),
 			"trace_summary":       cloneMap(traceSummary),
 			"eval_summary":        cloneMap(evalSummary),
 			"audit_record":        cloneMap(auditRecord),
@@ -465,9 +468,47 @@ func (s *Service) executeInternalScreenAnalysis(ctx context.Context, request Req
 			"cleanup_executed":    cloneMap(cleanupExecuted),
 			"artifact_persisted":  cloneMap(persistedArtifact),
 			"recovery_point":      cloneMap(recoveryPoint),
+			"screen_session":      screenSessionSummary(candidate),
 		},
 	}
+	result.ToolCalls = []tools.ToolCallRecord{screenAnalysisToolCall(request, result.ToolOutput, tools.ToolCallStatusSucceeded, nil)}
 	return result, true, nil
+}
+
+// screenAnalysisFailureResult keeps screen-task failure paths on the same
+// tool_call/audit/cleanup chain as successful screen analysis so task detail and
+// later storage fallbacks can explain what temporary capture state remains.
+func (s *Service) screenAnalysisFailureResult(ctx context.Context, request Request, candidate tools.ScreenFrameCandidate, err error) Result {
+	args := mapValue(request.Intent, "arguments")
+	summary := firstNonEmpty(strings.TrimSpace(err.Error()), "screen analysis failed")
+	auditRecord := s.screenAnalysisAuditRecordWithResult(request.TaskID, candidate, summary, "failed")
+	auditCandidate := screenAnalysisAuditCandidate(candidate, summary, "failed")
+	cleanupPlan := s.screenAnalysisCleanupPlan(candidate, nil)
+	cleanupSummary := s.screenAnalysisCleanupSummary(cleanupPlan)
+	cleanupExecuted := pendingScreenCleanupExecution(cleanupPlan)
+	recoveryPoint := s.screenAnalysisRecoveryPoint(ctx, request.TaskID, cleanupPlan, cleanupExecuted)
+	toolOutput := map[string]any{
+		"failure_summary":   summary,
+		"audit_candidate":   cloneMap(auditCandidate),
+		"audit_record":      cloneMap(auditRecord),
+		"cleanup_summary":   cloneMap(cleanupSummary),
+		"cleanup_plan":      cloneMap(cleanupPlan),
+		"cleanup_executed":  cloneMap(cleanupExecuted),
+		"recovery_point":    cloneMap(recoveryPoint),
+		"screen_session":    screenSessionSummary(candidate),
+		"failure_stage":     "screen_analysis",
+		"screen_session_id": candidate.ScreenSessionID,
+	}
+	result := Result{
+		BubbleText:    summary,
+		RecoveryPoint: cloneMap(recoveryPoint),
+		AuditRecord:   cloneMap(auditRecord),
+		ToolName:      internalScreenAnalyzeIntent,
+		ToolInput:     cloneMap(args),
+		ToolOutput:    toolOutput,
+	}
+	result.ToolCalls = []tools.ToolCallRecord{screenAnalysisToolCall(request, toolOutput, tools.ToolCallStatusFailed, nil)}
+	return result
 }
 
 func (s *Service) promoteScreenArtifactForPersistence(_ context.Context, taskID string, artifact map[string]any) (map[string]any, map[string]any) {
@@ -606,27 +647,76 @@ func (s *Service) screenAnalysisEvalSummary(candidate tools.ScreenFrameCandidate
 }
 
 func (s *Service) screenAnalysisAuditRecord(taskID string, candidate tools.ScreenFrameCandidate, previewText string) map[string]any {
+	return s.screenAnalysisAuditRecordWithResult(taskID, candidate, previewText, "success")
+}
+
+func (s *Service) screenAnalysisAuditRecordWithResult(taskID string, candidate tools.ScreenFrameCandidate, summary string, resultStatus string) map[string]any {
 	if s == nil || s.audit == nil {
 		return nil
+	}
+	target := firstNonEmpty(strings.TrimSpace(candidate.Path), strings.TrimSpace(candidate.ScreenSessionID))
+	if strings.TrimSpace(target) == "" {
+		target = "screen_capture"
 	}
 	record, err := s.audit.BuildRecord(audit.RecordInput{
 		TaskID:  taskID,
 		Type:    "screen_capture",
 		Action:  screenAuditActionName(candidate),
-		Summary: firstNonEmpty(previewText, "screen analysis completed"),
-		Target:  candidate.Path,
-		Result:  "success",
+		Summary: firstNonEmpty(summary, "screen analysis completed"),
+		Target:  target,
+		Result:  firstNonEmpty(strings.TrimSpace(resultStatus), "success"),
 	})
 	if err != nil {
 		return nil
 	}
-	result := record.Map()
-	result["metadata"] = map[string]any{
+	recordMap := record.Map()
+	recordMap["metadata"] = map[string]any{
 		"screen_session_id": candidate.ScreenSessionID,
 		"capture_mode":      string(candidate.CaptureMode),
 		"source":            candidate.Source,
 	}
-	return result
+	return recordMap
+}
+
+func screenAnalysisAuditCandidate(candidate tools.ScreenFrameCandidate, summary string, resultStatus string) map[string]any {
+	target := firstNonEmpty(strings.TrimSpace(candidate.Path), strings.TrimSpace(candidate.ScreenSessionID))
+	if strings.TrimSpace(target) == "" {
+		target = "screen_capture"
+	}
+	return map[string]any{
+		"type":    "screen_capture",
+		"action":  screenAuditActionName(candidate),
+		"summary": firstNonEmpty(summary, "screen analysis completed"),
+		"target":  target,
+		"result":  firstNonEmpty(strings.TrimSpace(resultStatus), "success"),
+	}
+}
+
+func screenSessionSummary(candidate tools.ScreenFrameCandidate) map[string]any {
+	if strings.TrimSpace(candidate.ScreenSessionID) == "" && strings.TrimSpace(candidate.FrameID) == "" && strings.TrimSpace(candidate.Path) == "" {
+		return nil
+	}
+	return map[string]any{
+		"screen_session_id": candidate.ScreenSessionID,
+		"frame_id":          candidate.FrameID,
+		"capture_mode":      string(candidate.CaptureMode),
+		"path":              candidate.Path,
+		"cleanup_required":  candidate.CleanupRequired,
+		"retention_policy":  string(candidate.RetentionPolicy),
+	}
+}
+
+func screenAnalysisToolCall(request Request, output map[string]any, status tools.ToolCallStatus, errorCode *int) tools.ToolCallRecord {
+	return tools.ToolCallRecord{
+		RunID:      request.RunID,
+		TaskID:     request.TaskID,
+		ToolName:   internalScreenAnalyzeIntent,
+		Status:     status,
+		Input:      cloneMap(mapValue(request.Intent, "arguments")),
+		Output:     cloneMap(output),
+		ErrorCode:  errorCode,
+		DurationMS: 0,
+	}
 }
 
 func screenAuditActionName(candidate tools.ScreenFrameCandidate) string {
