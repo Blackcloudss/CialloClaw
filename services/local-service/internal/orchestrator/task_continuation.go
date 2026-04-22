@@ -20,10 +20,16 @@ type taskContinuationDecision struct {
 	Reason   string `json:"reason"`
 }
 
+type taskContinuationContext struct {
+	SessionID   string
+	Candidates  []runengine.TaskRecord
+	SessionMode string
+}
+
 func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, string, error) {
 	explicitSessionID := strings.TrimSpace(stringValue(params, "session_id", ""))
-	candidates := s.continuationCandidates(explicitSessionID)
-	decision := s.classifyTaskContinuation(snapshot, explicitIntent, candidates)
+	continuationContext := s.resolveTaskContinuationContext(explicitSessionID)
+	decision := s.classifyTaskContinuation(snapshot, explicitIntent, continuationContext)
 	if decision.Decision == "continue" && strings.TrimSpace(decision.TaskID) != "" {
 		task, ok := s.loadTaskForContinuation(decision.TaskID)
 		if !ok {
@@ -36,10 +42,13 @@ func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot cont
 		return response, true, task.SessionID, nil
 	}
 
-	if explicitSessionID != "" {
-		return nil, false, explicitSessionID, nil
+	// An implicit active session only scopes the continuation classifier. If the
+	// decision is "new_task", the backend should open a fresh hidden session so
+	// unrelated work does not get serialized behind the old task queue.
+	if strings.TrimSpace(continuationContext.SessionID) != "" && (strings.TrimSpace(explicitSessionID) != "" || continuationContext.SessionMode == "implicit_idle") {
+		return nil, false, continuationContext.SessionID, nil
 	}
-	return nil, false, s.resolveImplicitSessionID(candidates), nil
+	return nil, false, "", nil
 }
 
 func (s *Service) continuationCandidates(sessionID string) []runengine.TaskRecord {
@@ -47,7 +56,7 @@ func (s *Service) continuationCandidates(sessionID string) []runengine.TaskRecor
 	tasks := queryViews.tasks("unfinished", "updated_at", "desc")
 	result := make([]runengine.TaskRecord, 0, len(tasks))
 	for _, task := range tasks {
-		if strings.TrimSpace(sessionID) != "" && task.SessionID != strings.TrimSpace(sessionID) {
+		if strings.TrimSpace(sessionID) == "" || task.SessionID != strings.TrimSpace(sessionID) {
 			continue
 		}
 		if !canContinueTask(task) {
@@ -61,6 +70,60 @@ func (s *Service) continuationCandidates(sessionID string) []runengine.TaskRecor
 	return result
 }
 
+func (s *Service) resolveTaskContinuationContext(explicitSessionID string) taskContinuationContext {
+	if strings.TrimSpace(explicitSessionID) != "" {
+		candidates := s.continuationCandidates(explicitSessionID)
+		if len(candidates) > 0 {
+			return taskContinuationContext{
+				SessionID:   explicitSessionID,
+				Candidates:  candidates,
+				SessionMode: "explicit_active",
+			}
+		}
+		if s.sessionIsFresh(explicitSessionID) {
+			return taskContinuationContext{
+				SessionID:   explicitSessionID,
+				Candidates:  nil,
+				SessionMode: "explicit_idle",
+			}
+		}
+		return taskContinuationContext{}
+	}
+
+	queryViews := newTaskQueryViews(s)
+	tasks := queryViews.tasks("unfinished", "updated_at", "desc")
+	sessionCandidates := map[string][]runengine.TaskRecord{}
+	for _, task := range tasks {
+		if !canContinueTask(task) || strings.TrimSpace(task.SessionID) == "" {
+			continue
+		}
+		sessionCandidates[task.SessionID] = append(sessionCandidates[task.SessionID], task)
+	}
+	if len(sessionCandidates) == 1 {
+		for sessionID, candidates := range sessionCandidates {
+			if s.sessionIsFresh(sessionID) {
+				return taskContinuationContext{
+					SessionID:   sessionID,
+					Candidates:  candidates,
+					SessionMode: "implicit_active",
+				}
+			}
+		}
+	}
+
+	if sessionID := s.resolveImplicitSessionID(nil); strings.TrimSpace(sessionID) != "" {
+		return taskContinuationContext{
+			SessionID:   sessionID,
+			Candidates:  nil,
+			SessionMode: "implicit_idle",
+		}
+	}
+
+	return taskContinuationContext{}
+}
+
+// canContinueTask keeps continuation scope limited to tasks that are still
+// waiting for user follow-up, approval, or in-flight execution.
 func canContinueTask(task runengine.TaskRecord) bool {
 	switch task.Status {
 	case "confirming_intent", "processing", "waiting_auth", "waiting_input", "paused", "blocked":
@@ -70,46 +133,50 @@ func canContinueTask(task runengine.TaskRecord) bool {
 	}
 }
 
-func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, candidates []runengine.TaskRecord) taskContinuationDecision {
-	if len(candidates) == 0 {
+func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) taskContinuationDecision {
+	if len(continuationContext.Candidates) == 0 {
 		return taskContinuationDecision{Decision: "new_task", Reason: "no unfinished candidate task"}
 	}
-	if decision, ok := s.modelTaskContinuationDecision(snapshot, explicitIntent, candidates); ok {
+	if decision, ok := s.modelTaskContinuationDecision(snapshot, explicitIntent, continuationContext); ok {
 		return decision
 	}
-	return heuristicTaskContinuationDecision(snapshot, explicitIntent, candidates)
+	return heuristicTaskContinuationDecision(snapshot, explicitIntent, continuationContext)
 }
 
-func (s *Service) modelTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, candidates []runengine.TaskRecord) (taskContinuationDecision, bool) {
+func (s *Service) modelTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) (taskContinuationDecision, bool) {
 	if s == nil || s.model == nil {
 		return taskContinuationDecision{}, false
 	}
 	response, err := s.model.GenerateText(context.Background(), model.GenerateTextRequest{
 		TaskID: "task_continuation_classifier",
 		RunID:  "run_continuation_classifier",
-		Input:  buildTaskContinuationPrompt(snapshot, explicitIntent, candidates),
+		Input:  buildTaskContinuationPrompt(snapshot, explicitIntent, continuationContext),
 	})
 	if err != nil {
 		return taskContinuationDecision{}, false
 	}
-	decision, ok := parseTaskContinuationDecision(response.OutputText, candidates)
+	decision, ok := parseTaskContinuationDecision(response.OutputText, continuationContext.Candidates)
 	return decision, ok
 }
 
-func buildTaskContinuationPrompt(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, candidates []runengine.TaskRecord) string {
+// buildTaskContinuationPrompt intentionally sends only coarse task/session
+// signals to the model so remote classification does not leak raw text, file
+// names, or other cross-task payload details.
+func buildTaskContinuationPrompt(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) string {
 	lines := []string{
 		"You decide whether one new desktop input should continue an existing task or start a new task.",
 		"Return JSON only.",
 		`Schema: {"decision":"continue"|"new_task","task_id":"task_xxx or empty","reason":"short reason"}`,
 		"Choose continue only when the new input is clearly refining, correcting, narrowing, or attaching evidence for the same ongoing task.",
 		"Choose new_task when the input starts another goal, another deliverable, or another analysis target.",
+		"Only decide among the candidate tasks from the current hidden desktop session. Do not infer anything outside the provided candidates.",
 		"",
-		"New input:",
+		"New input signals:",
 		taskContinuationInputSummary(snapshot, explicitIntent),
 		"",
-		"Candidate unfinished tasks:",
+		fmt.Sprintf("Candidate unfinished tasks in session (%s):", continuationContext.SessionMode),
 	}
-	for _, candidate := range candidates {
+	for _, candidate := range continuationContext.Candidates {
 		lines = append(lines, taskContinuationCandidateSummary(candidate))
 	}
 	return strings.Join(lines, "\n")
@@ -119,29 +186,16 @@ func taskContinuationInputSummary(snapshot contextsvc.TaskContextSnapshot, expli
 	parts := []string{
 		fmt.Sprintf("trigger=%s", snapshot.Trigger),
 		fmt.Sprintf("input_type=%s", snapshot.InputType),
+		fmt.Sprintf("has_text=%t", strings.TrimSpace(snapshot.Text) != ""),
+		fmt.Sprintf("has_selection=%t", strings.TrimSpace(snapshot.SelectionText) != ""),
+		fmt.Sprintf("has_error=%t", strings.TrimSpace(snapshot.ErrorText) != ""),
+		fmt.Sprintf("file_count=%d", len(snapshot.Files)),
+		fmt.Sprintf("has_page_context=%t", strings.TrimSpace(snapshot.PageTitle) != "" || strings.TrimSpace(snapshot.PageURL) != "" || strings.TrimSpace(snapshot.WindowTitle) != ""),
+		fmt.Sprintf("has_screen_context=%t", strings.TrimSpace(snapshot.ScreenSummary) != "" || strings.TrimSpace(snapshot.VisibleText) != ""),
+		fmt.Sprintf("continuation_markers=%s", continuationMarkerSummary(snapshot)),
 	}
-	if text := strings.TrimSpace(snapshot.Text); text != "" {
-		parts = append(parts, "text="+truncateText(text, 280))
-	}
-	if selectionText := strings.TrimSpace(snapshot.SelectionText); selectionText != "" && selectionText != strings.TrimSpace(snapshot.Text) {
-		parts = append(parts, "selection_text="+truncateText(selectionText, 280))
-	}
-	if errorText := strings.TrimSpace(snapshot.ErrorText); errorText != "" {
-		parts = append(parts, "error_text="+truncateText(errorText, 280))
-	}
-	if len(snapshot.Files) > 0 {
-		parts = append(parts, "files="+strings.Join(snapshot.Files, ", "))
-	}
-	if pageTitle := strings.TrimSpace(snapshot.PageTitle); pageTitle != "" {
-		parts = append(parts, "page_title="+pageTitle)
-	}
-	if appName := strings.TrimSpace(snapshot.AppName); appName != "" {
-		parts = append(parts, "app_name="+appName)
-	}
-	if len(explicitIntent) > 0 {
-		if payload, err := json.Marshal(explicitIntent); err == nil {
-			parts = append(parts, "explicit_intent="+string(payload))
-		}
+	if intentName := strings.TrimSpace(stringValue(explicitIntent, "name", "")); intentName != "" {
+		parts = append(parts, "explicit_intent_name="+intentName)
 	}
 	return strings.Join(parts, " | ")
 }
@@ -149,19 +203,16 @@ func taskContinuationInputSummary(snapshot contextsvc.TaskContextSnapshot, expli
 func taskContinuationCandidateSummary(task runengine.TaskRecord) string {
 	parts := []string{
 		fmt.Sprintf("- task_id=%s", task.TaskID),
-		fmt.Sprintf("session_id=%s", task.SessionID),
 		fmt.Sprintf("status=%s", task.Status),
 		fmt.Sprintf("current_step=%s", task.CurrentStep),
-		fmt.Sprintf("title=%s", task.Title),
+		fmt.Sprintf("source_type=%s", task.SourceType),
+		fmt.Sprintf("age_seconds=%d", int(time.Since(task.UpdatedAt).Seconds())),
+		fmt.Sprintf("has_files=%t", len(task.Snapshot.Files) > 0),
+		fmt.Sprintf("has_page_context=%t", strings.TrimSpace(task.Snapshot.PageTitle) != "" || strings.TrimSpace(task.Snapshot.PageURL) != "" || strings.TrimSpace(task.Snapshot.WindowTitle) != ""),
+		fmt.Sprintf("has_screen_context=%t", strings.TrimSpace(task.Snapshot.ScreenSummary) != "" || strings.TrimSpace(task.Snapshot.VisibleText) != ""),
 	}
 	if intentName := strings.TrimSpace(stringValue(task.Intent, "name", "")); intentName != "" {
 		parts = append(parts, "intent="+intentName)
-	}
-	if snapshotText := strings.TrimSpace(snapshotFromTask(task).Text); snapshotText != "" {
-		parts = append(parts, "summary="+truncateText(snapshotText, 200))
-	}
-	if len(task.Snapshot.Files) > 0 {
-		parts = append(parts, "files="+strings.Join(task.Snapshot.Files, ", "))
 	}
 	return strings.Join(parts, " | ")
 }
@@ -191,12 +242,12 @@ func parseTaskContinuationDecision(raw string, candidates []runengine.TaskRecord
 	return taskContinuationDecision{}, false
 }
 
-func heuristicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, candidates []runengine.TaskRecord) taskContinuationDecision {
-	if len(candidates) != 1 {
+func heuristicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) taskContinuationDecision {
+	if len(continuationContext.Candidates) != 1 {
 		return taskContinuationDecision{Decision: "new_task", Reason: "multiple unfinished candidates"}
 	}
-	candidate := candidates[0]
-	if shouldHeuristicallyContinueTask(snapshot, explicitIntent, candidate) {
+	candidate := continuationContext.Candidates[0]
+	if shouldHeuristicallyContinueTask(snapshot, candidate) {
 		return taskContinuationDecision{
 			Decision: "continue",
 			TaskID:   candidate.TaskID,
@@ -206,15 +257,14 @@ func heuristicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, 
 	return taskContinuationDecision{Decision: "new_task", Reason: "fallback heuristic treated the input as a new top-level request"}
 }
 
-func shouldHeuristicallyContinueTask(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, candidate runengine.TaskRecord) bool {
-	if len(snapshot.Files) > 0 {
-		return true
-	}
-	if intentName := strings.TrimSpace(stringValue(explicitIntent, "name", "")); intentName != "" && intentName == strings.TrimSpace(stringValue(candidate.Intent, "name", "")) {
-		return true
-	}
+// shouldHeuristicallyContinueTask is intentionally conservative because it
+// only runs when the classifier model is unavailable. It should recover
+// obvious follow-up edits, but prefer a fresh task over silently grafting a
+// different request onto the wrong task.
+func shouldHeuristicallyContinueTask(snapshot contextsvc.TaskContextSnapshot, candidate runengine.TaskRecord) bool {
 	combined := strings.ToLower(strings.Join([]string{snapshot.Text, snapshot.SelectionText, snapshot.ErrorText}, " "))
-	if continuationContainsAny(combined, "补充", "继续", "另外", "再", "重点", "不要", "改成", "顺便", "follow-up", "continue", "also", "instead", "focus", "title", "output") {
+	hasFollowUpCue := continuationContainsAny(combined, "补充", "继续", "重点", "不要", "改成", "改为", "标题", "风格", "输出到", "follow-up", "continue", "instead", "focus", "title", "format", "tone")
+	if hasFollowUpCue {
 		return sameContinuationContext(snapshot, snapshotFromTask(candidate))
 	}
 	return false
@@ -419,6 +469,51 @@ func buildTaskContinuationInstruction(snapshot contextsvc.TaskContextSnapshot, e
 		}
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func continuationMarkerSummary(snapshot contextsvc.TaskContextSnapshot) string {
+	combined := strings.ToLower(strings.Join([]string{snapshot.Text, snapshot.SelectionText, snapshot.ErrorText}, " "))
+	markers := make([]string, 0, 6)
+	for _, marker := range []string{"补充", "继续", "重点", "不要", "改成", "改为", "标题", "风格", "输出到", "follow-up", "continue", "instead", "focus", "title", "format", "tone"} {
+		if marker != "" && strings.Contains(combined, strings.ToLower(marker)) {
+			markers = append(markers, marker)
+		}
+	}
+	if len(markers) == 0 {
+		return "none"
+	}
+	return strings.Join(markers, ",")
+}
+
+func (s *Service) sessionIsFresh(sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false
+	}
+	if s != nil && s.storage != nil && s.storage.SessionStore() != nil {
+		if session, err := s.storage.SessionStore().GetSession(context.Background(), sessionID); err == nil {
+			if updatedAt, ok := parseContinuationTime(session.UpdatedAt); ok {
+				return time.Since(updatedAt) <= implicitSessionReuseWindow
+			}
+		}
+	}
+	if s.sessionHasRecentRuntimeTask(sessionID, "unfinished") {
+		return true
+	}
+	return s.sessionHasRecentRuntimeTask(sessionID, "finished")
+}
+
+func (s *Service) sessionHasRecentRuntimeTask(sessionID, group string) bool {
+	if s == nil || s.runEngine == nil {
+		return false
+	}
+	tasks, _ := s.runEngine.ListTasks(group, "updated_at", "desc", 50, 0)
+	for _, task := range tasks {
+		if task.SessionID == sessionID && time.Since(task.UpdatedAt) <= implicitSessionReuseWindow {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeContinuationSnapshots(base, update contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
