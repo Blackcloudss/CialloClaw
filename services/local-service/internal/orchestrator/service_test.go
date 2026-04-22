@@ -42,7 +42,8 @@ import (
 )
 
 type stubModelClient struct {
-	output string
+	output       string
+	generateText func(request model.GenerateTextRequest) (model.GenerateTextResponse, error)
 }
 
 type failingExecutionBackend struct {
@@ -380,6 +381,9 @@ func (s *countingTaskStore) ListTasksBySession(ctx context.Context, sessionID st
 }
 
 func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if s.generateText != nil {
+		return s.generateText(request)
+	}
 	return model.GenerateTextResponse{
 		TaskID:     request.TaskID,
 		RunID:      request.RunID,
@@ -420,6 +424,52 @@ func intPtr(value int) *int {
 
 func newTestServiceWithExecution(t *testing.T, modelOutput string) (*Service, string) {
 	return newTestServiceWithExecutionAndPlaywright(t, modelOutput, platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient())
+}
+
+func newTestServiceWithModelClient(t *testing.T, client model.Client) (*Service, string) {
+	t.Helper()
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "service.db")))
+	t.Cleanup(func() { _ = storageService.Close() })
+	modelService := model.NewService(modelConfig(), client)
+	auditService := audit.NewService(storageService.AuditWriter())
+	deliveryService := delivery.NewService()
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
+		t.Fatalf("register playwright tools: %v", err)
+	}
+	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
+		t.Fatalf("register ocr tools: %v", err)
+	}
+	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
+		t.Fatalf("register media tools: %v", err)
+	}
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
+	pluginService := plugin.NewService()
+	seedTestExtensionAssets(t, storageService, pluginService)
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	executor := execution.NewService(fileSystem, platform.LocalExecutionBackend{}, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient(), sidecarclient.NewLocalScreenCaptureClient(fileSystem), modelService, auditService, checkpoint.NewService(storageService.RecoveryPointWriter()), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
+
+	service := NewService(
+		contextsvc.NewService(),
+		intent.NewService(),
+		mustNewStoredEngine(t, storageService.TaskRunStore()),
+		deliveryService,
+		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
+		risk.NewService(),
+		modelService,
+		toolRegistry,
+		pluginService,
+	).WithAudit(auditService).WithStorage(storageService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem)).WithTraceEval(traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()))
+	return service, workspaceRoot
 }
 
 func newTestServiceWithExecutionOptions(t *testing.T, modelOutput string, executionBackend tools.ExecutionCapability, checkpointWriter checkpoint.Writer) (*Service, string) {
@@ -5401,6 +5451,7 @@ func TestServiceDashboardOverviewLoadsStoredTasksOncePerRequest(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write structured task failed: %v", err)
 	}
+	countingStore.listCalls = 0
 
 	if _, err := service.DashboardOverviewGet(map[string]any{}); err != nil {
 		t.Fatalf("dashboard overview failed: %v", err)
@@ -9962,6 +10013,225 @@ func TestServiceTaskSteerPersistsFollowUpMessage(t *testing.T) {
 	}
 	if record.LatestEvent["type"] != "task.steered" {
 		t.Fatalf("expected latest event task.steered, got %+v", record.LatestEvent)
+	}
+}
+
+func TestServiceSubmitInputRoutesFollowUpIntoExistingTask(t *testing.T) {
+	var activeTaskID string
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_continue_same_task",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"follow-up text narrows the same task"}`, activeTaskID),
+				Usage:      model.TokenUsage{InputTokens: 8, OutputTokens: 12, TotalTokens: 20},
+				LatencyMS:  21,
+			}, nil
+		},
+	})
+
+	startResult, err := service.StartTask(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "把这段报错分析一下",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	activeTaskID = startResult["task"].(map[string]any)["task_id"].(string)
+	activeSessionID := startResult["task"].(map[string]any)["session_id"].(string)
+
+	followUpResult, err := service.SubmitInput(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "重点看网络层，不要讲太泛",
+			"input_mode": "text",
+		},
+		"context": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("submit follow-up failed: %v", err)
+	}
+	task := followUpResult["task"].(map[string]any)
+	if task["task_id"] != activeTaskID {
+		t.Fatalf("expected follow-up to stay on task %s, got %+v", activeTaskID, task)
+	}
+	if task["session_id"] != activeSessionID {
+		t.Fatalf("expected follow-up to keep session %s, got %+v", activeSessionID, task)
+	}
+	if followUpResult["delivery_result"] != nil {
+		t.Fatalf("expected continued task not to emit immediate delivery result, got %+v", followUpResult["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(activeTaskID)
+	if !ok {
+		t.Fatal("expected continued task to remain in runtime")
+	}
+	if len(record.SteeringMessages) != 1 || !strings.Contains(record.SteeringMessages[0], "重点看网络层") {
+		t.Fatalf("expected follow-up steering message to persist, got %+v", record.SteeringMessages)
+	}
+}
+
+func TestServiceStartTaskRoutesFileAttachmentIntoExistingTask(t *testing.T) {
+	var activeTaskID string
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_continue_file",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"the file is supplementary evidence for the same task"}`, activeTaskID),
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+
+	startResult, err := service.StartTask(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "分析一下这个服务异常",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	activeTaskID = startResult["task"].(map[string]any)["task_id"].(string)
+
+	followUpResult, err := service.StartTask(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"files": []string{"logs/network.log"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start file follow-up failed: %v", err)
+	}
+	task := followUpResult["task"].(map[string]any)
+	if task["task_id"] != activeTaskID {
+		t.Fatalf("expected file follow-up to stay on task %s, got %+v", activeTaskID, task)
+	}
+	record, ok := service.runEngine.GetTask(activeTaskID)
+	if !ok {
+		t.Fatal("expected continued file task to remain in runtime")
+	}
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "logs/network.log" {
+		t.Fatalf("expected file follow-up to merge snapshot files, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceSubmitInputStartsNewTaskForUnrelatedRequest(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_new_task",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"decision":"new_task","task_id":"","reason":"the new input starts a different top-level request"}`,
+				Usage:      model.TokenUsage{InputTokens: 7, OutputTokens: 10, TotalTokens: 17},
+				LatencyMS:  19,
+			}, nil
+		},
+	})
+
+	firstResult, err := service.StartTask(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我整理这份会议纪要并输出成文档",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("first task failed: %v", err)
+	}
+	firstTask := firstResult["task"].(map[string]any)
+
+	secondResult, err := service.SubmitInput(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "顺便再帮我写一份周报",
+			"input_mode": "text",
+		},
+		"context": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("second task failed: %v", err)
+	}
+	secondTask := secondResult["task"].(map[string]any)
+	if secondTask["task_id"] == firstTask["task_id"] {
+		t.Fatalf("expected unrelated request to open a new task, got %+v", secondTask)
+	}
+	if secondTask["session_id"] == firstTask["session_id"] {
+		t.Fatalf("expected unrelated request to use a new hidden session, got first=%+v second=%+v", firstTask, secondTask)
+	}
+}
+
+func TestServiceReusesRecentIdleSessionForNewTopLevelTask(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "unused")
+	finishedTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		Title:       "Finished task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "green",
+	})
+
+	result, err := service.StartTask(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我重新整理另外一份纪要",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task after idle session failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["session_id"] != finishedTask.SessionID {
+		t.Fatalf("expected new top-level task to reuse recent idle session %s, got %+v", finishedTask.SessionID, task)
 	}
 }
 
