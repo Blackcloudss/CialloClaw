@@ -42,6 +42,17 @@ var newSQLiteEvalStoreForService = func(databasePath string) (EvalStore, error) 
 	return NewSQLiteEvalStore(databasePath)
 }
 
+// These provider factories stay overridable in tests so bootstrap semantics can
+// deterministically verify formal Stronghold success, fallback activation, and
+// unavailable-secret behavior without depending on platform-specific DPAPI.
+var newStrongholdProviderForService = func(databasePath string) StrongholdProvider {
+	return NewStrongholdSQLiteProvider(databasePath)
+}
+
+var newStrongholdFallbackProviderForService = func(databasePath string) StrongholdProvider {
+	return NewStrongholdSQLiteFallbackProvider(databasePath)
+}
+
 // Descriptor captures the configured storage backend state.
 type Descriptor struct {
 	Backend      string
@@ -266,7 +277,7 @@ func NewService(adapter platform.StorageAdapter) *Service {
 			}
 
 			if secretPath := strings.TrimSpace(adapter.SecretStorePath()); secretPath != "" {
-				formalStrongholdProvider := NewStrongholdSQLiteProvider(secretPath)
+				formalStrongholdProvider := newStrongholdProviderForService(secretPath)
 				strongholdProvider = formalStrongholdProvider
 				strongholdStore, err := formalStrongholdProvider.Open(context.Background())
 				if err == nil {
@@ -275,7 +286,7 @@ func NewService(adapter platform.StorageAdapter) *Service {
 				}
 				if err != nil {
 					formalStrongholdErr := fmt.Errorf("initialize formal stronghold secret store: %w", err)
-					fallbackProvider := NewStrongholdSQLiteFallbackProvider(secretPath)
+					fallbackProvider := newStrongholdFallbackProviderForService(secretPath)
 					fallbackStore, fallbackErr := fallbackProvider.Open(context.Background())
 					if fallbackErr == nil {
 						// A working fallback keeps the overall storage service healthy in

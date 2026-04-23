@@ -21,6 +21,15 @@ type stubAdapter struct {
 	databasePath string
 }
 
+type stubStrongholdProvider struct {
+	backend     string
+	fallback    bool
+	store       SecretStore
+	openErr     error
+	initialized bool
+	openCalls   int
+}
+
 // DatabasePath 处理当前模块的相关逻辑。
 func (s stubAdapter) DatabasePath() string {
 	return s.databasePath
@@ -32,6 +41,28 @@ func (s stubAdapter) SecretStorePath() string {
 		return ""
 	}
 	return s.databasePath + ".stronghold"
+}
+
+func (s *stubStrongholdProvider) Open(context.Context) (SecretStore, error) {
+	s.openCalls++
+	if s.openErr != nil {
+		s.initialized = false
+		return nil, s.openErr
+	}
+	s.initialized = true
+	if s.store == nil {
+		s.store = newInMemorySecretStore()
+	}
+	return s.store, nil
+}
+
+func (s *stubStrongholdProvider) Descriptor() StrongholdDescriptor {
+	return StrongholdDescriptor{
+		Backend:     s.backend,
+		Available:   s.initialized && s.openErr == nil,
+		Fallback:    s.fallback,
+		Initialized: s.initialized,
+	}
 }
 
 // TestBackendReturnsSQLiteWAL 验证BackendReturnsSQLiteWAL。
@@ -1043,6 +1074,117 @@ func TestServiceUsesUnavailableSecretStoreWhenStrongholdCannotOpen(t *testing.T)
 	store := SecretStore(UnavailableSecretStore{})
 	if err := store.PutSecret(context.Background(), SecretRecord{Namespace: "model", Key: "openai_responses_api_key", Value: "secret", UpdatedAt: "2026-04-15T10:00:00Z"}); !errors.Is(err, ErrStrongholdUnavailable) {
 		t.Fatalf("expected unavailable formal store to reject writes, got %v", err)
+	}
+}
+
+func TestServiceUsesFormalStrongholdProviderWhenAvailable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stronghold-formal-service.db")
+	originalFormalFactory := newStrongholdProviderForService
+	originalFallbackFactory := newStrongholdFallbackProviderForService
+	defer func() {
+		newStrongholdProviderForService = originalFormalFactory
+		newStrongholdFallbackProviderForService = originalFallbackFactory
+	}()
+
+	formalProvider := &stubStrongholdProvider{
+		backend:  "stronghold",
+		fallback: false,
+		store:    newInMemorySecretStore(),
+	}
+	newStrongholdProviderForService = func(string) StrongholdProvider { return formalProvider }
+	newStrongholdFallbackProviderForService = func(string) StrongholdProvider {
+		t.Fatal("fallback provider should not open when formal Stronghold succeeds")
+		return nil
+	}
+
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	if service.Stronghold() == nil {
+		t.Fatal("expected stronghold provider to be wired")
+	}
+	descriptor := service.Stronghold().Descriptor()
+	if descriptor.Backend != "stronghold" || !descriptor.Available || descriptor.Fallback || !descriptor.Initialized {
+		t.Fatalf("expected formal stronghold descriptor after successful bootstrap, got %+v", descriptor)
+	}
+	if formalProvider.openCalls != 1 {
+		t.Fatalf("expected formal stronghold provider to open exactly once, got %d", formalProvider.openCalls)
+	}
+	if service.Capabilities().SecretStoreBackend != "stronghold" || service.Capabilities().FallbackActive {
+		t.Fatalf("expected formal secret backend capability, got %+v", service.Capabilities())
+	}
+	if err := service.SecretStore().PutSecret(context.Background(), SecretRecord{Namespace: "model", Key: "openai_api_key", Value: "secret", UpdatedAt: "2026-04-15T10:00:00Z"}); err != nil {
+		t.Fatalf("expected formal secret store write to succeed, got %v", err)
+	}
+}
+
+func TestServiceFallsBackToDevelopmentStrongholdProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stronghold-fallback-service.db")
+	originalFormalFactory := newStrongholdProviderForService
+	originalFallbackFactory := newStrongholdFallbackProviderForService
+	defer func() {
+		newStrongholdProviderForService = originalFormalFactory
+		newStrongholdFallbackProviderForService = originalFallbackFactory
+	}()
+
+	formalProvider := &stubStrongholdProvider{
+		backend:  "stronghold",
+		fallback: false,
+		openErr:  ErrStrongholdUnavailable,
+	}
+	fallbackProvider := &stubStrongholdProvider{
+		backend:  "stronghold_sqlite_fallback",
+		fallback: true,
+		store:    newInMemorySecretStore(),
+	}
+	newStrongholdProviderForService = func(string) StrongholdProvider { return formalProvider }
+	newStrongholdFallbackProviderForService = func(string) StrongholdProvider { return fallbackProvider }
+
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	descriptor := service.Stronghold().Descriptor()
+	if descriptor.Backend != "stronghold_sqlite_fallback" || !descriptor.Available || !descriptor.Fallback || !descriptor.Initialized {
+		t.Fatalf("expected fallback descriptor after formal bootstrap failure, got %+v", descriptor)
+	}
+	if !service.Capabilities().FallbackActive || service.Capabilities().SecretStoreBackend != "stronghold_sqlite_fallback" {
+		t.Fatalf("expected fallback secret backend capability, got %+v", service.Capabilities())
+	}
+	if err := service.Validate(); err != nil {
+		t.Fatalf("expected fallback-backed storage to remain valid, got %v", err)
+	}
+	if formalProvider.openCalls != 1 || fallbackProvider.openCalls != 1 {
+		t.Fatalf("expected exactly one formal and fallback open attempt, got formal=%d fallback=%d", formalProvider.openCalls, fallbackProvider.openCalls)
+	}
+	if err := service.SecretStore().PutSecret(context.Background(), SecretRecord{Namespace: "model", Key: "anthropic_api_key", Value: "fallback-secret", UpdatedAt: "2026-04-15T10:00:00Z"}); err != nil {
+		t.Fatalf("expected fallback secret store write to succeed, got %v", err)
+	}
+}
+
+func TestServiceReportsStrongholdBootstrapFailureWhenFallbackUnavailable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stronghold-unavailable-service.db")
+	originalFormalFactory := newStrongholdProviderForService
+	originalFallbackFactory := newStrongholdFallbackProviderForService
+	defer func() {
+		newStrongholdProviderForService = originalFormalFactory
+		newStrongholdFallbackProviderForService = originalFallbackFactory
+	}()
+
+	newStrongholdProviderForService = func(string) StrongholdProvider {
+		return &stubStrongholdProvider{backend: "stronghold", openErr: ErrStrongholdUnavailable}
+	}
+	newStrongholdFallbackProviderForService = func(string) StrongholdProvider {
+		return &stubStrongholdProvider{backend: "stronghold_sqlite_fallback", fallback: true, openErr: ErrStrongholdUnavailable}
+	}
+
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	if err := service.Validate(); err == nil || !strings.Contains(err.Error(), "initialize formal stronghold secret store") || !strings.Contains(err.Error(), "initialize fallback stronghold secret store") {
+		t.Fatalf("expected validation to surface both stronghold bootstrap errors, got %v", err)
+	}
+	if _, err := service.ResolveModelAPIKey("openai"); !errors.Is(err, ErrSecretStoreAccessFailed) {
+		t.Fatalf("expected unavailable stronghold bootstrap to surface secret store access failure, got %v", err)
 	}
 }
 
