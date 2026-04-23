@@ -758,24 +758,24 @@ test("shell-ball demo fixtures preserve the frozen seven-state contract", () => 
   });
 });
 
-test("shell-ball desktop host declares bubble, input, and voice helper windows", () => {
-  assert.equal(existsSync(resolve(desktopRoot, "shell-ball-bubble.html")), true);
-  assert.equal(existsSync(resolve(desktopRoot, "shell-ball-input.html")), true);
-  assert.equal(existsSync(resolve(desktopRoot, "shell-ball-voice.html")), true);
-  assert.equal(existsSync(resolve(desktopRoot, "src/app/shell-ball-voice/main.tsx")), true);
+test("shell-ball desktop host no longer creates bubble, input, and voice helper windows", () => {
+  assert.equal(existsSync(resolve(desktopRoot, "shell-ball-bubble.html")), false);
+  assert.equal(existsSync(resolve(desktopRoot, "shell-ball-input.html")), false);
+  assert.equal(existsSync(resolve(desktopRoot, "shell-ball-voice.html")), false);
+  assert.equal(existsSync(resolve(desktopRoot, "src/app/shell-ball-voice/main.tsx")), false);
 
   const viteConfig = readFileSync(resolve(desktopRoot, "vite.config.ts"), "utf8");
   const tauriConfig = readFileSync(resolve(desktopRoot, "src-tauri/tauri.conf.json"), "utf8");
 
-  assert.match(viteConfig, /"shell-ball-bubble"/);
-  assert.match(viteConfig, /"shell-ball-input"/);
-  assert.match(viteConfig, /"shell-ball-voice"/);
-  assert.match(tauriConfig, /"label": "shell-ball-bubble"/);
-  assert.match(tauriConfig, /"label": "shell-ball-input"/);
-  assert.match(tauriConfig, /"label": "shell-ball-voice"/);
-  assert.match(tauriConfig, /"url": "shell-ball-bubble\.html"/);
-  assert.match(tauriConfig, /"url": "shell-ball-input\.html"/);
-  assert.match(tauriConfig, /"url": "shell-ball-voice\.html"/);
+  assert.doesNotMatch(viteConfig, /"shell-ball-bubble"/);
+  assert.doesNotMatch(viteConfig, /"shell-ball-input"/);
+  assert.doesNotMatch(viteConfig, /"shell-ball-voice"/);
+  assert.doesNotMatch(tauriConfig, /"label": "shell-ball-bubble"/);
+  assert.doesNotMatch(tauriConfig, /"label": "shell-ball-input"/);
+  assert.doesNotMatch(tauriConfig, /"label": "shell-ball-voice"/);
+  assert.doesNotMatch(tauriConfig, /"url": "shell-ball-bubble\.html"/);
+  assert.doesNotMatch(tauriConfig, /"url": "shell-ball-input\.html"/);
+  assert.doesNotMatch(tauriConfig, /"url": "shell-ball-voice\.html"/);
 });
 
 test("shell-ball desktop host declares detached pinned bubble windows", () => {
@@ -815,12 +815,10 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
 
   assert.deepEqual(parsedCapabilityConfig.windows, [
     "shell-ball",
-    "shell-ball-bubble",
-    "shell-ball-input",
-    "shell-ball-voice",
     "shell-ball-bubble-pinned-*",
     "dashboard",
     "control-panel",
+    "onboarding",
   ]);
   assert.equal(parsedCapabilityConfig.permissions.includes("core:window:allow-create"), true);
   assert.equal(parsedCapabilityConfig.permissions.includes("core:window:allow-set-position"), true);
@@ -846,22 +844,16 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
   assert.equal(generatedCapabilitySchema.default.permissions.includes("core:window:allow-unminimize"), true);
 });
 
-test("shell-ball tray hide and show paths cover restored helper windows", () => {
+test("shell-ball tray hide and show paths target the merged shell-ball host", () => {
   const mainSource = readFileSync(
     resolve(desktopRoot, "src-tauri/src/main.rs"),
     "utf8",
   );
 
-  assert.match(mainSource, /const SHELL_BALL_INPUT_WINDOW_LABEL: &str = "shell-ball-input";/);
-  assert.match(mainSource, /const SHELL_BALL_VOICE_WINDOW_LABEL: &str = "shell-ball-voice";/);
-  assert.match(
-    mainSource,
-    /let shell_ball_labels = \\[\s\S]*SHELL_BALL_WINDOW_LABEL,[\s\S]*SHELL_BALL_BUBBLE_WINDOW_LABEL,[\s\S]*SHELL_BALL_INPUT_WINDOW_LABEL,[\s\S]*SHELL_BALL_VOICE_WINDOW_LABEL,[\s\S]*\\];/,
-  );
-  assert.match(
-    mainSource,
-    /for label in \\[\s\S]*SHELL_BALL_BUBBLE_WINDOW_LABEL,[\s\S]*SHELL_BALL_INPUT_WINDOW_LABEL,[\s\S]*SHELL_BALL_VOICE_WINDOW_LABEL,[\s\S]*\\] \{/,
-  );
+  assert.doesNotMatch(mainSource, /const SHELL_BALL_INPUT_WINDOW_LABEL: &str = "shell-ball-input";/);
+  assert.doesNotMatch(mainSource, /const SHELL_BALL_VOICE_WINDOW_LABEL: &str = "shell-ball-voice";/);
+  assert.match(mainSource, /if let Some\(window\) = app\.get_webview_window\(SHELL_BALL_WINDOW_LABEL\) \{/);
+  assert.doesNotMatch(mainSource, /SHELL_BALL_BUBBLE_WINDOW_LABEL/);
 });
 
 test("shell-ball pinned window labels and capabilities stay deterministic", () => {

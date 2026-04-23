@@ -77,7 +77,7 @@ async function buildDefaultWelcomePresentation(windowLabel: DesktopOnboardingPre
   const monitorSize = monitor.size.toLogical(monitor.scaleFactor);
 
   return {
-    highlights: [],
+    highlights: [] as DesktopOnboardingPresentationRect[],
     monitorFrame: {
       x: monitorPosition.x,
       y: monitorPosition.y,
