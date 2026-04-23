@@ -166,11 +166,11 @@ flowchart TB
 
 | 反馈类型 | 典型对象或事件 | 作用 |
 | --- | --- | --- |
-| 授权回流 | `approval.pending`、授权结果 | 进入安全确认与后续执行 |
-| 结果回流 | `delivery.ready`、`DeliveryResult`、`Artifact`、`Citation` | 刷新气泡、任务详情和产物入口 |
-| 状态回流 | `task.updated`、`loop.*`、`task.steered`、`tool_call.completed` | 刷新任务列表、详情和调试视图 |
+| 授权回流 | `approval.pending`、授权结果 | 把待确认动作和确认结果回到正式主链 |
+| 结果回流 | `delivery.ready`、`DeliveryResult`、`Artifact`、`Citation` | 把正式交付与引用链回到消费层 |
+| 状态回流 | `task.updated`、`loop.*`、`task.steered`、`tool_call.completed` | 让任务状态和运行进度持续可见 |
 | 会话回流 | `task.session_queued`、`task.session_resumed` | 反映同会话串行与恢复执行 |
-| 恢复回流 | `RecoveryPoint`、恢复结果、resume 信号 | 进入恢复入口与续跑主链 |
+| 恢复回流 | `RecoveryPoint`、恢复结果、resume 信号 | 把恢复结果并回正式主链 |
 
 ### 4.3 分层职责总览
 
@@ -232,10 +232,10 @@ erDiagram
 
 当前架构中的真源至少分为以下四层：
 
-- **任务与交付真源**：`tasks / task_steps / delivery_results / artifacts`
-- **执行兼容真源**：`runs / steps / events / tool_calls`
-- **治理真源**：`approval_requests / authorization_records / audit_records / recovery_points`
-- **长期协作与评估真源**：`memory_* / trace_records / eval_snapshots`
+- **任务与交付真源**：围绕任务主对象、任务阶段和正式交付组织。
+- **执行兼容真源**：围绕运行实例、执行步骤、运行事件和工具调用组织。
+- **治理真源**：围绕授权、审计和恢复对象组织。
+- **长期协作与评估真源**：围绕记忆、追踪和评估对象组织。
 
 这些分层的核心目标是：
 
@@ -310,7 +310,7 @@ sequenceDiagram
     participant EXEC as Agent Loop / Execution
     participant GOV as 治理与交付层
 
-    UI->>RPC: agent.input.submit / agent.task.start
+    UI->>RPC: 正式任务入口请求
     RPC->>OR: 标准请求 + 锚点
     OR->>CTX: Capture(...)
     CTX-->>OR: TaskContextSnapshot
@@ -349,7 +349,7 @@ sequenceDiagram
     alt 需要授权
         RUN-->>RPC: approval.pending
         RPC-->>UI: 展示风险与影响范围
-        UI->>RPC: agent.security.respond
+        UI->>RPC: 正式授权响应
         RPC->>RUN: 授权结果
     end
     alt 授权通过并继续
@@ -368,7 +368,7 @@ sequenceDiagram
 
 这一点在当前主线实现上尤其重要，因为：
 
-- `agent.input.submit` 与 `agent.task.start` 已经承担近场承接职责。
+- 近场任务入口已经统一收口到正式任务入口族。
 - `task.steered` 与 `loop.*` 已经是正式反馈链的一部分。
 - continuation routing 已经进入编排层，而不是由前端或 worker 私下决定。
 
@@ -396,7 +396,7 @@ sequenceDiagram
 
 当前代码与协议已经形成了视觉型任务的正式主链口径：
 
-- 页面、窗口、屏幕、可见文本、停留与切换信号统一作为输入上下文的一部分进入 `agent.input.submit / agent.task.start`。
+- 页面、窗口、屏幕、可见文本、停留与切换信号统一作为正式输入上下文的一部分进入主任务入口。
 - 受控视觉任务沿既有 `task -> approval_request -> event -> artifact / delivery_result` 链路执行。
 - 屏幕证据、OCR 摘要、引用片段和审计信息继续通过 `Artifact / Citation / DeliveryResult / AuditRecord / RecoveryPoint` 回流，而不是由 worker 原始输出越层直出。
 
