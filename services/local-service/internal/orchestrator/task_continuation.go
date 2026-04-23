@@ -8,6 +8,7 @@ import (
 	"time"
 
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	intentsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 )
@@ -139,13 +140,13 @@ func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapsh
 	if len(continuationContext.Candidates) == 0 {
 		return taskContinuationDecision{Decision: "new_task", Reason: "no unfinished candidate task"}
 	}
-	if decision, ok := deterministicTaskContinuationDecision(snapshot, continuationContext); ok {
+	if decision, ok := deterministicTaskContinuationDecision(snapshot, explicitIntent, continuationContext); ok {
 		return decision
 	}
 	if decision, ok := s.modelTaskContinuationDecision(snapshot, explicitIntent, continuationContext); ok {
 		return decision
 	}
-	return heuristicTaskContinuationDecision(snapshot, continuationContext)
+	return heuristicTaskContinuationDecision(snapshot, explicitIntent, continuationContext)
 }
 
 func (s *Service) modelTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) (taskContinuationDecision, bool) {
@@ -188,10 +189,15 @@ func buildTaskContinuationPrompt(snapshot contextsvc.TaskContextSnapshot, explic
 }
 
 func taskContinuationInputSummary(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) string {
+	suggestion := intentsvc.NewService().Suggest(snapshot, explicitIntent, len(explicitIntent) == 0)
+	resolvedIntentName := stringValue(suggestion.Intent, "name", "")
+	resolvedDeliveryType := deliveryTypeFromIntent(suggestion.Intent)
 	parts := []string{
 		fmt.Sprintf("trigger=%s", snapshot.Trigger),
 		fmt.Sprintf("input_type=%s", snapshot.InputType),
 		fmt.Sprintf("input_shape=%s", taskContinuationInputShape(snapshot)),
+		fmt.Sprintf("resolved_intent_name=%s", firstNonEmptyString(resolvedIntentName, "none")),
+		fmt.Sprintf("resolved_delivery_type=%s", resolvedDeliveryType),
 		fmt.Sprintf("has_text=%t", strings.TrimSpace(snapshot.Text) != ""),
 		fmt.Sprintf("has_selection=%t", strings.TrimSpace(snapshot.SelectionText) != ""),
 		fmt.Sprintf("has_error=%t", strings.TrimSpace(snapshot.ErrorText) != ""),
@@ -202,17 +208,23 @@ func taskContinuationInputSummary(snapshot contextsvc.TaskContextSnapshot, expli
 		fmt.Sprintf("has_hover_target=%t", strings.TrimSpace(snapshot.HoverTarget) != ""),
 		fmt.Sprintf("has_screen_context=%t", strings.TrimSpace(snapshot.ScreenSummary) != "" || strings.TrimSpace(snapshot.VisibleText) != ""),
 	}
-	parts = append(parts, fmt.Sprintf("explicit_intent_present=%t", strings.TrimSpace(stringValue(explicitIntent, "name", "")) != ""))
+	parts = append(parts,
+		fmt.Sprintf("explicit_intent_present=%t", strings.TrimSpace(stringValue(explicitIntent, "name", "")) != ""),
+		fmt.Sprintf("requires_confirmation=%t", suggestion.RequiresConfirm),
+	)
 	return strings.Join(parts, " | ")
 }
 
 func taskContinuationCandidateSummary(task runengine.TaskRecord) string {
+	intentName := strings.TrimSpace(stringValue(task.Intent, "name", ""))
 	parts := []string{
 		fmt.Sprintf("- task_id=%s", task.TaskID),
 		fmt.Sprintf("status=%s", task.Status),
 		fmt.Sprintf("current_step=%s", task.CurrentStep),
 		fmt.Sprintf("source_type=%s", task.SourceType),
 		fmt.Sprintf("age_seconds=%d", int(time.Since(task.UpdatedAt).Seconds())),
+		fmt.Sprintf("intent_name=%s", firstNonEmptyString(intentName, "none")),
+		fmt.Sprintf("delivery_type=%s", resolveTaskDeliveryType(task, task.Intent)),
 		fmt.Sprintf("awaits_follow_up=%t", task.Status == "waiting_input" || task.Status == "confirming_intent"),
 		fmt.Sprintf("has_selection=%t", strings.TrimSpace(task.Snapshot.SelectionText) != ""),
 		fmt.Sprintf("has_error=%t", strings.TrimSpace(task.Snapshot.ErrorText) != ""),
@@ -223,7 +235,7 @@ func taskContinuationCandidateSummary(task runengine.TaskRecord) string {
 		fmt.Sprintf("has_hover_target=%t", strings.TrimSpace(task.Snapshot.HoverTarget) != ""),
 		fmt.Sprintf("has_screen_context=%t", strings.TrimSpace(task.Snapshot.ScreenSummary) != "" || strings.TrimSpace(task.Snapshot.VisibleText) != ""),
 	}
-	parts = append(parts, fmt.Sprintf("has_intent=%t", strings.TrimSpace(stringValue(task.Intent, "name", "")) != ""))
+	parts = append(parts, fmt.Sprintf("has_intent=%t", intentName != ""))
 	return strings.Join(parts, " | ")
 }
 
@@ -254,30 +266,39 @@ func parseTaskContinuationDecision(raw string, candidates []runengine.TaskRecord
 
 // deterministicTaskContinuationDecision handles the safe local decisions that
 // do not need model inference. The goal is to prefer formal waiting states and
-// strong context anchors over brittle free-text cue matching.
-func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, continuationContext taskContinuationContext) (taskContinuationDecision, bool) {
+// strong context anchors over brittle free-text cue matching while preventing
+// agent.task.start explicit intents from being silently grafted onto another
+// task unless there is concrete continuation evidence.
+func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) (taskContinuationDecision, bool) {
 	if len(continuationContext.Candidates) != 1 {
 		return taskContinuationDecision{}, false
 	}
 	candidate := continuationContext.Candidates[0]
 	evidence := buildTaskContinuationEvidence(snapshot, snapshotFromTask(candidate))
+	explicitIntentName := strings.TrimSpace(stringValue(explicitIntent, "name", ""))
 	if evidence.HasConflictingAnchor {
 		return taskContinuationDecision{
 			Decision: "new_task",
 			Reason:   "input context conflicts with the unfinished task anchors",
 		}, true
 	}
+	if explicitIntentRequiresFreshTask(explicitIntentName, candidate, evidence, continuationContext) {
+		return taskContinuationDecision{
+			Decision: "new_task",
+			Reason:   "explicit start intent lacks continuation anchors for the unfinished task",
+		}, true
+	}
 
 	switch candidate.Status {
 	case "waiting_input", "confirming_intent":
-		if continuationContext.SessionMode == "explicit_active" {
+		if continuationContext.SessionMode == "explicit_active" && explicitIntentName == "" {
 			return taskContinuationDecision{
 				Decision: "continue",
 				TaskID:   candidate.TaskID,
 				Reason:   "explicit session task is already waiting for follow-up input",
 			}, true
 		}
-		if evidence.HasStrongAnchor || evidence.StructuredSupplement || (!evidence.CurrentHasContextAnchor && !evidence.PreviousHasContextAnchor) {
+		if evidence.HasStrongAnchor || evidence.StructuredSupplement || (!evidence.CurrentHasContextAnchor && !evidence.PreviousHasContextAnchor && explicitIntentName == "") {
 			return taskContinuationDecision{
 				Decision: "continue",
 				TaskID:   candidate.TaskID,
@@ -296,11 +317,27 @@ func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapsh
 	return taskContinuationDecision{}, false
 }
 
-func heuristicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, continuationContext taskContinuationContext) taskContinuationDecision {
+// explicitIntentRequiresFreshTask treats agent.task.start explicit intents as a
+// fresh top-level request unless the backend can prove they belong to the same
+// task through lineage, structured evidence, or explicit-session anchors.
+func explicitIntentRequiresFreshTask(explicitIntentName string, candidate runengine.TaskRecord, evidence taskContinuationEvidence, continuationContext taskContinuationContext) bool {
+	if explicitIntentName == "" {
+		return false
+	}
+	if evidence.HasLineageMatch || evidence.StructuredSupplement {
+		return false
+	}
+	if continuationContext.SessionMode == "explicit_active" && evidence.HasStrongAnchor {
+		return false
+	}
+	return candidate.Status == "waiting_input" || candidate.Status == "confirming_intent" || candidate.Status == "processing"
+}
+
+func heuristicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) taskContinuationDecision {
 	if len(continuationContext.Candidates) != 1 {
 		return taskContinuationDecision{Decision: "new_task", Reason: "multiple unfinished candidates"}
 	}
-	if decision, ok := deterministicTaskContinuationDecision(snapshot, continuationContext); ok {
+	if decision, ok := deterministicTaskContinuationDecision(snapshot, explicitIntent, continuationContext); ok {
 		return decision
 	}
 	return taskContinuationDecision{

@@ -121,6 +121,16 @@ func TestBuildTaskContinuationPromptRedactsSensitivePayloads(t *testing.T) {
 	if !strings.Contains(prompt, "task_id=task_001") {
 		t.Fatalf("expected prompt to retain stable task identifiers, got %s", prompt)
 	}
+	for _, expected := range []string{
+		"resolved_intent_name=write_file",
+		"resolved_delivery_type=workspace_document",
+		"intent_name=agent_loop",
+		"delivery_type=bubble",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("expected prompt to include %q, got %s", expected, prompt)
+		}
+	}
 	if strings.Contains(prompt, "continuation_markers=") {
 		t.Fatalf("expected prompt to stop relying on continuation markers, got %s", prompt)
 	}
@@ -165,6 +175,38 @@ func TestClassifyTaskContinuationContinuesExplicitWaitingTaskWithoutSignalWords(
 
 	if decision.Decision != "continue" || decision.TaskID != "task_001" {
 		t.Fatalf("expected explicit waiting task to continue without signal words, got %+v", decision)
+	}
+}
+
+func TestClassifyTaskContinuationStartsNewTaskForExplicitIntentWithoutAnchors(t *testing.T) {
+	service := newTestService()
+	service.model = nil
+
+	decision := service.classifyTaskContinuation(
+		contextsvc.TaskContextSnapshot{
+			Trigger:   "hover_text_input",
+			InputType: "text",
+			Text:      "顺便帮我写一份周报。",
+		},
+		map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": "workspace/reports/weekly.md",
+			},
+		},
+		taskContinuationContext{
+			SessionMode: "implicit_active",
+			Candidates: []runengine.TaskRecord{{
+				TaskID:      "task_001",
+				Status:      "waiting_input",
+				CurrentStep: "collect_input",
+				UpdatedAt:   time.Now().Add(-10 * time.Second),
+			}},
+		},
+	)
+
+	if decision.Decision != "new_task" {
+		t.Fatalf("expected explicit intent without anchors to open a new task, got %+v", decision)
 	}
 }
 
@@ -241,6 +283,7 @@ func TestHeuristicTaskContinuationDecisionDoesNotAutoMergeBareFileDropWithoutAnc
 			InputType: "file",
 			Files:     []string{"logs/network.log"},
 		},
+		nil,
 		taskContinuationContext{
 			Candidates: []runengine.TaskRecord{{
 				TaskID:      "task_001",

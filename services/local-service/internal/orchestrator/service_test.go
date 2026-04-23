@@ -10456,6 +10456,45 @@ func TestServiceSubmitInputDoesNotContinuePausedTask(t *testing.T) {
 	}
 }
 
+func TestServiceStartTaskWithExplicitIntentDoesNotReuseWaitingTaskWithoutAnchors(t *testing.T) {
+	service := newTestService()
+
+	waitingTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_waiting_explicit_intent",
+		Title:       "确认处理方式：当前内容",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+	})
+
+	result, err := service.StartTask(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "顺便帮我写一份周报",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": "workspace/reports/weekly.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start explicit new task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["task_id"] == waitingTask.TaskID {
+		t.Fatalf("expected explicit start intent without anchors to open a new task, got %+v", task)
+	}
+	if task["session_id"] == waitingTask.SessionID {
+		t.Fatalf("expected explicit start intent without anchors to use a fresh hidden session, got waiting=%+v new=%+v", waitingTask, task)
+	}
+}
+
 func TestServiceSubmitInputStartsNewTaskForUnrelatedRequest(t *testing.T) {
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
 		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
