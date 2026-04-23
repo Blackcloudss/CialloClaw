@@ -9202,6 +9202,227 @@ func TestServiceTaskDetailGetStructuredFallbackRehydratesAuthorizationAndAudit(t
 	}
 }
 
+func TestServiceTaskDetailGetPrefersStoredScreenFormalObjectsOverRuntimeCompatibility(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored screen detail precedence")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_screen_formal_prefer",
+		Title:             "screen formal preference task",
+		SourceType:        "screen_capture",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "yellow",
+		Timeline:          initialTimeline("completed", "deliver_result"),
+	})
+	if _, ok := service.runEngine.SetPresentation(runtimeTask.TaskID, nil, map[string]any{
+		"type":         "task_detail",
+		"title":        "runtime detail result",
+		"preview_text": "runtime preview",
+		"payload": map[string]any{
+			"task_id": runtimeTask.TaskID,
+			"path":    "workspace/runtime-screen.png",
+		},
+	}, []map[string]any{{
+		"artifact_id":      "art_screen_formal_prefer",
+		"task_id":          runtimeTask.TaskID,
+		"artifact_type":    "screen_capture",
+		"title":            "runtime-screen.png",
+		"path":             "workspace/runtime-screen.png",
+		"mime_type":        "image/png",
+		"delivery_type":    "task_detail",
+		"delivery_payload": map[string]any{"path": "workspace/runtime-screen.png", "task_id": runtimeTask.TaskID},
+		"created_at":       "2026-04-21T10:05:00Z",
+	}}); !ok {
+		t.Fatal("expected runtime presentation to update")
+	}
+	if _, ok := service.runEngine.SetCitations(runtimeTask.TaskID, []map[string]any{{
+		"citation_id":       "cit_screen_formal_prefer",
+		"task_id":           runtimeTask.TaskID,
+		"run_id":            runtimeTask.RunID,
+		"source_type":       "file",
+		"source_ref":        "art_screen_formal_prefer",
+		"label":             "runtime label",
+		"artifact_id":       "art_screen_formal_prefer",
+		"artifact_type":     "screen_capture",
+		"evidence_role":     "error_evidence",
+		"excerpt_text":      "runtime excerpt",
+		"screen_session_id": "screen_runtime_prefer",
+	}}); !ok {
+		t.Fatal("expected runtime citations to update")
+	}
+	if _, ok := service.runEngine.ResolveAuthorization(runtimeTask.TaskID, map[string]any{
+		"authorization_record_id": "auth_runtime_prefer",
+		"task_id":                 runtimeTask.TaskID,
+		"approval_id":             "appr_runtime_prefer",
+		"decision":                "allow_once",
+		"remember_rule":           false,
+		"operator":                "runtime",
+		"created_at":              "2026-04-21T10:04:00Z",
+	}, map[string]any{"files": []string{"runtime.txt"}}); !ok {
+		t.Fatal("expected runtime authorization to update")
+	}
+	if _, ok := service.runEngine.AppendAuditData(runtimeTask.TaskID, []map[string]any{{
+		"audit_id":   "audit_runtime_prefer",
+		"task_id":    runtimeTask.TaskID,
+		"type":       "execution",
+		"action":     "execute_task",
+		"summary":    "runtime audit summary",
+		"target":     "workspace/runtime-screen.png",
+		"result":     "success",
+		"created_at": "2026-04-21T10:05:00Z",
+	}}, nil); !ok {
+		t.Fatal("expected runtime audit records to update")
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_screen_formal_prefer",
+		TaskID:              runtimeTask.TaskID,
+		ArtifactType:        "screen_capture",
+		Title:               "stored-screen.png",
+		Path:                "workspace/stored-screen.png",
+		MimeType:            "image/png",
+		DeliveryType:        "task_detail",
+		DeliveryPayloadJSON: `{"path":"workspace/stored-screen.png","task_id":"` + runtimeTask.TaskID + `","evidence_role":"error_evidence"}`,
+		CreatedAt:           "2026-04-21T10:06:00Z",
+	}}); err != nil {
+		t.Fatalf("save stored artifacts failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), runtimeTask.TaskID, []storage.CitationRecord{{
+		CitationID:      "cit_screen_formal_prefer",
+		TaskID:          runtimeTask.TaskID,
+		RunID:           runtimeTask.RunID,
+		SourceType:      "file",
+		SourceRef:       "art_screen_formal_prefer",
+		Label:           "stored label",
+		ArtifactID:      "art_screen_formal_prefer",
+		ArtifactType:    "screen_capture",
+		EvidenceRole:    "error_evidence",
+		ExcerptText:     "stored excerpt",
+		ScreenSessionID: "screen_stored_prefer",
+		OrderIndex:      0,
+	}}); err != nil {
+		t.Fatalf("replace stored citations failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_" + runtimeTask.TaskID,
+		TaskID:           runtimeTask.TaskID,
+		Type:             "task_detail",
+		Title:            "stored detail result",
+		PayloadJSON:      `{"task_id":"` + runtimeTask.TaskID + `","path":"workspace/stored-screen.png","url":null}`,
+		PreviewText:      "stored preview",
+		CreatedAt:        "2026-04-21T10:06:00Z",
+	}); err != nil {
+		t.Fatalf("save stored delivery result failed: %v", err)
+	}
+	if err := service.storage.AuthorizationRecordStore().WriteAuthorizationRecord(context.Background(), storage.AuthorizationRecordRecord{
+		AuthorizationRecordID: "auth_stored_prefer",
+		TaskID:                runtimeTask.TaskID,
+		ApprovalID:            "appr_stored_prefer",
+		Decision:              "allow_once",
+		Operator:              "user",
+		RememberRule:          false,
+		CreatedAt:             "2026-04-21T10:04:30Z",
+	}); err != nil {
+		t.Fatalf("write stored authorization record failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_stored_prefer",
+		TaskID:    runtimeTask.TaskID,
+		Type:      "execution",
+		Action:    "execute_task",
+		Summary:   "stored audit summary",
+		Target:    "workspace/stored-screen.png",
+		Result:    "success",
+		CreatedAt: "2026-04-21T10:05:30Z",
+	}); err != nil {
+		t.Fatalf("write stored audit record failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": runtimeTask.TaskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	deliveryResult := detailResult["delivery_result"].(map[string]any)
+	if deliveryResult["preview_text"] != "stored preview" {
+		t.Fatalf("expected stored delivery_result to override runtime compatibility data, got %+v", deliveryResult)
+	}
+	artifacts := detailResult["artifacts"].([]map[string]any)
+	if len(artifacts) != 1 || artifacts[0]["path"] != "workspace/stored-screen.png" {
+		t.Fatalf("expected stored artifacts to override runtime compatibility data, got %+v", artifacts)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["label"] != "stored label" || citations[0]["excerpt_text"] != "stored excerpt" {
+		t.Fatalf("expected stored citations to override runtime compatibility data, got %+v", citations)
+	}
+	authorizationRecord := detailResult["authorization_record"].(map[string]any)
+	if authorizationRecord["authorization_record_id"] != "auth_stored_prefer" {
+		t.Fatalf("expected stored authorization_record to override runtime compatibility data, got %+v", authorizationRecord)
+	}
+	auditRecord := detailResult["audit_record"].(map[string]any)
+	if auditRecord["audit_id"] != "audit_stored_prefer" {
+		t.Fatalf("expected stored audit_record to override runtime compatibility data, got %+v", auditRecord)
+	}
+}
+
+func TestServiceTaskDetailGetPrefersStoredApprovalRequestOverRuntimeCompatibility(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored approval precedence")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_screen_approval_prefer",
+		Title:             "screen approval preference task",
+		SourceType:        "screen_capture",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "intent_confirmation",
+		RiskLevel:         "yellow",
+		Timeline:          initialTimeline("processing", "intent_confirmation"),
+	})
+	if _, ok := service.runEngine.MarkWaitingApprovalWithPlan(runtimeTask.TaskID, map[string]any{
+		"approval_id":    "appr_runtime_prefer",
+		"task_id":        runtimeTask.TaskID,
+		"operation_name": "screen_capture",
+		"target_object":  "runtime target",
+		"reason":         "runtime reason",
+		"risk_level":     "yellow",
+		"status":         "pending",
+		"created_at":     "2026-04-21T11:00:00Z",
+		"impact_scope":   map[string]any{"files": []string{"runtime.txt"}},
+	}, map[string]any{"kind": "screen_analysis"}, nil); !ok {
+		t.Fatal("expected runtime approval request to update")
+	}
+	if err := service.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), storage.ApprovalRequestRecord{
+		ApprovalID:      "appr_stored_prefer",
+		TaskID:          runtimeTask.TaskID,
+		OperationName:   "screen_capture",
+		RiskLevel:       "yellow",
+		TargetObject:    "stored target",
+		Reason:          "stored reason",
+		Status:          "pending",
+		ImpactScopeJSON: `{"files":["stored.txt"]}`,
+		CreatedAt:       "2026-04-21T11:00:30Z",
+		UpdatedAt:       "2026-04-21T11:00:30Z",
+	}); err != nil {
+		t.Fatalf("write stored approval request failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": runtimeTask.TaskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	approvalRequest := detailResult["approval_request"].(map[string]any)
+	if approvalRequest["approval_id"] != "appr_stored_prefer" || approvalRequest["target_object"] != "stored target" || approvalRequest["reason"] != "stored reason" {
+		t.Fatalf("expected stored approval_request to override runtime compatibility data, got %+v", approvalRequest)
+	}
+}
+
 func TestNormalizeTaskDetailAuthorizationRecordCoercesLegacyDecisions(t *testing.T) {
 	allowRecord := normalizeTaskDetailAuthorizationRecord("task_auth_detail", map[string]any{
 		"authorization_record_id": "auth_allow",
