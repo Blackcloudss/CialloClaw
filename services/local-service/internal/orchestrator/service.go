@@ -401,14 +401,12 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	snapshot := s.context.Capture(params)
 	explicitIntent := mapValue(params, "intent")
-	if !explicitIntentBypassesContinuation(explicitIntent) {
-		if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, explicitIntent); err != nil {
-			return nil, err
-		} else if handled {
-			return response, nil
-		} else if strings.TrimSpace(resolvedSessionID) != "" {
-			params = withResolvedSessionID(params, resolvedSessionID)
-		}
+	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, explicitIntent); err != nil {
+		return nil, err
+	} else if handled {
+		return response, nil
+	} else if strings.TrimSpace(resolvedSessionID) != "" {
+		params = withResolvedSessionID(params, resolvedSessionID)
 	}
 	if handledResponse, handled, err := s.handleScreenAnalyzeStart(params, snapshot, explicitIntent); err != nil {
 		return nil, err
@@ -485,18 +483,6 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	response["bubble_message"] = bubble
 	response["delivery_result"] = deliveryResult
 	return response, nil
-}
-
-// explicitIntentBypassesContinuation reserves fresh-task-only intents for the
-// formal StartTask mainline so continuation routing cannot skip required risk
-// boundaries such as waiting_auth and approval creation.
-func explicitIntentBypassesContinuation(explicitIntent map[string]any) bool {
-	switch strings.TrimSpace(stringValue(explicitIntent, "name", "")) {
-	case "screen_analyze":
-		return true
-	default:
-		return false
-	}
 }
 
 func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, error) {

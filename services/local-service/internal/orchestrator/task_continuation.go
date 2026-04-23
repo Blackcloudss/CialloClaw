@@ -324,6 +324,11 @@ func explicitIntentRequiresFreshTask(explicitIntentName string, candidate runeng
 	if explicitIntentName == "" {
 		return false
 	}
+	// Controlled screen analysis must always establish its own task and approval
+	// boundary even when the caller is still focused on the same page/window.
+	if explicitIntentName == "screen_analyze" {
+		return true
+	}
 	if evidence.HasLineageMatch || evidence.StructuredSupplement {
 		return false
 	}
