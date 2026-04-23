@@ -856,7 +856,6 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
   assert.equal(shellBallWindowPermissions.includes("core:window:allow-set-position"), true);
   assert.equal(shellBallWindowPermissions.includes("core:window:allow-set-size"), true);
   assert.equal(shellBallWindowPermissions.includes("core:window:allow-start-dragging"), true);
-  assert.equal(shellBallWindowPermissions.includes("core:window:allow-set-ignore-cursor-events"), true);
 
   const capabilityConfig = readFileSync(
     resolve(desktopRoot, "src-tauri/capabilities/default.json"),
@@ -880,7 +879,6 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
   assert.equal(parsedCapabilityConfig.permissions.includes("core:window:allow-set-position"), true);
   assert.equal(parsedCapabilityConfig.permissions.includes("core:window:allow-set-size"), true);
   assert.equal(parsedCapabilityConfig.permissions.includes("core:window:allow-start-dragging"), true);
-  assert.equal(parsedCapabilityConfig.permissions.includes("core:window:allow-set-ignore-cursor-events"), true);
 
   const generatedCapabilitySchema = JSON.parse(
     readFileSync(resolve(desktopRoot, "src-tauri/gen/schemas/capabilities.json"), "utf8"),
@@ -899,6 +897,24 @@ test("shell-ball desktop window controller and capabilities stay aligned", () =>
   assert.deepEqual(generatedCapabilitySchema.default.permissions, parsedCapabilityConfig.permissions);
   assert.equal(generatedCapabilitySchema.default.permissions.includes("core:window:allow-create"), true);
   assert.equal(generatedCapabilitySchema.default.permissions.includes("core:window:allow-unminimize"), true);
+});
+
+test("shell-ball tray hide and show paths cover restored helper windows", () => {
+  const mainSource = readFileSync(
+    resolve(desktopRoot, "src-tauri/src/main.rs"),
+    "utf8",
+  );
+
+  assert.match(mainSource, /const SHELL_BALL_INPUT_WINDOW_LABEL: &str = "shell-ball-input";/);
+  assert.match(mainSource, /const SHELL_BALL_VOICE_WINDOW_LABEL: &str = "shell-ball-voice";/);
+  assert.match(
+    mainSource,
+    /let shell_ball_labels = \\[\s\S]*SHELL_BALL_WINDOW_LABEL,[\s\S]*SHELL_BALL_BUBBLE_WINDOW_LABEL,[\s\S]*SHELL_BALL_INPUT_WINDOW_LABEL,[\s\S]*SHELL_BALL_VOICE_WINDOW_LABEL,[\s\S]*\\];/,
+  );
+  assert.match(
+    mainSource,
+    /for label in \\[\s\S]*SHELL_BALL_BUBBLE_WINDOW_LABEL,[\s\S]*SHELL_BALL_INPUT_WINDOW_LABEL,[\s\S]*SHELL_BALL_VOICE_WINDOW_LABEL,[\s\S]*\\] \{/,
+  );
 });
 
 test("shell-ball pinned window labels and capabilities stay deterministic", () => {
@@ -1411,7 +1427,7 @@ test("control-panel entrypoint and view keep frameless window close and drag con
   assert.match(controlPanelAppSource, /requestCurrentDesktopWindowClose/);
   assert.match(desktopWindowFrameSource, /export function installDesktopEscapeClose\(windowHandle\?: DesktopCloseHandle \| null\)/);
   assert.match(desktopWindowFrameSource, /const currentWindow = windowHandle \?\? getDesktopFrameWindow\(\)/);
-  assert.match(controlPanelAppSource, /control-panel-shell__titlebar/);
+  assert.match(controlPanelAppSource, /control-panel-page__topbar/);
   assert.match(controlPanelAppSource, /拖动控制面板窗口/);
   assert.match(controlPanelAppSource, /关闭控制面板/);
 });
@@ -3762,24 +3778,37 @@ test("shell-ball coordinator prefers bubble_message text over empty delivery pre
   assert.equal(createdItem.role, "agent");
 });
 
-test("shell-ball coordinator shows formal delivery previews before desktop auto-open", () => {
+test("shell-ball coordinator prefers bubble_message text over non-empty delivery preview", () => {
   const createdItem = createShellBallAgentBubbleItem(
     {
       task: {
-        task_id: "task-workspace-document",
+        task_id: "task-bubble-message-preview",
       },
-      bubble_message: null,
+      bubble_message: {
+        bubble_id: "bubble-message-preview-1",
+        task_id: "task-bubble-message-preview",
+        type: "result",
+        text: "完整的回复正文，不应该被预览文本替换。",
+        pinned: false,
+        hidden: true,
+        created_at: "2026-04-11T10:10:30.000Z",
+      },
       delivery_result: {
-        type: "workspace_document",
-        title: "鎬荤粨鏂囨。",
-        preview_text: "宸蹭负浣犵敓鎴愭€荤粨鏂囨。",
+        type: "bubble",
+        title: "Preview title",
+        payload: {
+          path: null,
+          task_id: "task-bubble-message-preview",
+          url: null,
+        },
+        preview_text: "被截断的预览…",
       },
     } as any,
-    "2026-04-11T10:10:20.000Z",
+    "2026-04-11T10:10:40.000Z",
   );
 
-  assert.equal(createdItem.bubble.text, "宸蹭负浣犵敓鎴愭€荤粨鏂囨。");
-  assert.equal(createdItem.bubble.task_id, "task-workspace-document");
+  assert.equal(createdItem.bubble.text, "完整的回复正文，不应该被预览文本替换。");
+  assert.equal(createdItem.bubble.created_at, "2026-04-11T10:10:30.000Z");
   assert.equal(createdItem.role, "agent");
 });
 
@@ -3793,7 +3822,6 @@ test("shell-ball auto-open helper only targets formal delivery types with native
   assert.equal(shouldAutoOpenShellBallDeliveryResult({ type: "reveal_in_folder" } as any), true);
   assert.equal(shouldAutoOpenShellBallDeliveryResult({ type: "result_page" } as any), true);
 });
-
 test("shell-ball coordinator bubble actions restore unpinned bubbles by timestamp then id", () => {
   const sourceItems: ShellBallBubbleItem[] = [
     {
@@ -5080,7 +5108,6 @@ test("shell-ball task-detail deliveries auto-open the dashboard detail view", as
   assert.deepEqual(openTaskDeliveryCalls, ["task-task-detail"]);
   assert.deepEqual(openTaskDetailCalls, ["task-task-detail"]);
 });
-
 test("shell-ball bubble actions stay coordinator-owned and detached-position free", () => {
   const bubbleActionPayload = {
     source: "pinned_window",

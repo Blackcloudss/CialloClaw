@@ -1,31 +1,31 @@
-import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { DashboardVoiceField } from "@/features/dashboard/home/components/DashboardVoiceField";
-import { getDashboardHomeFallbackData, loadDashboardHomeData, submitDashboardHomeRecommendationFeedback } from "@/features/dashboard/home/dashboardHome.service";
+import {
+  getDashboardHomeFallbackData,
+  loadDashboardHomeData,
+  submitDashboardHomeRecommendationFeedback,
+} from "@/features/dashboard/home/dashboardHome.service";
+import { MemoryPage } from "@/features/dashboard/memory/MemoryPage";
+import { NotesPage } from "@/features/dashboard/notes/NotesPage";
+import { SafetyPage } from "@/features/dashboard/safety/SafetyPage";
 import {
   dashboardTaskDetailNavigationEvent,
   navigateToDashboardTaskDetail,
   type DashboardTaskDetailOpenRequest,
 } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
-import { cn } from "@/utils/cn";
-import { DashboardHome } from "./DashboardHome";
+import { TasksPage } from "@/features/dashboard/tasks/TasksPage";
 import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { rememberConversationSessionFromTaskUpdated } from "@/services/conversationSessionService";
+import { cn } from "@/utils/cn";
+import { DashboardHome } from "./DashboardHome";
 import "./dashboard.css";
 
-const TasksPage = lazy(() => import("@/features/dashboard/tasks/TasksPage").then((module) => ({ default: module.TasksPage })));
-const NotesPage = lazy(() => import("@/features/dashboard/notes/NotesPage").then((module) => ({ default: module.NotesPage })));
-const MemoryPage = lazy(() => import("@/features/dashboard/memory/MemoryPage").then((module) => ({ default: module.MemoryPage })));
-const SafetyPage = lazy(() => import("@/features/dashboard/safety/SafetyPage").then((module) => ({ default: module.SafetyPage })));
 const DASHBOARD_TASK_DETAIL_REQUEST_MEMORY_MS = 5_000;
-
-function DashboardRouteFallback() {
-  return <div className="dashboard-route-layer" aria-live="polite">Loading module…</div>;
-}
 
 function useDashboardDomainExpansion() {
   const [isOpening, setIsOpening] = useState(true);
@@ -237,6 +237,7 @@ function DashboardRoutes() {
   const handleRecommendationFeedback = (recommendationId: string, feedback: "positive" | "negative") => {
     recommendationFeedbackMutation.mutate({ feedback, recommendationId });
   };
+
   return (
     <div className={cn("dashboard-app", isOpening && "is-opening")}>
       <AnimatePresence mode="wait">
@@ -261,10 +262,10 @@ function DashboardRoutes() {
               }
               path={resolveDashboardRoutePath("home")}
             />
-            <Route element={<Suspense fallback={<DashboardRouteFallback />}><TasksPage /></Suspense>} path={`${resolveDashboardModuleRoutePath("tasks")}/*`} />
-            <Route element={<Suspense fallback={<DashboardRouteFallback />}><NotesPage /></Suspense>} path={`${resolveDashboardModuleRoutePath("notes")}/*`} />
-            <Route element={<Suspense fallback={<DashboardRouteFallback />}><MemoryPage /></Suspense>} path={`${resolveDashboardModuleRoutePath("memory")}/*`} />
-            <Route element={<Suspense fallback={<DashboardRouteFallback />}><SafetyPage /></Suspense>} path={`${resolveDashboardModuleRoutePath("safety")}/*`} />
+            <Route element={<TasksPage />} path={`${resolveDashboardModuleRoutePath("tasks")}/*`} />
+            <Route element={<NotesPage />} path={`${resolveDashboardModuleRoutePath("notes")}/*`} />
+            <Route element={<MemoryPage />} path={`${resolveDashboardModuleRoutePath("memory")}/*`} />
+            <Route element={<SafetyPage />} path={`${resolveDashboardModuleRoutePath("safety")}/*`} />
             <Route element={<Navigate replace to={resolveDashboardRoutePath("home")} />} path="*" />
           </Routes>
         </motion.div>
