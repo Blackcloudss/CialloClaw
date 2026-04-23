@@ -8,6 +8,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/orchestrator"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
 // registerHandlers binds stable agent.* JSON-RPC methods to orchestrator entry
@@ -25,6 +26,7 @@ func (s *Server) registerHandlers() {
 		"agent.task.list":                      s.handleAgentTaskList,
 		"agent.task.detail.get":                s.handleAgentTaskDetailGet,
 		"agent.task.events.list":               s.handleAgentTaskEventsList,
+		"agent.task.tool_calls.list":           s.handleAgentTaskToolCallsList,
 		"agent.task.steer":                     s.handleAgentTaskSteer,
 		"agent.task.control":                   s.handleAgentTaskControl,
 		"agent.task_inspector.config.get":      s.handleAgentTaskInspectorConfigGet,
@@ -114,6 +116,12 @@ func (s *Server) handleAgentTaskDetailGet(params map[string]any) (any, *rpcError
 // handleAgentTaskEventsList handles agent.task.events.list.
 func (s *Server) handleAgentTaskEventsList(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.TaskEventsList(params)
+	return wrapOrchestratorResult(data, err)
+}
+
+// handleAgentTaskToolCallsList handles agent.task.tool_calls.list.
+func (s *Server) handleAgentTaskToolCallsList(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.TaskToolCallsList(params)
 	return wrapOrchestratorResult(data, err)
 }
 
@@ -335,7 +343,7 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			TraceID: "trace_stronghold_access_failed",
 		}
 	}
-	if errors.Is(err, storage.ErrStrongholdAccessFailed) || errors.Is(err, storage.ErrStrongholdUnavailable) || errors.Is(err, storage.ErrSecretStoreAccessFailed) {
+	if errors.Is(err, storage.ErrStrongholdAccessFailed) || errors.Is(err, storage.ErrStrongholdUnavailable) || errors.Is(err, storage.ErrSecretStoreAccessFailed) || errors.Is(err, storage.ErrSecretNotFound) || errors.Is(err, model.ErrClientNotConfigured) || errors.Is(err, model.ErrOpenAIAPIKeyRequired) || errors.Is(err, model.ErrSecretSourceFailed) || errors.Is(err, model.ErrSecretNotFound) {
 		return nil, &rpcError{
 			Code:    1005004,
 			Message: "STRONGHOLD_ACCESS_FAILED",
@@ -359,12 +367,28 @@ func wrapOrchestratorResult(data any, err error) (any, *rpcError) {
 			TraceID: "trace_model_provider_not_found",
 		}
 	}
-	if errors.Is(err, model.ErrClientNotConfigured) || errors.Is(err, model.ErrToolCallingNotSupported) || errors.Is(err, model.ErrOpenAIAPIKeyRequired) || errors.Is(err, model.ErrOpenAIEndpointRequired) || errors.Is(err, model.ErrOpenAIModelIDRequired) || errors.Is(err, model.ErrOpenAIHTTPStatus) || errors.Is(err, model.ErrOpenAIRequestFailed) || errors.Is(err, model.ErrOpenAIRequestTimeout) || errors.Is(err, model.ErrOpenAIResponseInvalid) || errors.Is(err, model.ErrSecretSourceFailed) {
+	if model.IsProviderRuntimeUnavailable(err) {
+		return nil, &rpcError{
+			Code:    1008007,
+			Message: "MODEL_RUNTIME_UNAVAILABLE",
+			Detail:  err.Error(),
+			TraceID: "trace_model_runtime_unavailable",
+		}
+	}
+	if errors.Is(err, model.ErrToolCallingNotSupported) || errors.Is(err, model.ErrOpenAIEndpointRequired) || errors.Is(err, model.ErrOpenAIModelIDRequired) || errors.Is(err, model.ErrOpenAIHTTPStatus) {
 		return nil, &rpcError{
 			Code:    1008002,
 			Message: "MODEL_NOT_ALLOWED",
 			Detail:  err.Error(),
 			TraceID: "trace_model_not_allowed",
+		}
+	}
+	if errors.Is(err, tools.ErrToolOutputInvalid) {
+		return nil, &rpcError{
+			Code:    1003004,
+			Message: "TOOL_OUTPUT_INVALID",
+			Detail:  err.Error(),
+			TraceID: "trace_tool_output_invalid",
 		}
 	}
 

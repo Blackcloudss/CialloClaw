@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -841,6 +842,70 @@ func TestExecuteBudgetDowngradeFallsBackWhenModelClientUnavailable(t *testing.T)
 	}
 }
 
+func TestExecuteFailsWhenPromptGenerationFallsBackWithoutBudgetDowngrade(t *testing.T) {
+	service, _ := newTestExecutionServiceWithModelClient(t, nil)
+	_, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_prompt_requires_formal_model",
+		RunID:        "run_prompt_requires_formal_model",
+		Title:        "Prompt requires formal model",
+		Intent:       map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please summarize this content."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Formal prompt result",
+	})
+	if !errors.Is(err, model.ErrClientNotConfigured) {
+		t.Fatalf("expected ErrClientNotConfigured, got %v", err)
+	}
+}
+
+func TestExecutePreservesTypedSecretErrorsWhenPromptFallbackOccurs(t *testing.T) {
+	service, _ := newTestExecutionServiceWithModelClient(t, &stubModelClient{err: errors.Join(model.ErrSecretSourceFailed, model.ErrSecretNotFound)})
+	_, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_prompt_secret_error",
+		RunID:        "run_prompt_secret_error",
+		Title:        "Prompt secret error",
+		Intent:       map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please summarize this content."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Secret error result",
+	})
+	if !errors.Is(err, model.ErrSecretSourceFailed) || !errors.Is(err, model.ErrSecretNotFound) {
+		t.Fatalf("expected joined secret resolution error, got %v", err)
+	}
+}
+
+func TestExecutePreservesModelConfigurationErrorsWhenPromptFallbackOccurs(t *testing.T) {
+	service, _ := newTestExecutionServiceWithModelClient(t, &stubModelClient{err: errors.Join(model.ErrModelProviderRequired, model.ErrOpenAIEndpointRequired)})
+	_, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_prompt_model_config_error",
+		RunID:        "run_prompt_model_config_error",
+		Title:        "Prompt model config error",
+		Intent:       map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please summarize this content."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Model config error result",
+	})
+	if !errors.Is(err, model.ErrModelProviderRequired) || !errors.Is(err, model.ErrOpenAIEndpointRequired) {
+		t.Fatalf("expected joined provider/config error, got %v", err)
+	}
+}
+
+func TestExecuteFailsWhenModelReturnsEmptyPromptOutput(t *testing.T) {
+	service, _ := newTestExecutionServiceWithModelClient(t, &stubModelClient{output: ""})
+	_, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_prompt_empty_output",
+		RunID:        "run_prompt_empty_output",
+		Title:        "Prompt empty output",
+		Intent:       map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please summarize this content."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Empty output result",
+	})
+	if !errors.Is(err, tools.ErrToolOutputInvalid) {
+		t.Fatalf("expected ErrToolOutputInvalid, got %v", err)
+	}
+}
+
 func TestExecuteBudgetDowngradeAllowsReadOnlyAgentLoopTools(t *testing.T) {
 	modelClient := &stubModelClient{
 		toolCalls: []model.ToolCallResult{{
@@ -967,6 +1032,163 @@ func TestExecuteBudgetDowngradePreservesFallbackReason(t *testing.T) {
 	}
 	if result.BudgetFailure == nil || result.BudgetFailure["reason"] != model.ErrClientNotConfigured.Error() {
 		t.Fatalf("expected budget failure reason to preserve actual fallback reason, got %+v", result.BudgetFailure)
+	}
+}
+
+func TestExecuteBudgetDowngradeRecognizesJoinedSecretFallbackReason(t *testing.T) {
+	service, _ := newTestExecutionServiceWithModelClient(t, &stubModelClient{err: errors.Join(model.ErrSecretSourceFailed, model.ErrSecretNotFound)})
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_budget_secret_reason",
+		RunID:        "run_budget_secret_reason",
+		Title:        "Budget secret reason",
+		Intent:       map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please summarize this content."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Budget secret reason result",
+		BudgetDowngrade: map[string]any{
+			"applied":         true,
+			"trigger_reason":  "provider_unavailable",
+			"degrade_actions": []string{"lightweight_delivery"},
+			"summary":         "Budget downgrade fallback applied.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute returned error: %v", err)
+	}
+	if result.BudgetFailure == nil {
+		t.Fatalf("expected joined secret fallback to produce budget failure signal, got %+v", result)
+	}
+	reason, _ := result.BudgetFailure["reason"].(string)
+	if !strings.Contains(reason, model.ErrSecretSourceFailed.Error()) || !strings.Contains(reason, model.ErrSecretNotFound.Error()) {
+		t.Fatalf("expected joined secret fallback reason to be preserved, got %+v", result.BudgetFailure)
+	}
+}
+
+func TestModelFallbackErrorFromToolOutputDefaultsToClientNotConfigured(t *testing.T) {
+	err := modelFallbackErrorFromToolOutput(map[string]any{})
+	if !errors.Is(err, model.ErrClientNotConfigured) {
+		t.Fatalf("expected ErrClientNotConfigured, got %v", err)
+	}
+}
+
+func TestModelFallbackErrorFromToolOutputRecognizesToolOutputInvalid(t *testing.T) {
+	err := modelFallbackErrorFromToolOutput(map[string]any{"fallback_reason": tools.ErrToolOutputInvalid.Error()})
+	if !errors.Is(err, tools.ErrToolOutputInvalid) {
+		t.Fatalf("expected ErrToolOutputInvalid, got %v", err)
+	}
+}
+
+func TestModelFallbackErrorFromToolOutputRecognizesProviderAndTransportErrors(t *testing.T) {
+	err := modelFallbackErrorFromToolOutput(map[string]any{"fallback_reason": errors.Join(model.ErrModelProviderRequired, model.ErrOpenAIEndpointRequired, model.ErrOpenAIRequestTimeout).Error()})
+	if !errors.Is(err, model.ErrModelProviderRequired) {
+		t.Fatalf("expected ErrModelProviderRequired, got %v", err)
+	}
+	if !errors.Is(err, model.ErrOpenAIEndpointRequired) {
+		t.Fatalf("expected ErrOpenAIEndpointRequired, got %v", err)
+	}
+	if !errors.Is(err, model.ErrOpenAIRequestTimeout) {
+		t.Fatalf("expected ErrOpenAIRequestTimeout, got %v", err)
+	}
+}
+
+func TestModelFallbackErrorFromToolOutputRebuildsHTTPStatusErrors(t *testing.T) {
+	err := modelFallbackErrorFromToolOutput(map[string]any{"fallback_reason": "openai responses returned http status 503: service unavailable"})
+	if !errors.Is(err, model.ErrOpenAIHTTPStatus) {
+		t.Fatalf("expected ErrOpenAIHTTPStatus, got %v", err)
+	}
+	if !model.IsProviderRuntimeUnavailable(err) {
+		t.Fatalf("expected reconstructed 503 error to remain runtime-unavailable, got %v", err)
+	}
+	var statusErr *model.OpenAIHTTPStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected OpenAIHTTPStatusError, got %T", err)
+	}
+	if statusErr.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", statusErr.StatusCode)
+	}
+}
+
+func TestModelFallbackErrorFromToolOutputRebuildsHTTPStatusErrorsWithoutMessage(t *testing.T) {
+	err := modelFallbackErrorFromToolOutput(map[string]any{"fallback_reason": "openai responses returned http status 401"})
+	if !errors.Is(err, model.ErrOpenAIHTTPStatus) {
+		t.Fatalf("expected ErrOpenAIHTTPStatus, got %v", err)
+	}
+	if model.IsProviderRuntimeUnavailable(err) {
+		t.Fatalf("expected reconstructed 401 error to remain non-retryable, got %v", err)
+	}
+	var statusErr *model.OpenAIHTTPStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected OpenAIHTTPStatusError, got %T", err)
+	}
+	if statusErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d", statusErr.StatusCode)
+	}
+}
+
+func TestBudgetDowngradeGenerationFallbackBuildsStructuredFallback(t *testing.T) {
+	trace, ok := budgetDowngradeGenerationFallback(Request{
+		TaskID:          "task_budget_helper",
+		BudgetDowngrade: map[string]any{"applied": true, "trigger_reason": "provider_unavailable", "summary": "Budget downgrade fallback applied."},
+		DeliveryType:    "bubble",
+		ResultTitle:     "Budget helper result",
+		Snapshot:        contextsvc.TaskContextSnapshot{InputType: "text", Text: "Explain this content."},
+		Intent:          map[string]any{"name": "summarize", "arguments": map[string]any{}},
+	}, "Explain this content.", model.ErrClientNotConfigured)
+	if !ok {
+		t.Fatal("expected budget fallback to be generated")
+	}
+	if trace.ModelInvocation["provider"] != "budget_downgrade_fallback" {
+		t.Fatalf("expected budget fallback provider marker, got %+v", trace.ModelInvocation)
+	}
+	if trace.GenerationOutput["fallback"] != true {
+		t.Fatalf("expected fallback generation output marker, got %+v", trace.GenerationOutput)
+	}
+}
+
+func TestIsBudgetFailureReasonRecognizesFormalFailureStrings(t *testing.T) {
+	for _, reason := range []string{
+		model.ErrClientNotConfigured.Error(),
+		model.ErrToolCallingNotSupported.Error(),
+		model.ErrModelProviderRequired.Error(),
+		model.ErrModelProviderUnsupported.Error(),
+		model.ErrSecretNotFound.Error(),
+		model.ErrSecretSourceFailed.Error(),
+		model.ErrOpenAIAPIKeyRequired.Error(),
+		model.ErrOpenAIEndpointRequired.Error(),
+		model.ErrOpenAIModelIDRequired.Error(),
+		model.ErrOpenAIHTTPStatus.Error(),
+		model.ErrOpenAIRequestFailed.Error(),
+		model.ErrOpenAIRequestTimeout.Error(),
+		model.ErrOpenAIResponseInvalid.Error(),
+		tools.ErrToolOutputInvalid.Error(),
+	} {
+		if !isBudgetFailureReason(reason) {
+			t.Fatalf("expected budget failure reason %q to be recognized", reason)
+		}
+	}
+	if isBudgetFailureReason("some unrelated failure") {
+		t.Fatal("expected unrelated error string to be ignored")
+	}
+}
+
+func TestBudgetFailureSignalRecognizesToolOutputInvalid(t *testing.T) {
+	signal := budgetFailureSignal(Request{BudgetDowngrade: map[string]any{"applied": true}}, tools.ErrToolOutputInvalid)
+	if signal == nil {
+		t.Fatal("expected tool output invalid to produce budget failure signal")
+	}
+	if signal["reason"] != tools.ErrToolOutputInvalid.Error() {
+		t.Fatalf("expected tool output invalid reason to be preserved, got %+v", signal)
+	}
+}
+
+func TestBudgetFailureSignalRecognizesProviderRuntimeUnavailable(t *testing.T) {
+	signal := budgetFailureSignal(Request{BudgetDowngrade: map[string]any{"applied": true}}, &model.OpenAIHTTPStatusError{StatusCode: http.StatusServiceUnavailable, Message: "service unavailable"})
+	if signal == nil {
+		t.Fatal("expected provider runtime failure to produce budget failure signal")
+	}
+	reason, _ := signal["reason"].(string)
+	if !strings.Contains(reason, "http status 503") {
+		t.Fatalf("expected provider runtime reason to be preserved, got %+v", signal)
 	}
 }
 
@@ -1612,7 +1834,7 @@ func TestExecuteDirectSidecarPageReadFailureReturnsMappedToolTrace(t *testing.T)
 	}
 }
 
-func TestExecuteFallsBackWhenModelFails(t *testing.T) {
+func TestExecuteFailsWhenModelFailsWithoutBudgetDowngrade(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
 	if err != nil {
@@ -1640,7 +1862,7 @@ func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 		plugin.NewService(),
 	)
 
-	result, err := service.Execute(context.Background(), Request{
+	_, err = service.Execute(context.Background(), Request{
 		TaskID:       "task_004",
 		RunID:        "run_004",
 		Title:        "解释内容",
@@ -1649,11 +1871,11 @@ func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 		DeliveryType: "bubble",
 		ResultTitle:  "解释结果",
 	})
-	if err != nil {
-		t.Fatalf("execute failed: %v", err)
+	if err == nil {
+		t.Fatal("expected formal prompt path to fail when the model call falls back")
 	}
-	if !strings.Contains(result.BubbleText, "需要解释的文本") {
-		t.Fatalf("expected fallback bubble to include normalized input, got %s", result.BubbleText)
+	if !strings.Contains(err.Error(), "provider unavailable") {
+		t.Fatalf("expected model failure detail to be preserved, got %v", err)
 	}
 }
 
@@ -1708,6 +1930,34 @@ func TestBuildScreenObservationFlowSucceeds(t *testing.T) {
 	}
 }
 
+func TestBuildScreenObservationFlowUsesMediaFramesForClip(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_sess_clip/frame-001.jpg", Text: "clip extracted frame shows error banner", Language: "eng", Source: "ocr_worker_text"}}
+	mediaStub := stubMediaWorkerClient{framesResult: tools.MediaFrameExtractResult{InputPath: "temp/screen_sess_clip/clip.webm", OutputDir: "temp/screen_sess_clip/frame_extract", FramePaths: []string{"temp/screen_sess_clip/frame_extract/frame-001.jpg"}, FrameCount: 1, Source: "media_worker_frames"}}
+	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, mediaStub)
+	flow, err := service.buildScreenObservationFlow(context.Background(), "task_screen_clip_001", tools.ScreenFrameCandidate{
+		FrameID:         "frame_clip_001",
+		ScreenSessionID: "screen_sess_clip",
+		CaptureMode:     tools.ScreenCaptureModeClip,
+		Source:          "voice",
+		Path:            "temp/screen_sess_clip/clip.webm",
+		CapturedAt:      time.Date(2026, 4, 19, 9, 0, 0, 0, time.UTC),
+		RetentionPolicy: tools.ScreenRetentionReview,
+		CleanupRequired: true,
+	}, "eng", "error_evidence", nil)
+	if err != nil {
+		t.Fatalf("buildScreenObservationFlow returned error: %v", err)
+	}
+	if flow.OCRInput["path"] != "temp/screen_sess_clip/frame_extract/frame-001.jpg" {
+		t.Fatalf("expected clip OCR input to use extracted frame, got %+v", flow.OCRInput)
+	}
+	if flow.ObservationSeed["analyzed_path"] != "temp/screen_sess_clip/frame_extract/frame-001.jpg" || flow.ObservationSeed["clip_frame_count"] != 1 {
+		t.Fatalf("expected clip observation patch, got %+v", flow.ObservationSeed)
+	}
+	if len(flow.CleanupPaths) != 3 || flow.CleanupPaths[0] != "temp/screen_sess_clip/clip_normalized.mp4" || flow.CleanupPaths[1] != "temp/screen_sess_clip/frame_extract/frame-001.jpg" || flow.CleanupPaths[2] != "temp/screen_sess_clip/frame_extract" {
+		t.Fatalf("expected clip cleanup paths to include extracted frame, got %+v", flow.CleanupPaths)
+	}
+}
+
 func TestBuildScreenObservationFlowReturnsOCRFailure(t *testing.T) {
 	ocrStub := stubOCRWorkerClient{err: tools.ErrOCRWorkerFailed}
 	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
@@ -1722,6 +1972,42 @@ func TestBuildScreenObservationFlowReturnsOCRFailure(t *testing.T) {
 	}, "eng", "error_evidence", nil)
 	if !errors.Is(err, tools.ErrOCRWorkerFailed) {
 		t.Fatalf("expected OCR worker failure, got %v", err)
+	}
+}
+
+func TestBuildScreenObservationFlowReturnsClipFramePreparationFailure(t *testing.T) {
+	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), stubMediaWorkerClient{err: tools.ErrMediaWorkerFailed})
+	_, err := service.buildScreenObservationFlow(context.Background(), "task_screen_clip_fail", tools.ScreenFrameCandidate{
+		FrameID:         "frame_clip_fail",
+		ScreenSessionID: "screen_sess_clip_fail",
+		CaptureMode:     tools.ScreenCaptureModeClip,
+		Source:          "voice",
+		Path:            "temp/screen_sess_clip_fail/clip.webm",
+		CapturedAt:      time.Date(2026, 4, 19, 9, 30, 0, 0, time.UTC),
+		RetentionPolicy: tools.ScreenRetentionReview,
+		CleanupRequired: true,
+	}, "eng", "error_evidence", nil)
+	if !errors.Is(err, tools.ErrMediaWorkerFailed) {
+		t.Fatalf("expected clip frame extraction failure to map to media worker error, got %v", err)
+	}
+}
+
+func TestBuildScreenObservationFlowRejectsInvalidClipFramePath(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "../outside/frame-001.jpg", Text: "clip extracted frame shows error banner", Language: "eng", Source: "ocr_worker_text"}}
+	mediaStub := stubMediaWorkerClient{framesResult: tools.MediaFrameExtractResult{InputPath: "temp/screen_sess_clip_invalid/clip.webm", OutputDir: "temp/screen_sess_clip_invalid/frame_extract", FramePaths: []string{"../outside/frame-001.jpg"}, FrameCount: 1, Source: "media_worker_frames"}}
+	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, mediaStub)
+	_, err := service.buildScreenObservationFlow(context.Background(), "task_screen_clip_invalid", tools.ScreenFrameCandidate{
+		FrameID:         "frame_clip_invalid",
+		ScreenSessionID: "screen_sess_clip_invalid",
+		CaptureMode:     tools.ScreenCaptureModeClip,
+		Source:          "voice",
+		Path:            "temp/screen_sess_clip_invalid/clip.webm",
+		CapturedAt:      time.Date(2026, 4, 19, 9, 45, 0, 0, time.UTC),
+		RetentionPolicy: tools.ScreenRetentionReview,
+		CleanupRequired: true,
+	}, "eng", "error_evidence", nil)
+	if !errors.Is(err, tools.ErrToolOutputInvalid) {
+		t.Fatalf("expected invalid clip frame path to be rejected, got %v", err)
 	}
 }
 
@@ -1751,6 +2037,31 @@ func TestBuildScreenAnalysisResultSucceeds(t *testing.T) {
 	}
 	if analysis.CitationSeed["artifact_id"] == "" || analysis.CitationSeed["ocr_excerpt"] == "" {
 		t.Fatalf("expected citation-ready seed, got %+v", analysis.CitationSeed)
+	}
+}
+
+func TestBuildScreenAnalysisResultKeepsClipCleanupPaths(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_clip/frame-001.jpg", Text: "clip summary text", Language: "eng", Source: "ocr_worker_text"}}
+	mediaStub := stubMediaWorkerClient{framesResult: tools.MediaFrameExtractResult{InputPath: "temp/screen_clip/clip.webm", OutputDir: "temp/screen_clip/frames", FramePaths: []string{"temp/screen_clip/frames/frame-001.jpg", "temp/screen_clip/frames/frame-002.jpg"}, FrameCount: 2, Source: "media_worker_frames"}}
+	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, mediaStub)
+	analysis, err := service.buildScreenAnalysisResult(context.Background(), "task_screen_analysis_clip", tools.ScreenFrameCandidate{
+		FrameID:         "frame_clip_010",
+		ScreenSessionID: "screen_sess_clip_010",
+		CaptureMode:     tools.ScreenCaptureModeClip,
+		Source:          "voice",
+		Path:            "temp/screen_clip/clip.webm",
+		CapturedAt:      time.Date(2026, 4, 19, 10, 0, 0, 0, time.UTC),
+		RetentionPolicy: tools.ScreenRetentionReview,
+		CleanupRequired: true,
+	}, "eng", "error_evidence", nil)
+	if err != nil {
+		t.Fatalf("buildScreenAnalysisResult returned error: %v", err)
+	}
+	if len(analysis.CleanupPaths) != 4 || analysis.CleanupPaths[0] != "temp/screen_clip/clip_normalized.mp4" {
+		t.Fatalf("expected clip cleanup paths to be preserved, got %+v", analysis.CleanupPaths)
+	}
+	if analysis.ObservationSummary["clip_worker_source"] != "media_worker_frames" {
+		t.Fatalf("expected clip observation summary to keep media worker source, got %+v", analysis.ObservationSummary)
 	}
 }
 
@@ -1798,6 +2109,13 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 	if result.ToolName != internalScreenAnalyzeIntent || !strings.Contains(result.BubbleText, "已分析屏幕内容") {
 		t.Fatalf("unexpected internal screen analysis result: %+v", result)
 	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Status != tools.ToolCallStatusSucceeded {
+		t.Fatalf("expected successful internal screen analysis tool call, got %+v", result.ToolCalls)
+	}
+	auditCandidate := mapValue(result.ToolCalls[0].Output, "audit_candidate")
+	if auditCandidate["action"] != "screen.capture.screenshot_analyze" || auditCandidate["result"] != "success" {
+		t.Fatalf("expected successful screen audit candidate on tool call, got %+v", result.ToolCalls[0].Output)
+	}
 	if len(result.Artifacts) != 1 || result.Artifacts[0]["artifact_type"] != "screen_capture" {
 		t.Fatalf("expected one screen capture artifact, got %+v", result.Artifacts)
 	}
@@ -1811,12 +2129,19 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 	if auditRecord["action"] != "screen.capture.screenshot_analyze" {
 		t.Fatalf("expected formalized screen audit action, got %+v", auditRecord)
 	}
+	if auditRecord["target"] != result.Artifacts[0]["path"] {
+		t.Fatalf("expected screen audit target to follow promoted artifact path, got audit=%+v artifacts=%+v", auditRecord, result.Artifacts)
+	}
 	auditMetadata := mapValue(auditRecord, "metadata")
 	if auditMetadata["screen_session_id"] == "" || auditMetadata["capture_mode"] != "screenshot" {
 		t.Fatalf("expected screen audit metadata, got %+v", auditRecord)
 	}
+	auditCandidateOutput := mapValue(result.ToolOutput, "audit_candidate")
+	if auditCandidateOutput["target"] != result.Artifacts[0]["path"] {
+		t.Fatalf("expected audit candidate target to follow promoted artifact path, got %+v", auditCandidateOutput)
+	}
 	cleanupSummary := mapValue(result.ToolOutput, "cleanup_summary")
-	if cleanupSummary["reason"] != "screen_analysis_pending_cleanup" || cleanupSummary["skipped_count"] != 1 {
+	if cleanupSummary["reason"] != "screen_artifact_promoted" || cleanupSummary["deleted_count"] != 1 {
 		t.Fatalf("expected cleanup summary to be attached, got %+v", result.ToolOutput)
 	}
 	traceSummary := mapValue(result.ToolOutput, "trace_summary")
@@ -1828,23 +2153,30 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 		t.Fatalf("expected eval summary to be attached, got %+v", result.ToolOutput)
 	}
 	cleanupPlan := mapValue(result.ToolOutput, "cleanup_plan")
-	if cleanupPlan["cleanup_required"] != true {
-		t.Fatalf("expected cleanup plan to be attached, got %+v", result.ToolOutput)
+	if len(cleanupPlan) != 0 {
+		t.Fatalf("expected cleanup plan to be cleared after artifact promotion, got %+v", result.ToolOutput)
 	}
 	cleanupExecuted := mapValue(result.ToolOutput, "cleanup_executed")
-	if cleanupExecuted["deleted_count"] != 0 || cleanupExecuted["skipped_count"] != 1 {
+	if cleanupExecuted["deleted_count"] != 1 || cleanupExecuted["skipped_count"] != 0 {
 		t.Fatalf("expected cleanup execution summary, got %+v", result.ToolOutput)
 	}
 	persisted := mapValue(result.ToolOutput, "artifact_persisted")
 	if persisted["persisted"] != true {
 		t.Fatalf("expected artifact persistence result, got %+v", result.ToolOutput)
 	}
-	recoveryPoint := mapValue(result.ToolOutput, "recovery_point")
-	if recoveryPoint["kind"] != "screen_cleanup" || recoveryPoint["cleanup_status"] != "pending_retry" {
-		t.Fatalf("expected deferred cleanup recovery semantics, got %+v", result.ToolOutput)
+	artifactPath := result.Artifacts[0]["path"].(string)
+	if !strings.HasPrefix(artifactPath, "artifacts/screen/task_screen_exec_001/") {
+		t.Fatalf("expected promoted artifact path, got %q", artifactPath)
 	}
-	if _, err := os.Stat(filepath.Join(workspaceRoot, "temp", "screen_sess_020", "frame_020.png")); err != nil {
-		t.Fatalf("expected persisted screen artifact source to remain until dedicated cleanup, got %v", err)
+	recoveryPoint := mapValue(result.ToolOutput, "recovery_point")
+	if len(recoveryPoint) != 0 {
+		t.Fatalf("expected artifact promotion to clear deferred cleanup recovery semantics, got %+v", result.ToolOutput)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, "temp", "screen_sess_020", "frame_020.png")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected promoted artifact source to be moved out of temp storage, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(artifactPath))); err != nil {
+		t.Fatalf("expected promoted artifact file to exist, got %v", err)
 	}
 	records, total, err := service.artifactStore.ListArtifacts(context.Background(), "task_screen_exec_001", 20, 0)
 	if err != nil || total != 1 || len(records) != 1 {
@@ -1852,6 +2184,128 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 	}
 	if records[0].ArtifactType != "screen_capture" {
 		t.Fatalf("expected screen_capture artifact record, got %+v", records[0])
+	}
+	if records[0].Path != artifactPath || persisted["path"] != artifactPath {
+		t.Fatalf("expected persisted artifact path to follow promoted artifact, record=%+v persisted=%+v", records[0], persisted)
+	}
+}
+
+func TestScreenAuditTargetCandidatePrefersPromotedArtifactPath(t *testing.T) {
+	candidate := tools.ScreenFrameCandidate{ScreenSessionID: "screen_sess_target", CaptureMode: tools.ScreenCaptureModeScreenshot, Path: "temp/screen_sess_target/frame_001.png"}
+	updated := screenAuditTargetCandidate(candidate, map[string]any{"path": "artifacts/screen/task_demo/frame_001.png"})
+	if updated.Path != "artifacts/screen/task_demo/frame_001.png" {
+		t.Fatalf("expected promoted artifact path to replace temp audit target, got %+v", updated)
+	}
+	unchanged := screenAuditTargetCandidate(candidate, nil)
+	if unchanged.Path != candidate.Path {
+		t.Fatalf("expected missing artifact path to leave audit target unchanged, got %+v", unchanged)
+	}
+}
+
+func TestExecuteInternalScreenAnalysisRetainsClipFrameCleanupPlan(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_clip_exec/frames/frame-001.jpg", Text: "clip execution summary", Language: "eng", Source: "ocr_worker_text"}}
+	mediaStub := stubMediaWorkerClient{framesResult: tools.MediaFrameExtractResult{InputPath: "temp/screen_clip_exec/clip.webm", OutputDir: "temp/screen_clip_exec/frames", FramePaths: []string{"temp/screen_clip_exec/frames/frame-001.jpg"}, FrameCount: 1, Source: "media_worker_frames"}}
+	service, workspaceRoot := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, mediaStub)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "temp", "screen_clip_exec"), 0o755); err != nil {
+		t.Fatalf("mkdir clip temp dir failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "temp", "screen_clip_exec", "clip.webm"), []byte("fake clip capture"), 0o644); err != nil {
+		t.Fatalf("write clip temp file failed: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "temp", "screen_clip_exec", "frames"), 0o755); err != nil {
+		t.Fatalf("mkdir clip frame dir failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "temp", "screen_clip_exec", "frames", "frame-001.jpg"), []byte("fake frame"), 0o644); err != nil {
+		t.Fatalf("write clip frame file failed: %v", err)
+	}
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_screen_clip_exec",
+		RunID:        "run_screen_clip_exec",
+		Title:        "分析屏幕录屏",
+		Intent:       map[string]any{"name": internalScreenAnalyzeIntent, "arguments": map[string]any{"frame_id": "frame_clip_exec", "screen_session_id": "screen_clip_exec", "path": "temp/screen_clip_exec/clip.webm", "capture_mode": "clip", "language": "eng", "evidence_role": "error_evidence"}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请分析录屏中的错误"},
+		DeliveryType: "bubble",
+		ResultTitle:  "屏幕录屏分析结果",
+	})
+	if err != nil {
+		t.Fatalf("internal clip screen analysis execute failed: %v", err)
+	}
+	cleanupPlan := mapValue(result.ToolOutput, "cleanup_plan")
+	paths := stringSliceValue(cleanupPlan, "paths")
+	if len(paths) != 3 || paths[0] != "temp/screen_clip_exec/clip_normalized.mp4" || paths[1] != "temp/screen_clip_exec/frames/frame-001.jpg" || paths[2] != "temp/screen_clip_exec/frames" {
+		t.Fatalf("expected clip cleanup plan to retain extracted frame cleanup, got %+v", cleanupPlan)
+	}
+	hasOCRManifest := false
+	hasMediaManifest := false
+	for _, asset := range result.ExtensionAssets {
+		if asset["asset_kind"] != storage.ExtensionAssetKindPluginManifest {
+			continue
+		}
+		if asset["asset_id"] == "ocr" {
+			hasOCRManifest = true
+		}
+		if asset["asset_id"] == "media" {
+			hasMediaManifest = true
+		}
+	}
+	if !hasOCRManifest || !hasMediaManifest {
+		t.Fatalf("expected clip execution to attribute both OCR and media plugin manifests, assets=%+v", result.ExtensionAssets)
+	}
+	cleanupSummary := mapValue(result.ToolOutput, "cleanup_summary")
+	if cleanupSummary["deleted_count"] != 1 || cleanupSummary["skipped_count"] != 3 {
+		t.Fatalf("expected clip cleanup summary to merge promoted clip artifact and pending frame cleanup, got %+v", cleanupSummary)
+	}
+	recoveryPoint := mapValue(result.ToolOutput, "recovery_point")
+	if recoveryPoint["kind"] != "screen_cleanup" || recoveryPoint["cleanup_status"] != "pending_retry" {
+		t.Fatalf("expected clip analysis to keep deferred cleanup recovery semantics, got %+v", recoveryPoint)
+	}
+	artifactPath := result.Artifacts[0]["path"].(string)
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(artifactPath))); err != nil {
+		t.Fatalf("expected promoted clip artifact to exist, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, "temp", "screen_clip_exec", "frames", "frame-001.jpg")); err != nil {
+		t.Fatalf("expected extracted clip frame to remain pending cleanup, got %v", err)
+	}
+}
+
+func TestExecuteInternalScreenAnalysisReturnsFailedAuditTrailOnOCRFailure(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{err: tools.ErrOCRWorkerFailed}
+	service, workspaceRoot := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "temp", "screen_fail_exec"), 0o755); err != nil {
+		t.Fatalf("mkdir screen failure temp dir failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "temp", "screen_fail_exec", "frame_fail.png"), []byte("fake screen capture"), 0o644); err != nil {
+		t.Fatalf("write screen failure temp file failed: %v", err)
+	}
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_screen_exec_fail",
+		RunID:        "run_screen_exec_fail",
+		Title:        "分析失败截图",
+		Intent:       map[string]any{"name": internalScreenAnalyzeIntent, "arguments": map[string]any{"frame_id": "frame_fail", "screen_session_id": "screen_fail_exec", "path": "temp/screen_fail_exec/frame_fail.png", "capture_mode": "screenshot", "language": "eng", "evidence_role": "error_evidence"}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请分析截图中的错误"},
+		DeliveryType: "bubble",
+		ResultTitle:  "屏幕分析失败结果",
+	})
+	if !errors.Is(err, tools.ErrOCRWorkerFailed) {
+		t.Fatalf("expected OCR worker failure, got result=%+v err=%v", result, err)
+	}
+	if result.ToolName != internalScreenAnalyzeIntent || len(result.ToolCalls) != 1 || result.ToolCalls[0].Status != tools.ToolCallStatusFailed {
+		t.Fatalf("expected failed screen analysis tool trace, got %+v", result)
+	}
+	auditCandidate := mapValue(result.ToolCalls[0].Output, "audit_candidate")
+	if auditCandidate["result"] != "failed" || auditCandidate["action"] != "screen.capture.screenshot_analyze" {
+		t.Fatalf("expected failed screen audit candidate, got %+v", result.ToolCalls[0].Output)
+	}
+	cleanupPlan := mapValue(result.ToolOutput, "cleanup_plan")
+	if len(stringSliceValue(cleanupPlan, "paths")) != 1 || stringSliceValue(cleanupPlan, "paths")[0] != "temp/screen_fail_exec/frame_fail.png" {
+		t.Fatalf("expected failure cleanup plan to retain screenshot temp path, got %+v", result.ToolOutput)
+	}
+	recoveryPoint := mapValue(result.ToolOutput, "recovery_point")
+	if recoveryPoint["kind"] != "screen_cleanup" || recoveryPoint["cleanup_status"] != "pending_retry" {
+		t.Fatalf("expected failure recovery point for pending cleanup, got %+v", result.ToolOutput)
+	}
+	if result.AuditRecord == nil || result.AuditRecord["result"] != "failed" {
+		t.Fatalf("expected failed screen audit record, got %+v", result.AuditRecord)
 	}
 }
 
@@ -1884,7 +2338,7 @@ func TestExecuteInternalScreenClipAnalysisUsesMediaWorkerOutputs(t *testing.T) {
 	if result.ToolName != internalScreenAnalyzeIntent || !strings.Contains(result.BubbleText, "release build failed") {
 		t.Fatalf("unexpected internal screen clip analysis result: %+v", result)
 	}
-	if len(result.Artifacts) != 1 || result.Artifacts[0]["mime_type"] != "video/webm" || result.Artifacts[0]["path"] != "artifacts/screen_capture/task_screen_clip_exec_001/clip_020.webm" {
+	if len(result.Artifacts) != 1 || result.Artifacts[0]["mime_type"] != "video/webm" || !strings.HasPrefix(stringValue(result.Artifacts[0], "path", ""), "artifacts/screen/task_screen_clip_exec_001/") {
 		t.Fatalf("expected one persisted clip artifact, got %+v", result.Artifacts)
 	}
 	auditRecord := result.AuditRecord
@@ -1900,10 +2354,11 @@ func TestExecuteInternalScreenClipAnalysisUsesMediaWorkerOutputs(t *testing.T) {
 		t.Fatalf("expected clip cleanup plan to track clip, normalized media, and frame outputs, got %+v", cleanupPlan)
 	}
 	observationSummary := mapValue(result.ToolOutput, "observation_summary")
-	if observationSummary["clip_path"] != "artifacts/screen_capture/task_screen_clip_exec_001/clip_020.webm" || observationSummary["analysis_frame_path"] != "temp/screen_sess_clip_020/clip_020_frames/frame-001.jpg" || observationSummary["temp_clip_path"] != "temp/screen_sess_clip_020/clip_020.webm" {
+	if !strings.HasPrefix(stringValue(observationSummary, "clip_path", ""), "artifacts/screen/task_screen_clip_exec_001/") || observationSummary["analysis_frame_path"] != "temp/screen_sess_clip_020/clip_020_frames/frame-001.jpg" || observationSummary["temp_clip_path"] != "temp/screen_sess_clip_020/clip_020.webm" {
 		t.Fatalf("expected clip observation summary to include media normalization metadata, got %+v", observationSummary)
 	}
-	if _, err := os.Stat(filepath.Join(workspaceRoot, "artifacts", "screen_capture", "task_screen_clip_exec_001", "clip_020.webm")); err != nil {
+	artifactPath := stringValue(result.Artifacts[0], "path", "")
+	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(artifactPath))); err != nil {
 		t.Fatalf("expected clip artifact move to persist durable workspace artifact, got %v", err)
 	}
 	recoveryPoint := mapValue(result.ToolOutput, "recovery_point")
@@ -2015,10 +2470,10 @@ func TestScreenHelpersCoverNilAndPendingBranches(t *testing.T) {
 	if got := service.executeScreenCleanupPlan(nil); got != nil {
 		t.Fatalf("expected nil cleanup plan to skip execution, got %+v", got)
 	}
-	if got := service.screenAnalysisCleanupPlan(tools.ScreenFrameCandidate{}); got != nil {
+	if got := service.screenAnalysisCleanupPlan(tools.ScreenFrameCandidate{}, nil); got != nil {
 		t.Fatalf("expected no cleanup plan for empty candidate, got %+v", got)
 	}
-	if got := service.screenAnalysisCleanupSummary(tools.ScreenFrameCandidate{}); got != nil {
+	if got := service.screenAnalysisCleanupSummary(nil); got != nil {
 		t.Fatalf("expected no cleanup summary for empty candidate, got %+v", got)
 	}
 	if got := service.screenAnalysisRecoveryPoint(context.Background(), "task_screen_none", map[string]any{"paths": []string{}}, nil); got != nil {
@@ -2045,6 +2500,17 @@ func TestScreenHelpersCoverNilAndPendingBranches(t *testing.T) {
 	service.checkpoint = nil
 	if got := service.screenAnalysisRecoveryPoint(context.Background(), "task_screen_norecovery", map[string]any{"paths": []string{"temp/demo.png"}}, map[string]any{"skipped_count": 1, "skipped_paths": []string{"temp/demo.png"}}); got != nil {
 		t.Fatalf("expected nil recovery point when checkpoint unavailable, got %+v", got)
+	}
+	mergedCleanup := mergeScreenCleanupSummaries(map[string]any{"deleted_paths": []string{"temp/a.png"}, "deleted_count": 1}, map[string]any{"skipped_paths": []string{"temp/b.png"}, "skipped_count": 1})
+	if mergedCleanup["deleted_count"] != 1 || mergedCleanup["skipped_count"] != 1 {
+		t.Fatalf("expected merged cleanup summary to keep both deleted and skipped counts, got %+v", mergedCleanup)
+	}
+	trimmedPlan := removeScreenCleanupPaths(map[string]any{"paths": []string{"temp/a.png", "temp/b.png"}}, []string{"temp/a.png"})
+	if len(stringSliceValue(trimmedPlan, "paths")) != 1 || stringSliceValue(trimmedPlan, "paths")[0] != "temp/b.png" {
+		t.Fatalf("expected cleanup plan path removal to keep remaining paths, got %+v", trimmedPlan)
+	}
+	if caps := internalScreenAnalysisCapabilities(Request{Intent: map[string]any{"arguments": map[string]any{"capture_mode": string(tools.ScreenCaptureModeClip)}}}); len(caps) != 2 || caps[1] != "extract_frames" {
+		t.Fatalf("expected clip capture mode to attribute media extraction capability, got %+v", caps)
 	}
 }
 
