@@ -10,6 +10,10 @@
     "beforeBuildCommand": "corepack pnpm build"
   },
   "bundle": {
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
     "externalBin": [
       "binaries/local-service"
     ]
