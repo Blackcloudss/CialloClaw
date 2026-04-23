@@ -53,51 +53,51 @@ runs:
       env:
         RELEASE_VERSION: ${{ inputs.release_version }}
       run: |
-        node -e "
-        const fs = require('node:fs');
+        @'
+        const fs = require("node:fs");
         const version = process.env.RELEASE_VERSION;
 
-        const packageJsonPath = 'apps/desktop/package.json';
-        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+        const packageJsonPath = "apps/desktop/package.json";
+        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
         packageJson.version = version;
-        fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
+        fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + "\n");
 
-        const tauriConfigPath = 'apps/desktop/src-tauri/tauri.conf.json';
-        const tauriConfig = JSON.parse(fs.readFileSync(tauriConfigPath, 'utf8'));
+        const tauriConfigPath = "apps/desktop/src-tauri/tauri.conf.json";
+        const tauriConfig = JSON.parse(fs.readFileSync(tauriConfigPath, "utf8"));
         tauriConfig.version = version;
-        fs.writeFileSync(tauriConfigPath, JSON.stringify(tauriConfig, null, 2) + '\n');
+        fs.writeFileSync(tauriConfigPath, JSON.stringify(tauriConfig, null, 2) + "\n");
 
-        const cargoTomlPath = 'apps/desktop/src-tauri/Cargo.toml';
-        let cargoToml = fs.readFileSync(cargoTomlPath, 'utf8');
-        cargoToml = cargoToml.replace(/^version = \".*\"/m, 'version = \"' + version + '\"');
+        const cargoTomlPath = "apps/desktop/src-tauri/Cargo.toml";
+        let cargoToml = fs.readFileSync(cargoTomlPath, "utf8");
+        cargoToml = cargoToml.replace(/^version = ".*"/m, `version = "${version}"`);
         fs.writeFileSync(cargoTomlPath, cargoToml);
-        "
+        '@ | node -
 
     - name: Verify rewritten release manifests
       shell: pwsh
       env:
         RELEASE_VERSION: ${{ inputs.release_version }}
       run: |
-        node -e "
-        const fs = require('node:fs');
+        @'
+        const fs = require("node:fs");
         const version = process.env.RELEASE_VERSION;
 
-        const packageJson = JSON.parse(fs.readFileSync('apps/desktop/package.json', 'utf8'));
-        const tauriConfig = JSON.parse(fs.readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
-        const cargoToml = fs.readFileSync('apps/desktop/src-tauri/Cargo.toml', 'utf8');
+        const packageJson = JSON.parse(fs.readFileSync("apps/desktop/package.json", "utf8"));
+        const tauriConfig = JSON.parse(fs.readFileSync("apps/desktop/src-tauri/tauri.conf.json", "utf8"));
+        const cargoToml = fs.readFileSync("apps/desktop/src-tauri/Cargo.toml", "utf8");
 
         if (packageJson.version !== version) {
-          throw new Error('apps/desktop/package.json was not rewritten to the requested release version.');
+          throw new Error("apps/desktop/package.json was not rewritten to the requested release version.");
         }
 
         if (tauriConfig.version !== version) {
-          throw new Error('apps/desktop/src-tauri/tauri.conf.json was not rewritten to the requested release version.');
+          throw new Error("apps/desktop/src-tauri/tauri.conf.json was not rewritten to the requested release version.");
         }
 
-        if (!cargoToml.includes('version = \\\"' + version + '\\\"')) {
-          throw new Error('apps/desktop/src-tauri/Cargo.toml was not rewritten to the requested release version.');
+        if (!cargoToml.includes(`version = "${version}"`)) {
+          throw new Error("apps/desktop/src-tauri/Cargo.toml was not rewritten to the requested release version.");
         }
-        "
+        '@ | node -
 
     - name: Run desktop checks
       shell: pwsh
