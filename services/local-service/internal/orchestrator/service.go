@@ -1052,7 +1052,10 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	if securitySummary == nil {
 		securitySummary = map[string]any{}
 	}
-	approvalRequest := activeTaskDetailApprovalRequest(task)
+	approvalRequest := s.pendingApprovalRequestFromStorage(task.TaskID, task.RiskLevel)
+	if approvalRequest == nil {
+		approvalRequest = activeTaskDetailApprovalRequest(task)
+	}
 	if task.Status != "waiting_auth" {
 		approvalRequest = nil
 	}
@@ -1060,17 +1063,17 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	if approvalRequest != nil {
 		approvalRequestValue = approvalRequest
 	}
-	authorizationRecord := normalizeTaskDetailAuthorizationRecord(task.TaskID, task.Authorization)
+	authorizationRecord := s.latestAuthorizationRecordFromStorage(task.TaskID)
 	if authorizationRecord == nil {
-		authorizationRecord = s.latestAuthorizationRecordFromStorage(task.TaskID)
+		authorizationRecord = normalizeTaskDetailAuthorizationRecord(task.TaskID, task.Authorization)
 	}
 	authorizationRecordValue := any(nil)
 	if authorizationRecord != nil {
 		authorizationRecordValue = authorizationRecord
 	}
-	auditRecord := latestFormalTaskAuditRecord(task.TaskID, task.AuditRecords)
+	auditRecord := s.latestAuditRecordFromStorage(task.TaskID)
 	if auditRecord == nil {
-		auditRecord = s.latestAuditRecordFromStorage(task.TaskID)
+		auditRecord = latestFormalTaskAuditRecord(task.TaskID, task.AuditRecords)
 	}
 	auditRecordValue := any(nil)
 	if auditRecord != nil {
@@ -1088,7 +1091,12 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	}
 	runtimeSummary := s.buildTaskRuntimeSummary(task)
 	deliveryResultValue := any(nil)
-	if normalizedDelivery := normalizeTaskDetailDeliveryResult(task.TaskID, task.DeliveryResult); len(normalizedDelivery) > 0 {
+	deliveryResult := s.latestDeliveryResultFromStorage(task.TaskID)
+	if len(deliveryResult) == 0 {
+		deliveryResult = task.DeliveryResult
+	}
+	normalizedDelivery := normalizeTaskDetailDeliveryResult(task.TaskID, deliveryResult)
+	if len(normalizedDelivery) > 0 {
 		deliveryResultValue = normalizedDelivery
 	}
 
@@ -5760,10 +5768,7 @@ func (s *Service) artifactsForTask(taskID string, runtimeArtifacts []map[string]
 }
 
 func (s *Service) citationsForTask(taskID string, runtimeCitations []map[string]any) []map[string]any {
-	if len(runtimeCitations) > 0 {
-		return cloneMapSlice(runtimeCitations)
-	}
-	return s.loadTaskCitationsFromStorage(taskID)
+	return mergeCitationsWithStored(s.loadTaskCitationsFromStorage(taskID), runtimeCitations)
 }
 
 func (s *Service) loadArtifactsFromStorage(taskID string, limit, offset int) []map[string]any {
@@ -5876,6 +5881,43 @@ func mergeArtifactsWithStored(runtimeArtifacts, storedArtifacts []map[string]any
 		}
 	}
 	return merged
+}
+
+func mergeCitationsWithStored(storedCitations, runtimeCitations []map[string]any) []map[string]any {
+	if len(storedCitations) == 0 && len(runtimeCitations) == 0 {
+		return nil
+	}
+	merged := make([]map[string]any, 0, len(storedCitations)+len(runtimeCitations))
+	seen := make(map[string]struct{})
+	for _, group := range [][]map[string]any{storedCitations, runtimeCitations} {
+		for index, citation := range group {
+			mergeKey := citationMergeKey(citation, index)
+			if _, ok := seen[mergeKey]; ok {
+				continue
+			}
+			seen[mergeKey] = struct{}{}
+			merged = append(merged, cloneMap(citation))
+		}
+	}
+	return merged
+}
+
+func citationMergeKey(citation map[string]any, index int) string {
+	if citationID := strings.TrimSpace(stringValue(citation, "citation_id", "")); citationID != "" {
+		return citationID
+	}
+	parts := []string{
+		strings.TrimSpace(stringValue(citation, "task_id", "")),
+		strings.TrimSpace(stringValue(citation, "source_ref", "")),
+		strings.TrimSpace(stringValue(citation, "artifact_id", "")),
+		strings.TrimSpace(stringValue(citation, "label", "")),
+		strings.TrimSpace(stringValue(citation, "excerpt_text", "")),
+	}
+	key := strings.Join(parts, "|")
+	if strings.Trim(key, "|") != "" {
+		return key
+	}
+	return fmt.Sprintf("citation_%d", index)
 }
 
 func artifactMapFromStorage(record storage.ArtifactRecord) map[string]any {
