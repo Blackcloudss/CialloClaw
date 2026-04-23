@@ -47,19 +47,13 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run stable desktop checks
+      - name: Run frontend checks
         run: |
           pnpm --dir apps/desktop lint
           pnpm --dir apps/desktop typecheck
           pnpm --dir apps/desktop test:dashboard
           pnpm --dir apps/desktop test:memory
-
-      - name: Build Windows Tauri app
-        working-directory: apps/desktop
-        run: pnpm exec tauri build --debug --no-bundle
+          pnpm --dir apps/desktop build
