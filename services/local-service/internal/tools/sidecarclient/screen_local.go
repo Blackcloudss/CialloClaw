@@ -3,6 +3,8 @@ package sidecarclient
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -125,12 +127,7 @@ func (c *localScreenCaptureClient) CaptureKeyframe(_ context.Context, input tool
 func (c *localScreenCaptureClient) CleanupSessionArtifacts(_ context.Context, input tools.ScreenCleanupInput) (tools.ScreenCleanupResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	deleted := make([]string, 0)
-	for _, tempPath := range c.tempPaths[input.ScreenSessionID] {
-		if err := c.fileSystem.Remove(tempPath); err == nil {
-			deleted = append(deleted, tempPath)
-		}
-	}
+	deleted, _ := removeLocalScreenCleanupPath(c.fileSystem, screenSessionTempDir(input.ScreenSessionID))
 	delete(c.tempPaths, input.ScreenSessionID)
 	return tools.ScreenCleanupResult{
 		ScreenSessionID: input.ScreenSessionID,
@@ -143,22 +140,93 @@ func (c *localScreenCaptureClient) CleanupSessionArtifacts(_ context.Context, in
 func (c *localScreenCaptureClient) CleanupExpiredScreenTemps(_ context.Context, input tools.ScreenCleanupInput) (tools.ScreenCleanupResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	cutoff := cleanupCutoffTime(input.ExpiredBefore, c.now().UTC())
 	deleted := make([]string, 0)
 	for sessionID, state := range c.sessions {
-		if !state.ExpiresAt.IsZero() && !state.ExpiresAt.After(input.ExpiredBefore) {
-			for _, tempPath := range c.tempPaths[sessionID] {
-				if err := c.fileSystem.Remove(tempPath); err == nil {
-					deleted = append(deleted, tempPath)
-				}
-			}
+		if shouldCleanupScreenSessionState(state, cutoff) {
+			removedPaths, _ := removeLocalScreenCleanupPath(c.fileSystem, screenSessionTempDir(sessionID))
+			deleted = append(deleted, removedPaths...)
 			delete(c.tempPaths, sessionID)
 		}
 	}
+	deleted = append(deleted, c.cleanupOrphanedSessionTemps(cutoff)...)
 	return tools.ScreenCleanupResult{
 		Reason:       firstNonEmpty(input.Reason, "expired_cleanup"),
 		DeletedPaths: deleted,
 		DeletedCount: len(deleted),
 	}, nil
+}
+
+// cleanupOrphanedSessionTemps reclaims leftover temp screen directories that no
+// longer have live session state after crashes or interrupted cleanup flows.
+func (c *localScreenCaptureClient) cleanupOrphanedSessionTemps(cutoff time.Time) []string {
+	if c == nil || c.fileSystem == nil {
+		return nil
+	}
+	entries, err := fs.ReadDir(c.fileSystem, "temp")
+	if err != nil {
+		return nil
+	}
+	deleted := make([]string, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "screen_sess_") {
+			continue
+		}
+		sessionID := entry.Name()
+		if state, ok := c.sessions[sessionID]; ok && !shouldCleanupScreenSessionState(state, cutoff) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if _, ok := c.sessions[sessionID]; !ok && info.ModTime().After(cutoff) {
+			continue
+		}
+		removedPaths, err := removeLocalScreenCleanupPath(c.fileSystem, path.Join("temp", sessionID))
+		if err != nil {
+			continue
+		}
+		deleted = append(deleted, removedPaths...)
+	}
+	return deleted
+}
+
+func screenSessionTempDir(screenSessionID string) string {
+	screenSessionID = strings.TrimSpace(screenSessionID)
+	if screenSessionID == "" {
+		return ""
+	}
+	return path.Join("temp", screenSessionID)
+}
+
+func removeLocalScreenCleanupPath(fileSystem platform.FileSystemAdapter, cleanupPath string) ([]string, error) {
+	if fileSystem == nil {
+		return nil, fmt.Errorf("file system unavailable")
+	}
+	cleanupPath = strings.TrimSpace(cleanupPath)
+	if cleanupPath == "" {
+		return nil, nil
+	}
+	entries, err := fs.ReadDir(fileSystem, cleanupPath)
+	if err == nil {
+		deleted := make([]string, 0, len(entries)+1)
+		for _, entry := range entries {
+			childDeleted, childErr := removeLocalScreenCleanupPath(fileSystem, path.Join(cleanupPath, entry.Name()))
+			deleted = append(deleted, childDeleted...)
+			if childErr != nil {
+				return deleted, childErr
+			}
+		}
+		if err := fileSystem.Remove(cleanupPath); err != nil {
+			return deleted, err
+		}
+		return append(deleted, cleanupPath), nil
+	}
+	if err := fileSystem.Remove(cleanupPath); err != nil {
+		return nil, err
+	}
+	return []string{cleanupPath}, nil
 }
 
 func (c *localScreenCaptureClient) captureFromWorkspaceSource(input tools.ScreenCaptureInput, keyframe bool) (tools.ScreenFrameCandidate, error) {
