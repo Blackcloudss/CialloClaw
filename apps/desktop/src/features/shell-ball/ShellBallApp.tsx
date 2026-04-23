@@ -691,10 +691,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
     void (async () => {
       const presentation = await buildDesktopOnboardingPresentation({
-        anchors:
-          onboardingSession.step === "welcome"
-            ? []
-            : [mascotRef.current?.querySelector(".shell-ball-mascot__hotspot") ?? mascotRef.current],
+        anchors: [],
         placement: onboardingSession.step === "welcome" ? "center" : undefined,
         step: onboardingSession.step,
         windowLabel: "shell-ball",
