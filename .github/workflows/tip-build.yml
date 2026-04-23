@@ -37,7 +37,18 @@ jobs:
           $shortSha = $env:GITHUB_SHA.Substring(0, 7)
           $packageJson = Get-Content 'apps/desktop/package.json' -Raw | ConvertFrom-Json
           $baseVersion = $packageJson.version
-          $tipVersion = "$baseVersion-tip.$env:GITHUB_RUN_NUMBER"
+          if ($baseVersion -notmatch '^(?<core>\d+\.\d+\.\d+)') {
+            throw "The desktop package version must start with a semver core."
+          }
+
+          $baseVersionCore = $Matches.core
+          $utcNow = [DateTime]::UtcNow
+          $tipVersion = "{0}-{1}{2:000}.{3}.{4}" -f `
+            $baseVersionCore, `
+            $utcNow.ToString('yy'), `
+            $utcNow.DayOfYear, `
+            $utcNow.ToString('HHmm'), `
+            $utcNow.ToString('ss')
           $compareUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA"
 
           if (-not [string]::IsNullOrWhiteSpace($env:PREVIOUS_SHA) -and $env:PREVIOUS_SHA -ne '0000000000000000000000000000000000000000') {

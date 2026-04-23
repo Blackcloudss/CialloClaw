@@ -39,9 +39,35 @@ jobs:
             exit 1
           fi
 
+          if [[ ! "$release_version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-.+)?$ ]]; then
+            echo "The release tag must resolve to a semver-like version." >&2
+            exit 1
+          fi
+
+          release_core="${BASH_REMATCH[1]}"
+          prerelease="${release_version#"$release_core"}"
+          resolved_release_version="$release_version"
+
+          if [ "$prerelease" != "$release_version" ]; then
+            prerelease="${prerelease#-}"
+            prerelease_valid=true
+            IFS='.' read -r -a prerelease_parts <<< "$prerelease"
+
+            for part in "${prerelease_parts[@]}"; do
+              if [[ ! "$part" =~ ^[0-9]+$ ]] || (( 10#$part > 65535 )); then
+                prerelease_valid=false
+                break
+              fi
+            done
+
+            if [ "$prerelease_valid" != true ]; then
+              resolved_release_version="${release_core}-$(date -u +%y%j).$(date -u +%H%M).$(date -u +%S)"
+            fi
+          fi
+
           {
             echo "release_tag=$release_tag"
-            echo "release_version=$release_version"
+            echo "release_version=$resolved_release_version"
           } >> "$GITHUB_OUTPUT"
 
       - name: Prepare the desktop release payload
