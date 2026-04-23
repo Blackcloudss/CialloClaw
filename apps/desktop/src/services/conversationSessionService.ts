@@ -1,10 +1,7 @@
 import type { Task, TaskUpdatedNotification } from "@cialloclaw/protocol";
 
-type TaskWithOptionalSessionId = Task & {
-  session_id?: unknown;
-};
-
-type TaskUpdatedWithOptionalSessionId = TaskUpdatedNotification & {
+type BackendOwnedSessionCarrier = {
+  task_id?: unknown;
   session_id?: unknown;
 };
 
@@ -43,6 +40,14 @@ function storeSession(taskId: unknown, sessionId: unknown) {
   return normalizedSessionId;
 }
 
+function rememberConversationSession(value: BackendOwnedSessionCarrier | null | undefined) {
+  if (value == null) {
+    return null;
+  }
+
+  return storeSession(value.task_id, value.session_id);
+}
+
 /**
  * Returns the latest hidden conversation session acknowledged by the backend.
  * The frontend does not generate session ids locally anymore.
@@ -52,29 +57,21 @@ export function getCurrentConversationSessionId() {
 }
 
 /**
- * Records the backend-owned session carried by a formal task payload when
- * available, while remaining compatible with older payloads that do not expose
- * `task.session_id` yet.
+ * Records the backend-owned session carried by a formal task payload.
+ * The normalization path remains permissive so stale local services that still
+ * omit `task.session_id` fail soft instead of breaking the desktop cache.
  */
 export function rememberConversationSessionFromTask(task: Task | null | undefined) {
-  if (task == null) {
-    return null;
-  }
-
-  return storeSession(task.task_id, (task as TaskWithOptionalSessionId).session_id);
+  return rememberConversationSession(task as BackendOwnedSessionCarrier | null | undefined);
 }
 
 /**
- * Records the backend-owned session when task.updated starts exposing it.
- * Current stable payloads may still omit `session_id`, so this remains a no-op
- * until the backend contract lands.
+ * Records the backend-owned session carried by task.updated.
+ * The notification contract now includes `session_id`, but permissive
+ * normalization keeps older backend builds from breaking session recall.
  */
 export function rememberConversationSessionFromTaskUpdated(payload: TaskUpdatedNotification | null | undefined) {
-  if (payload == null) {
-    return null;
-  }
-
-  return storeSession(payload.task_id, (payload as TaskUpdatedWithOptionalSessionId).session_id);
+  return rememberConversationSession(payload as BackendOwnedSessionCarrier | null | undefined);
 }
 
 export function getConversationSessionIdForTask(taskId: string | null | undefined) {

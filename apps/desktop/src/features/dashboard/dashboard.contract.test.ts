@@ -456,8 +456,11 @@ function withDesktopAliasRuntime<T>(
 }
 
 function createTask(overrides: Partial<Task> = {}): Task {
+  const { session_id = null, ...rest } = overrides;
+
   return {
     task_id: "task_dashboard_001",
+    session_id,
     title: "Review dashboard safety state",
     status: "waiting_auth",
     source_type: "hover_input",
@@ -467,7 +470,7 @@ function createTask(overrides: Partial<Task> = {}): Task {
     intent: null,
     current_step: "Awaiting approval",
     risk_level: "yellow",
-    ...overrides,
+    ...rest,
   };
 }
 
