@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
@@ -42,6 +43,7 @@ var (
 	ErrStorageQueryFailed     = errors.New("storage query failed")
 	ErrStrongholdAccessFailed = errors.New("stronghold access failed")
 	ErrRecoveryPointNotFound  = errors.New("recovery point not found")
+	persistedToolCallEventSeq atomic.Uint64
 )
 
 const (
@@ -1367,8 +1369,8 @@ func normalizeTaskToolCallMap(value map[string]any) map[string]any {
 		"created_at":   createdAt,
 		"tool_name":    stringValue(value, "tool_name", ""),
 		"status":       outwardToolCallStatus(stringValue(value, "status", "pending")),
-		"input":        cloneMap(mapValue(value, "input")),
-		"output":       cloneMap(mapValue(value, "output")),
+		"input":        cloneMapOrEmpty(mapValue(value, "input")),
+		"output":       cloneMapOrEmpty(mapValue(value, "output")),
 		"error_code":   errorCode,
 		"duration_ms":  intValue(value, "duration_ms", 0),
 	}
@@ -1395,11 +1397,18 @@ func taskToolCallMap(record tools.ToolCallRecord) map[string]any {
 		"created_at":   createdAt,
 		"tool_name":    record.ToolName,
 		"status":       outwardToolCallStatus(string(record.Status)),
-		"input":        cloneMap(record.Input),
-		"output":       cloneMap(record.Output),
+		"input":        cloneMapOrEmpty(record.Input),
+		"output":       cloneMapOrEmpty(record.Output),
 		"error_code":   errorCode,
 		"duration_ms":  record.DurationMS,
 	}
+}
+
+func cloneMapOrEmpty(values map[string]any) map[string]any {
+	if cloned := cloneMap(values); cloned != nil {
+		return cloned
+	}
+	return map[string]any{}
 }
 
 func outwardToolCallStatus(status string) string {
@@ -7139,7 +7148,7 @@ func (s *Service) persistExecutionToolCallEvents(task runengine.TaskRecord, task
 		}
 		createdAt := startedAt.Add(time.Duration(index) * time.Millisecond)
 		records = append(records, storage.EventRecord{
-			EventID:     fmt.Sprintf("evt_%s_%s_%d", task.TaskID, strings.ReplaceAll(toolCall.ToolCallID, ".", "_"), index),
+			EventID:     executionToolCallEventID(task.TaskID, toolCall, index, createdAt),
 			RunID:       task.RunID,
 			TaskID:      task.TaskID,
 			StepID:      toolCall.StepID,
@@ -7153,6 +7162,21 @@ func (s *Service) persistExecutionToolCallEvents(task runengine.TaskRecord, task
 		return
 	}
 	_ = s.storage.LoopRuntimeStore().SaveEvents(context.Background(), records)
+}
+
+func executionToolCallEventID(taskID string, toolCall tools.ToolCallRecord, index int, createdAt time.Time) string {
+	if sanitizedToolCallID := strings.TrimSpace(strings.ReplaceAll(toolCall.ToolCallID, ".", "_")); sanitizedToolCallID != "" {
+		return fmt.Sprintf("evt_%s_%s_%d", taskID, sanitizedToolCallID, index)
+	}
+	sanitizedToolName := strings.TrimSpace(strings.ReplaceAll(toolCall.ToolName, ".", "_"))
+	if sanitizedToolName == "" {
+		sanitizedToolName = "tool_call"
+	}
+	sanitizedStepID := strings.TrimSpace(strings.ReplaceAll(toolCall.StepID, ".", "_"))
+	if sanitizedStepID == "" {
+		sanitizedStepID = "task_scope"
+	}
+	return fmt.Sprintf("evt_%s_%s_%s_%d_%d_%d", taskID, sanitizedToolName, sanitizedStepID, index, createdAt.UnixNano(), persistedToolCallEventSeq.Add(1))
 }
 
 func (s *Service) persistExecutionDeliveryResult(task runengine.TaskRecord, taskIntent map[string]any, deliveryResult map[string]any) {

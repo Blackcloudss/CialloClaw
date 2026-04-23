@@ -10787,6 +10787,11 @@ func TestServiceTaskToolCallsListNormalizesProtocolStatuses(t *testing.T) {
 	if len(items) != 1 || items[0]["status"] != "running" {
 		t.Fatalf("expected outward running status, got %+v", items)
 	}
+	inputMap, inputOK := items[0]["input"].(map[string]any)
+	outputMap, outputOK := items[0]["output"].(map[string]any)
+	if !inputOK || !outputOK || len(inputMap) != 0 || len(outputMap) != 0 {
+		t.Fatalf("expected tool call payload maps to stay non-null objects, got %+v", items[0])
+	}
 }
 
 func TestServiceTaskToolCallsListFallsBackToCompatibilityLatestToolCall(t *testing.T) {
@@ -10814,6 +10819,84 @@ func TestServiceTaskToolCallsListFallsBackToCompatibilityLatestToolCall(t *testi
 	items := result["items"].([]map[string]any)
 	if len(items) != 1 || items[0]["tool_name"] != "read_file" || mapValue(items[0], "output")["content_preview"] != "compat preview" {
 		t.Fatalf("expected compatibility fallback tool call, got %+v", items)
+	}
+}
+
+func TestServiceTaskToolCallsListCompatibilityFallbackReturnsNonNilPayloadMaps(t *testing.T) {
+	service := newTestService()
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_tool_call_compat_nil",
+		Title:             "compat tool call nil payload",
+		SourceType:        "floating_ball",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "read_file", "arguments": map[string]any{"path": "notes/source.txt"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "green",
+		Timeline:          initialTimeline("processing", "generate_output"),
+	})
+	mutateRuntimeTask(t, service.runEngine, task.TaskID, func(record *runengine.TaskRecord) {
+		record.LatestToolCall = map[string]any{
+			"tool_call_id": "tool_call_compat_nil",
+			"task_id":      task.TaskID,
+			"run_id":       task.RunID,
+			"tool_name":    "read_file",
+			"status":       "started",
+			"duration_ms":  0,
+		}
+	})
+
+	result, err := service.TaskToolCallsList(map[string]any{"task_id": task.TaskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task tool calls list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one compatibility tool call item, got %+v", items)
+	}
+	inputMap, inputOK := items[0]["input"].(map[string]any)
+	outputMap, outputOK := items[0]["output"].(map[string]any)
+	if !inputOK || !outputOK || len(inputMap) != 0 || len(outputMap) != 0 {
+		t.Fatalf("expected compatibility tool call payload maps to stay non-null objects, got %+v", items[0])
+	}
+}
+
+func TestPersistExecutionToolCallEventsFallsBackWhenToolCallIDMissing(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "missing tool call id")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_tool_call_event_fallback",
+		Title:             "tool call event fallback",
+		SourceType:        "screen_capture",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "screen_analyze", "arguments": map[string]any{"language": "eng"}},
+		PreferredDelivery: "bubble",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "generate_output",
+		RiskLevel:         "yellow",
+		Timeline:          initialTimeline("processing", "generate_output"),
+	})
+	toolCall := tools.ToolCallRecord{
+		TaskID:     task.TaskID,
+		RunID:      task.RunID,
+		ToolName:   "screen_analyze",
+		Status:     tools.ToolCallStatusSucceeded,
+		DurationMS: 8,
+	}
+
+	service.persistExecutionToolCallEvents(task, task.Intent, []tools.ToolCallRecord{toolCall})
+	service.persistExecutionToolCallEvents(task, task.Intent, []tools.ToolCallRecord{toolCall})
+
+	result, err := service.TaskEventsList(map[string]any{"task_id": task.TaskID, "type": "tool_call.completed", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task events list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected two persisted tool_call.completed events, got %+v", items)
+	}
+	if items[0]["event_id"] == items[1]["event_id"] {
+		t.Fatalf("expected fallback event ids to remain unique, got %+v", items)
 	}
 }
 

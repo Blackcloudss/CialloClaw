@@ -148,3 +148,136 @@ func TestSQLiteToolCallStoreConstructorAndDecodeFailurePaths(t *testing.T) {
 		t.Fatalf("expected initialize on closed db to fail, got %v", err)
 	}
 }
+
+func TestSQLiteToolCallStoreBackfillPreservesLegacyRowOrder(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "tool-call-legacy-order.db")
+	db, err := sql.Open(sqliteDriverName, databasePath)
+	if err != nil {
+		t.Fatalf("open legacy sqlite db failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`CREATE TABLE tool_calls (tool_call_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL, step_id TEXT NOT NULL, tool_name TEXT NOT NULL, status TEXT NOT NULL, input_json TEXT NOT NULL, output_json TEXT NOT NULL, error_code INTEGER, duration_ms INTEGER NOT NULL)`); err != nil {
+		t.Fatalf("create legacy tool_calls schema failed: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO tool_calls (tool_call_id, run_id, task_id, step_id, tool_name, status, input_json, output_json, error_code, duration_ms) VALUES ('zzz_old', 'run_legacy', 'task_legacy', 'step_001', 'read_file', 'running', '{}', '{}', NULL, 1)`); err != nil {
+		t.Fatalf("insert old legacy row failed: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO tool_calls (tool_call_id, run_id, task_id, step_id, tool_name, status, input_json, output_json, error_code, duration_ms) VALUES ('aaa_new', 'run_legacy', 'task_legacy', 'step_002', 'read_file', 'running', '{}', '{}', NULL, 2)`); err != nil {
+		t.Fatalf("insert new legacy row failed: %v", err)
+	}
+	_ = db.Close()
+
+	store, err := NewSQLiteToolCallStore(databasePath)
+	if err != nil {
+		t.Fatalf("NewSQLiteToolCallStore migrated legacy schema failed: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	items, total, err := store.ListToolCalls(context.Background(), "task_legacy", "run_legacy", 10, 0)
+	if err != nil || total != 2 || len(items) != 2 {
+		t.Fatalf("expected migrated legacy rows to be queryable, total=%d items=%+v err=%v", total, items, err)
+	}
+	if items[0].ToolCallID != "aaa_new" || items[1].ToolCallID != "zzz_old" {
+		t.Fatalf("expected legacy ordering to preserve rowid-desc semantics, got %+v", items)
+	}
+}
+
+func TestInMemoryToolCallStoreListOrdersByCreatedAtDescending(t *testing.T) {
+	store := newInMemoryToolCallStore()
+	for _, record := range []tools.ToolCallRecord{
+		{ToolCallID: "tool_call_old", RunID: "run_memory", TaskID: "task_memory", ToolName: "read_file", Status: tools.ToolCallStatusSucceeded, CreatedAt: "2026-04-18T10:45:00Z"},
+		{ToolCallID: "tool_call_new", RunID: "run_memory", TaskID: "task_memory", ToolName: "read_file", Status: tools.ToolCallStatusSucceeded, CreatedAt: "2026-04-18T10:45:02Z"},
+		{ToolCallID: "tool_call_other_run", RunID: "run_other", TaskID: "task_memory", ToolName: "read_file", Status: tools.ToolCallStatusSucceeded, CreatedAt: "2026-04-18T10:45:03Z"},
+	} {
+		if err := store.SaveToolCall(context.Background(), record); err != nil {
+			t.Fatalf("SaveToolCall returned error: %v", err)
+		}
+	}
+	items, total, err := store.ListToolCalls(context.Background(), "task_memory", "run_memory", 10, 0)
+	if err != nil || total != 2 || len(items) != 2 {
+		t.Fatalf("expected filtered in-memory tool call list, total=%d items=%+v err=%v", total, items, err)
+	}
+	if items[0].ToolCallID != "tool_call_new" || items[1].ToolCallID != "tool_call_old" {
+		t.Fatalf("expected in-memory store to sort by created_at desc, got %+v", items)
+	}
+	if paged, total, err := store.ListToolCalls(context.Background(), "task_memory", "run_memory", 1, 1); err != nil || total != 2 || len(paged) != 1 || paged[0].ToolCallID != "tool_call_old" {
+		t.Fatalf("expected in-memory pagination to preserve sorted order, total=%d items=%+v err=%v", total, paged, err)
+	}
+}
+
+func TestEnsureToolCallColumnsNoopWhenCreatedAtAlreadyPresent(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "tool-call-columns.db")
+	db, err := sql.Open(sqliteDriverName, databasePath)
+	if err != nil {
+		t.Fatalf("open sqlite db failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`CREATE TABLE tool_calls (tool_call_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL, step_id TEXT NOT NULL, tool_name TEXT NOT NULL, status TEXT NOT NULL, input_json TEXT NOT NULL, output_json TEXT NOT NULL, error_code INTEGER, duration_ms INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT '')`); err != nil {
+		t.Fatalf("create tool_calls schema failed: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO tool_calls (tool_call_id, run_id, task_id, step_id, tool_name, status, input_json, output_json, error_code, duration_ms, created_at) VALUES ('tool_call_existing', 'run_existing', 'task_existing', 'step_001', 'read_file', 'running', '{}', '{}', NULL, 1, '2026-04-18T10:45:00Z')`); err != nil {
+		t.Fatalf("insert tool_calls row failed: %v", err)
+	}
+	if err := ensureToolCallColumns(context.Background(), db); err != nil {
+		t.Fatalf("ensureToolCallColumns returned error: %v", err)
+	}
+	var createdAt string
+	if err := db.QueryRow(`SELECT created_at FROM tool_calls WHERE tool_call_id = 'tool_call_existing'`).Scan(&createdAt); err != nil {
+		t.Fatalf("scan created_at failed: %v", err)
+	}
+	if createdAt != "2026-04-18T10:45:00Z" {
+		t.Fatalf("expected ensureToolCallColumns to keep existing created_at, got %q", createdAt)
+	}
+}
+
+func TestBackfillToolCallCreatedAtHandlesEmptyAndClosedDB(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "tool-call-backfill-empty.db")
+	db, err := sql.Open(sqliteDriverName, databasePath)
+	if err != nil {
+		t.Fatalf("open sqlite db failed: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE tool_calls (tool_call_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL, step_id TEXT NOT NULL, tool_name TEXT NOT NULL, status TEXT NOT NULL, input_json TEXT NOT NULL, output_json TEXT NOT NULL, error_code INTEGER, duration_ms INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT '')`); err != nil {
+		t.Fatalf("create tool_calls schema failed: %v", err)
+	}
+	if err := backfillToolCallCreatedAt(context.Background(), db); err != nil {
+		t.Fatalf("expected empty backfill to succeed, got %v", err)
+	}
+	_ = db.Close()
+	if err := backfillToolCallCreatedAt(context.Background(), db); err == nil || !strings.Contains(err.Error(), "load tool_calls rowids") {
+		t.Fatalf("expected closed db backfill to fail, got %v", err)
+	}
+	if err := ensureToolCallColumns(context.Background(), db); err == nil || !strings.Contains(err.Error(), "inspect tool_calls schema") {
+		t.Fatalf("expected ensureToolCallColumns on closed db to fail, got %v", err)
+	}
+}
+
+func TestEnsureToolCallColumnsAddsAndBackfillsCreatedAt(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "tool-call-columns-add.db")
+	db, err := sql.Open(sqliteDriverName, databasePath)
+	if err != nil {
+		t.Fatalf("open sqlite db failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`CREATE TABLE tool_calls (tool_call_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL, step_id TEXT NOT NULL, tool_name TEXT NOT NULL, status TEXT NOT NULL, input_json TEXT NOT NULL, output_json TEXT NOT NULL, error_code INTEGER, duration_ms INTEGER NOT NULL)`); err != nil {
+		t.Fatalf("create legacy tool_calls schema failed: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO tool_calls (tool_call_id, run_id, task_id, step_id, tool_name, status, input_json, output_json, error_code, duration_ms) VALUES ('tool_call_missing_created_at', 'run_add', 'task_add', 'step_001', 'read_file', 'running', '{}', '{}', NULL, 1)`); err != nil {
+		t.Fatalf("insert legacy tool_calls row failed: %v", err)
+	}
+	if err := ensureToolCallColumns(context.Background(), db); err != nil {
+		t.Fatalf("ensureToolCallColumns returned error: %v", err)
+	}
+	columns, err := toolCallTableColumns(context.Background(), db)
+	if err != nil {
+		t.Fatalf("toolCallTableColumns returned error: %v", err)
+	}
+	if _, ok := columns["created_at"]; !ok {
+		t.Fatalf("expected created_at column to be added, columns=%+v", columns)
+	}
+	var createdAt string
+	if err := db.QueryRow(`SELECT created_at FROM tool_calls WHERE tool_call_id = 'tool_call_missing_created_at'`).Scan(&createdAt); err != nil {
+		t.Fatalf("scan created_at failed: %v", err)
+	}
+	if createdAt == "" {
+		t.Fatal("expected ensureToolCallColumns to backfill created_at")
+	}
+}

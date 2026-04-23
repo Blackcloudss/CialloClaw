@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -251,9 +252,56 @@ func ensureToolCallColumns(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("migrate tool_calls add created_at: %w", err)
 		}
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE tool_calls SET created_at = COALESCE(NULLIF(created_at, ''), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) WHERE created_at = ''`); err != nil {
-		return fmt.Errorf("backfill tool_calls created_at: %w", err)
+	if err := backfillToolCallCreatedAt(ctx, db); err != nil {
+		return err
 	}
+	return nil
+}
+
+func backfillToolCallCreatedAt(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `SELECT rowid FROM tool_calls WHERE created_at = '' ORDER BY rowid ASC`)
+	if err != nil {
+		return fmt.Errorf("load tool_calls rowids for created_at backfill: %w", err)
+	}
+	defer rows.Close()
+	rowIDs := make([]int64, 0)
+	for rows.Next() {
+		var rowID int64
+		if err := rows.Scan(&rowID); err != nil {
+			return fmt.Errorf("scan tool_calls rowid for created_at backfill: %w", err)
+		}
+		rowIDs = append(rowIDs, rowID)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate tool_calls rowids for created_at backfill: %w", err)
+	}
+	if len(rowIDs) == 0 {
+		return nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tool_calls created_at backfill: %w", err)
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	const layout = time.RFC3339Nano
+	base := time.Unix(0, 0).UTC()
+	for index, rowID := range rowIDs {
+		if index > math.MaxInt32 {
+			return fmt.Errorf("backfill tool_calls created_at exceeded supported row count")
+		}
+		createdAt := base.Add(time.Duration(index) * time.Second).Format(layout)
+		if _, err := tx.ExecContext(ctx, `UPDATE tool_calls SET created_at = ? WHERE rowid = ? AND created_at = ''`, createdAt, rowID); err != nil {
+			return fmt.Errorf("backfill tool_calls created_at row %d: %w", rowID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit tool_calls created_at backfill: %w", err)
+	}
+	tx = nil
 	return nil
 }
 
