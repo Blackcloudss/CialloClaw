@@ -32,6 +32,7 @@
 - JSON-RPC 方法字段、通知字段、错误码枚举和 schema 细节。
 - 表结构、索引、DDL、迁移脚本、序列化格式和文件落盘细节。
 - 模块内部类图、函数签名、Prompt 细节、工具参数模板与代码级实现。
+- 代码目录如何组织的详细说明；若确有必要，只在附录 A 保留概要映射。
 - 测试策略、提交规范、排期执行方式和工程治理流程。
 
 这些内容分别由 `docs/protocol-design.md`、`docs/data-design.md`、`docs/module-design.md`、`docs/development-guidelines.md` 和 `docs/work-priority-plan.md` 承接。
