@@ -1,4 +1,4 @@
-import { Window, getCurrentWindow } from "@tauri-apps/api/window";
+import { Window, getCurrentWindow, monitorFromPoint } from "@tauri-apps/api/window";
 import { hideOnboardingWindow, syncOnboardingWindowFrame } from "@/platform/onboardingWindowController";
 import { shellBallWindowLabels } from "@/platform/shellBallWindowController";
 import { loadStoredValue, removeStoredValue, saveStoredValue } from "@/platform/storage";
@@ -63,6 +63,32 @@ const DESKTOP_ONBOARDING_WINDOW_LABELS = [
   "control-panel",
   "onboarding",
 ] as const;
+
+async function buildDefaultWelcomePresentation(windowLabel: DesktopOnboardingPresentation["windowLabel"]) {
+  const currentWindow = getCurrentWindow();
+  const outerPosition = await currentWindow.outerPosition();
+  const monitor = await monitorFromPoint(outerPosition.x, outerPosition.y);
+
+  if (monitor === null) {
+    return null;
+  }
+
+  const monitorPosition = monitor.position.toLogical(monitor.scaleFactor);
+  const monitorSize = monitor.size.toLogical(monitor.scaleFactor);
+
+  return {
+    highlights: [],
+    monitorFrame: {
+      x: monitorPosition.x,
+      y: monitorPosition.y,
+      width: monitorSize.width,
+      height: monitorSize.height,
+    },
+    placement: "center",
+    step: "welcome",
+    windowLabel,
+  } satisfies DesktopOnboardingPresentation;
+}
 
 function createDefaultDesktopOnboardingStatus(): DesktopOnboardingStatus {
   return {
@@ -236,6 +262,13 @@ export async function startDesktopOnboarding(source: DesktopOnboardingSource) {
   };
 
   await setDesktopOnboardingSession(session);
+  const currentWindowLabel = getCurrentWindow().label;
+  const windowLabel: DesktopOnboardingPresentation["windowLabel"] =
+    currentWindowLabel === "dashboard" || currentWindowLabel === "control-panel" ? currentWindowLabel : "shell-ball";
+  const welcomePresentation = await buildDefaultWelcomePresentation(windowLabel);
+  if (welcomePresentation !== null) {
+    await setDesktopOnboardingPresentation(welcomePresentation);
+  }
   return session;
 }
 
