@@ -82,6 +82,19 @@ function loadDashboardTaskDetailNavigationSource() {
   return readFileSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardTaskDetailNavigation.ts"), "utf8");
 }
 
+function loadConversationSessionServiceModule() {
+  return withDesktopAliasRuntime((requireFn) => {
+    const modulePath = resolve(desktopRoot, "src/services/conversationSessionService.ts");
+    delete requireFn.cache[modulePath];
+
+    return requireFn(modulePath) as {
+      getConversationSessionIdForTask: (taskId: string | null | undefined) => string | undefined;
+      getCurrentConversationSessionId: () => string | undefined;
+      rememberConversationSessionFromTask: (task: Task | null | undefined) => string | null;
+    };
+  });
+}
+
 function loadTaskPageQueryModule() {
   return withDesktopAliasRuntime((requireFn) =>
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskPage.query.js")) as {
@@ -1884,6 +1897,62 @@ test("dashboard task-detail routing deduplicates retry request ids and accepts t
   assert.match(taskPageSource, /const detailRouteState = readDashboardTaskDetailRouteState\(location\.state\);[\s\S]*if \(detailRouteState\) \{[\s\S]*setSelectedTaskId\(detailRouteState\.focusTaskId\);[\s\S]*navigate\(location\.pathname, \{ replace: true, state: null \}\);[\s\S]*return;/);
   assert.doesNotMatch(taskPageSource, /detailRouteState && allTasks\.some\(\(item\) => item\.task\.task_id === detailRouteState\.focusTaskId\)/);
   assert.match(taskPageSource, /if \(selectedTaskId && detailOpen\) \{/);
+});
+
+test("conversation session reuse expires after the backend freshness window", () => {
+  const originalDate = globalThis.Date;
+
+  class FreshFakeDate extends Date {
+    constructor(...args: ConstructorParameters<typeof Date>) {
+      super(args.length === 0 ? FreshFakeDate.now() : args[0]);
+    }
+
+    static now() {
+      return originalDate.parse("2026-04-23T10:00:00.000Z");
+    }
+  }
+
+  Object.defineProperty(globalThis, "Date", {
+    configurable: true,
+    value: FreshFakeDate,
+  });
+
+  try {
+    const service = loadConversationSessionServiceModule();
+
+    assert.equal(
+      service.rememberConversationSessionFromTask(
+        createTask({
+          session_id: "sess_backend_fresh",
+          task_id: "task_dashboard_session",
+        }),
+      ),
+      "sess_backend_fresh",
+    );
+    assert.equal(service.getCurrentConversationSessionId(), "sess_backend_fresh");
+    assert.equal(service.getConversationSessionIdForTask("task_dashboard_session"), "sess_backend_fresh");
+
+    Object.defineProperty(globalThis, "Date", {
+      configurable: true,
+      value: class ExpiredFakeDate extends Date {
+        constructor(...args: ConstructorParameters<typeof Date>) {
+          super(args.length === 0 ? ExpiredFakeDate.now() : args[0]);
+        }
+
+        static now() {
+          return originalDate.parse("2026-04-23T10:15:00.001Z");
+        }
+      },
+    });
+
+    assert.equal(service.getCurrentConversationSessionId(), undefined);
+    assert.equal(service.getConversationSessionIdForTask("task_dashboard_session"), undefined);
+  } finally {
+    Object.defineProperty(globalThis, "Date", {
+      configurable: true,
+      value: originalDate,
+    });
+  }
 });
 
 test("note page consumes note query helpers instead of inlining note bucket contracts", () => {
