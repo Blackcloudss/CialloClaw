@@ -11,6 +11,7 @@ type ShellBallSurfaceProps = {
   edgeDockRevealed?: boolean;
   edgeDockSide?: "left" | "right" | null;
   fileDropActive?: boolean;
+  highlightMascot?: boolean;
   mascotRef?: RefObject<HTMLDivElement>;
   overlayContent?: ReactNode;
   textDropActive?: boolean;
@@ -87,6 +88,7 @@ export function ShellBallSurface({
   edgeDockRevealed = false,
   edgeDockSide = null,
   fileDropActive = false,
+  highlightMascot = false,
   mascotRef,
   overlayContent,
   textDropActive = false,
@@ -95,7 +97,7 @@ export function ShellBallSurface({
   visualState,
   voicePreview,
   voiceHoldProgress = 0,
-  inputFocused = false,
+  inputFocused: _inputFocused = false,
   motionConfig,
   onDragStart,
   onDragMove,
@@ -176,6 +178,7 @@ export function ShellBallSurface({
                 <div
                   ref={mascotRef}
                   className="shell-ball-surface__mascot-shell"
+                  data-onboarding-highlight={highlightMascot ? "true" : "false"}
                 >
                     <ShellBallMascot
                       edgeDockRevealed={edgeDockRevealed}
