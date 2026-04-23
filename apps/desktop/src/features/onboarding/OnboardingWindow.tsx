@@ -103,12 +103,13 @@ export function OnboardingWindow() {
     }
 
     const rect = cardRef.current.getBoundingClientRect();
+    const interactivePadding = 12;
     void setOnboardingInteractiveRegions([
       {
-        x: Math.round(rect.left),
-        y: Math.round(rect.top),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
+        x: Math.round(rect.left - interactivePadding),
+        y: Math.round(rect.top - interactivePadding),
+        width: Math.round(rect.width + interactivePadding * 2),
+        height: Math.round(rect.height + interactivePadding * 2),
       },
     ]);
 

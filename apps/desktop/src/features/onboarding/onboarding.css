@@ -41,6 +41,7 @@
   max-width: min(25rem, calc(100vw - 2rem));
   padding: 1.3rem 1.35rem;
   position: absolute;
+  pointer-events: auto;
   z-index: 2;
 }
 
@@ -99,7 +100,16 @@
 
 .desktop-onboarding-window__button {
   border-radius: 999px;
+  cursor: pointer;
   min-height: 2.7rem;
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
+}
+
+.desktop-onboarding-window__button:hover {
+  transform: translateY(-1px);
 }
 
 .desktop-onboarding-window__button--primary {
