@@ -623,7 +623,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - 当输入文本和 `context.page / context.screen / context.behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
-- 若客户端后续改为通过 `agent.task.start` 显式提交 `intent.name = screen_analyze`，后端应复用同一条主链路；`agent.input.submit` 不需要新增平行入口。
+- `agent.task.start` 不接受显式 `intent` 入参；若客户端误传该字段，协议层应忽略，并继续走后端统一的意图建议主链路。
 
 ### agent.input.submit 入参示例
 
@@ -763,7 +763,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - 当输入文本和 `page_context / screen / behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
-- 若客户端已显式提供 `intent.name = screen_analyze`，后端应复用同一条主链路；若客户端未显式提供 intent，也不应要求前端额外发明平行入口。
+- `agent.task.start` 不接受显式 `intent` 入参；视觉型任务仍由后端根据 `input / context / delivery` 统一推断，不要求前端发明平行入口。
 
 ### agent.task.start 入参示例
 
