@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use tauri::ipc::Channel;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -59,6 +59,7 @@ const TRAY_MENU_OPEN_CONTROL_PANEL_ID: &str = "open-control-panel";
 const TRAY_MENU_QUIT_ID: &str = "quit-app";
 const LOCAL_PATH_SETTINGS_CLIENT_TIME: &str = "1970-01-01T00:00:00Z";
 static LOCAL_PATH_SETTINGS_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
+static CONTROL_PANEL_WINDOW_CREATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 #[cfg(windows)]
 macro_rules! makelparam {
@@ -452,6 +453,13 @@ fn open_or_focus_control_panel_window(app: &tauri::AppHandle) {
         return;
     }
 
+    if CONTROL_PANEL_WINDOW_CREATION_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+
     let handle = app.clone();
     std::thread::spawn(move || {
         let create_result = WebviewWindowBuilder::new(
@@ -465,6 +473,8 @@ fn open_or_focus_control_panel_window(app: &tauri::AppHandle) {
         .visible(true)
         .focused(true)
         .build();
+
+        CONTROL_PANEL_WINDOW_CREATION_IN_PROGRESS.store(false, Ordering::SeqCst);
 
         if let Err(error) = create_result {
             eprintln!("failed to create control panel from tray: {error}");
