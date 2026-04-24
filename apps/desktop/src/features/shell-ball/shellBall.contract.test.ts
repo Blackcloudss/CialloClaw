@@ -5314,6 +5314,7 @@ test("shell-ball ignores untracked approval.pending notifications without a pend
 });
 
 test("shell-ball delivery.ready auto-opens tracked formal delivery results", async () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
   let deliveryReadyListener: ((payload: {
     task_id: string;
     delivery_result: {
@@ -5506,6 +5507,7 @@ test("shell-ball delivery.ready auto-opens tracked formal delivery results", asy
     },
   );
 
+  assert.match(coordinatorSource, /void autoOpenShellBallDeliveryResult\(payload\.task_id, payload\.delivery_result\);/);
   assert.deepEqual(openTaskDeliveryCalls, ["task-delivery-ready"]);
   assert.deepEqual(openTaskDetailCalls, []);
 });
@@ -5722,6 +5724,7 @@ test("shell-ball approval bubble actions stay on the formal security respond pat
   assert.match(appSource, /onDenyApprovalBubble=\{\(bubbleId\) => \{\s*handleCoordinatorBubbleAction\(\{ action: "deny_approval", bubbleId, source: "bubble" \}\);/);
   assert.match(bubbleWindowSource, /emitShellBallBubbleAction\("allow_approval", bubbleId\)/);
   assert.match(bubbleWindowSource, /emitShellBallBubbleAction\("deny_approval", bubbleId\)/);
+  assert.match(bubbleWindowSource, /clickThrough: snapshot\.bubbleRegion\.clickThrough,/);
   assert.match(coordinatorSource, /if \(payload\.action === "allow_approval" \|\| payload\.action === "deny_approval"\) \{/);
   assert.match(coordinatorSource, /const decision: ApprovalDecision = payload\.action === "allow_approval" \? "allow_once" : "deny_once";/);
   assert.match(coordinatorSource, /const response = await respondSecurityDetailed\(\{/);

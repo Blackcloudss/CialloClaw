@@ -810,8 +810,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         }),
       ]),
     );
-    revealBubbleRegion();
-  }, [revealBubbleRegion]);
+    revealBubbleRegionRef.current();
+  }, []);
 
   const registerShellBallTask = useCallback((taskId: string, turnIndex?: number) => {
     shellBallTaskIdsRef.current.add(taskId);
@@ -1809,8 +1809,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         ]);
       });
       revealBubbleRegion();
+      void autoOpenShellBallDeliveryResult(payload.task_id, payload.delivery_result);
     });
-  }, [revealBubbleRegion]);
+  }, [autoOpenShellBallDeliveryResult, revealBubbleRegion]);
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
