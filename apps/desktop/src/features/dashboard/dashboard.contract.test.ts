@@ -239,13 +239,29 @@ function loadSettingsServiceModule() {
             model: string;
           };
           general: {
+            voice_type: string;
             download: {
               ask_before_save_each_file: boolean;
+              workspace_path: string;
             };
+          };
+          floating_ball: {
+            auto_snap: boolean;
+            idle_translucent: boolean;
+            position_mode: string;
+            size: string;
           };
           memory: {
             enabled: boolean;
             lifecycle: string;
+            work_summary_interval: {
+              unit: string;
+              value: number;
+            };
+            profile_refresh_interval: {
+              unit: string;
+              value: number;
+            };
           };
         };
       };
@@ -254,16 +270,95 @@ function loadSettingsServiceModule() {
   );
 }
 
-function loadDashboardSettingsMutationModule(rpcMethods?: {
-  controlTask?: (params: AgentTaskControlParams) => Promise<AgentTaskControlResult>;
-  convertNotepadToTask?: (params: AgentNotepadConvertToTaskParams) => Promise<AgentNotepadConvertToTaskResult>;
-  updateSettings?: (params: unknown) => Promise<unknown>;
-  getSettingsDetailed?: (params: unknown) => Promise<unknown>;
-  getTaskDetail?: (params: AgentTaskDetailGetParams) => Promise<AgentTaskDetailGetResult>;
-  listNotepad?: (params: AgentNotepadListParams) => Promise<AgentNotepadListResult>;
-  listTasks?: (params: AgentTaskListParams) => Promise<AgentTaskListResult>;
-  updateNotepad?: (params: AgentNotepadUpdateParams) => Promise<AgentNotepadUpdateResult>;
-}) {
+function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOverrides) {
+  return withDesktopAliasRuntime((requireFn) => {
+    const modulePath = resolve(desktopRoot, "src/services/controlPanelService.ts");
+    delete requireFn.cache[modulePath];
+
+    return requireFn(modulePath) as {
+      loadControlPanelData: () => Promise<{
+        source: "rpc";
+        settings: {
+          general: {
+            voice_type: string;
+            download: {
+              ask_before_save_each_file: boolean;
+              workspace_path: string;
+            };
+          };
+          floating_ball: {
+            auto_snap: boolean;
+            idle_translucent: boolean;
+            position_mode: string;
+            size: string;
+          };
+          memory: {
+            work_summary_interval: {
+              unit: string;
+              value: number;
+            };
+            profile_refresh_interval: {
+              unit: string;
+              value: number;
+            };
+          };
+        };
+        inspector: {
+          task_sources: string[];
+          inspection_interval: {
+            unit: string;
+            value: number;
+          };
+          inspect_on_file_change: boolean;
+          inspect_on_startup: boolean;
+          remind_before_deadline: boolean;
+          remind_when_stale: boolean;
+        };
+        providerApiKeyInput: string;
+      }>;
+      saveControlPanelData: (
+        data: unknown,
+        options?: {
+          saveInspector?: boolean;
+          saveSettings?: boolean;
+          timeoutMs?: number;
+        },
+      ) => Promise<{
+        source: "rpc";
+        applyMode: string;
+        needRestart: boolean;
+        updatedKeys: string[];
+        effectiveSettings: {
+          general: {
+            voice_type: string;
+            download: {
+              ask_before_save_each_file: boolean;
+              workspace_path: string;
+            };
+          };
+          floating_ball: {
+            auto_snap: boolean;
+            idle_translucent: boolean;
+            position_mode: string;
+            size: string;
+          };
+          memory: {
+            work_summary_interval: {
+              unit: string;
+              value: number;
+            };
+            profile_refresh_interval: {
+              unit: string;
+              value: number;
+            };
+          };
+        };
+      }>;
+    };
+  }, rpcMethods);
+}
+
+function loadDashboardSettingsMutationModule(rpcMethods?: DashboardContractRpcMethodOverrides) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsMutation.js");
     const snapshotModulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsSnapshot.js");
@@ -279,6 +374,7 @@ function loadDashboardSettingsMutationModule(rpcMethods?: {
         source: string;
         updatedKeys: string[];
         snapshot: {
+          source: string;
           settings: {
             data_log: {
               budget_auto_downgrade: boolean;
@@ -299,9 +395,7 @@ function loadDashboardSettingsMutationModule(rpcMethods?: {
   }, rpcMethods);
 }
 
-function loadDashboardSettingsSnapshotModule(rpcMethods?: {
-  getSettingsDetailed?: (params: unknown) => Promise<unknown>;
-}) {
+function loadDashboardSettingsSnapshotModule(rpcMethods?: Pick<DashboardContractRpcMethodOverrides, "getSettingsDetailed">) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/shared/dashboardSettingsSnapshot.js");
 
@@ -422,11 +516,16 @@ function loadMirrorServiceModule() {
 type DashboardContractRpcMethodOverrides = {
   controlTask?: (params: AgentTaskControlParams) => Promise<AgentTaskControlResult>;
   convertNotepadToTask?: (params: AgentNotepadConvertToTaskParams) => Promise<AgentNotepadConvertToTaskResult>;
+  getSecuritySummary?: (params: unknown) => Promise<unknown>;
+  getSettings?: (params: unknown) => Promise<unknown>;
   updateSettings?: (params: unknown) => Promise<unknown>;
   getSettingsDetailed?: (params: unknown) => Promise<unknown>;
+  getTaskInspectorConfig?: (params: unknown) => Promise<unknown>;
   getTaskDetail?: (params: AgentTaskDetailGetParams) => Promise<AgentTaskDetailGetResult>;
   listNotepad?: (params: AgentNotepadListParams) => Promise<AgentNotepadListResult>;
   listTasks?: (params: AgentTaskListParams) => Promise<AgentTaskListResult>;
+  runTaskInspector?: (params: unknown) => Promise<unknown>;
+  updateTaskInspectorConfig?: (params: unknown) => Promise<unknown>;
   updateNotepad?: (params: AgentNotepadUpdateParams) => Promise<AgentNotepadUpdateResult>;
 };
 
@@ -442,16 +541,7 @@ function withDesktopAliasRuntime<T>(
 ): T;
 function withDesktopAliasRuntime<T>(
   callback: (requireFn: NodeRequire) => T | Promise<T>,
-  rpcMethods?: {
-    controlTask?: (params: AgentTaskControlParams) => Promise<AgentTaskControlResult>;
-    convertNotepadToTask?: (params: AgentNotepadConvertToTaskParams) => Promise<AgentNotepadConvertToTaskResult>;
-    updateSettings?: (params: unknown) => Promise<unknown>;
-    getSettingsDetailed?: (params: unknown) => Promise<unknown>;
-    getTaskDetail?: (params: AgentTaskDetailGetParams) => Promise<AgentTaskDetailGetResult>;
-    listNotepad?: (params: AgentNotepadListParams) => Promise<AgentNotepadListResult>;
-    listTasks?: (params: AgentTaskListParams) => Promise<AgentTaskListResult>;
-    updateNotepad?: (params: AgentNotepadUpdateParams) => Promise<AgentNotepadUpdateResult>;
-  },
+  rpcMethods?: DashboardContractRpcMethodOverrides,
   desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
 ): T | Promise<T> {
   const NodeModule = require("node:module") as {
@@ -524,6 +614,12 @@ function withDesktopAliasRuntime<T>(
           (() => {
             throw new Error("getTaskDetail should not run in dashboard contract tests");
           }),
+        getSecuritySummary:
+          rpcMethods?.getSecuritySummary ??
+          (() => Promise.reject(new Error("getSecuritySummary should not run in dashboard contract tests"))),
+        getSettings:
+          rpcMethods?.getSettings ??
+          (() => Promise.reject(new Error("getSettings should not run in dashboard contract tests"))),
         listNotepad:
           rpcMethods?.listNotepad ??
           (() => {
@@ -548,6 +644,15 @@ function withDesktopAliasRuntime<T>(
           (() => {
             throw new Error("updateNotepad should not run in dashboard contract tests");
           }),
+        getTaskInspectorConfig:
+          rpcMethods?.getTaskInspectorConfig ??
+          (() => Promise.reject(new Error("getTaskInspectorConfig should not run in dashboard contract tests"))),
+        runTaskInspector:
+          rpcMethods?.runTaskInspector ??
+          (() => Promise.reject(new Error("runTaskInspector should not run in dashboard contract tests"))),
+        updateTaskInspectorConfig:
+          rpcMethods?.updateTaskInspectorConfig ??
+          (() => Promise.reject(new Error("updateTaskInspectorConfig should not run in dashboard contract tests"))),
         getSettingsDetailed: rpcMethods?.getSettingsDetailed ?? (() => Promise.reject(new Error("getSettingsDetailed should not run in dashboard contract tests"))),
         updateSettings: rpcMethods?.updateSettings ?? (() => Promise.reject(new Error("updateSettings should not run in dashboard contract tests"))),
       };
@@ -1550,6 +1655,330 @@ test("dashboard settings mutation reloads only the touched memory scope after rp
     assert.equal(result.source, "rpc");
     assert.equal(result.snapshot.settings.memory.enabled, false);
     assert.equal(result.snapshot.settings.general.download.ask_before_save_each_file, true);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control panel saves full floating-ball ownership through the real rpc settings flow", async () => {
+  const { loadSettings } = loadSettingsServiceModule();
+  const strongholdStatus = {
+    backend: "stronghold",
+    available: true,
+    fallback: false,
+    initialized: true,
+    formal_store: true,
+  };
+  let updateSettingsRequest: Record<string, unknown> | null = null;
+  let inspectorUpdateCount = 0;
+  let remoteSettings = {
+    general: {
+      language: "zh-CN",
+      auto_launch: true,
+      theme_mode: "follow_system",
+      voice_notification_enabled: true,
+      voice_type: "default_female",
+      download: {
+        workspace_path: "D:/CialloClawWorkspace",
+        ask_before_save_each_file: true,
+      },
+    },
+    floating_ball: {
+      auto_snap: true,
+      idle_translucent: true,
+      position_mode: "draggable",
+      size: "medium",
+    },
+    memory: {
+      enabled: true,
+      lifecycle: "30d",
+      work_summary_interval: {
+        unit: "day",
+        value: 7,
+      },
+      profile_refresh_interval: {
+        unit: "week",
+        value: 2,
+      },
+    },
+    models: {
+      provider: "openai",
+      credentials: {
+        budget_auto_downgrade: true,
+        provider_api_key_configured: false,
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        stronghold: strongholdStatus,
+      },
+    },
+  };
+  const inspectorConfig = {
+    task_sources: ["D:/workspace/todos"],
+    inspection_interval: {
+      unit: "minute",
+      value: 15,
+    },
+    inspect_on_file_change: true,
+    inspect_on_startup: true,
+    remind_before_deadline: true,
+    remind_when_stale: false,
+  };
+  const { loadControlPanelData, saveControlPanelData } = loadControlPanelServiceModule({
+    getSecuritySummary: async () => ({
+      summary: {
+        security_status: "normal",
+        pending_authorizations: 0,
+        latest_restore_point: null,
+        token_cost_summary: {
+          current_task_tokens: 0,
+          current_task_cost: 0,
+          today_tokens: 0,
+          today_cost: 0,
+          single_task_limit: 50000,
+          daily_limit: 300000,
+          budget_auto_downgrade: true,
+        },
+      },
+    }),
+    getSettings: async (params) => {
+      const request = params as {
+        request_meta?: {
+          trace_id?: string;
+        };
+        scope?: string;
+      };
+
+      assert.equal(request.scope, "all");
+      assert.match(request.request_meta?.trace_id ?? "", /^trace_control_panel_/);
+
+      return {
+        settings: remoteSettings,
+      };
+    },
+    getTaskInspectorConfig: async () => inspectorConfig,
+    updateSettings: async (params) => {
+      const request = params as {
+        request_meta?: {
+          trace_id?: string;
+        };
+        general: {
+          voice_type: string;
+          download: {
+            ask_before_save_each_file: boolean;
+            workspace_path: string;
+          };
+        };
+        floating_ball: {
+          auto_snap: boolean;
+          idle_translucent: boolean;
+          position_mode: string;
+          size: string;
+        };
+        memory: {
+          work_summary_interval: {
+            unit: string;
+            value: number;
+          };
+          profile_refresh_interval: {
+            unit: string;
+            value: number;
+          };
+        };
+      };
+
+      updateSettingsRequest = request as unknown as Record<string, unknown>;
+
+      assert.match(request.request_meta?.trace_id ?? "", /^trace_control_panel_/);
+      assert.equal(request.general.voice_type, "voice_nebula");
+      assert.equal(request.general.download.ask_before_save_each_file, false);
+      assert.deepEqual(request.floating_ball, {
+        auto_snap: false,
+        idle_translucent: false,
+        position_mode: "fixed",
+        size: "large",
+      });
+      assert.deepEqual(request.memory.work_summary_interval, {
+        unit: "hour",
+        value: 12,
+      });
+      assert.deepEqual(request.memory.profile_refresh_interval, {
+        unit: "day",
+        value: 5,
+      });
+
+      remoteSettings = {
+        ...remoteSettings,
+        general: {
+          ...remoteSettings.general,
+          ...request.general,
+          download: {
+            ...remoteSettings.general.download,
+            ...request.general.download,
+          },
+        },
+        floating_ball: {
+          ...remoteSettings.floating_ball,
+          ...request.floating_ball,
+        },
+        memory: {
+          ...remoteSettings.memory,
+          ...request.memory,
+          work_summary_interval: {
+            ...remoteSettings.memory.work_summary_interval,
+            ...request.memory.work_summary_interval,
+          },
+          profile_refresh_interval: {
+            ...remoteSettings.memory.profile_refresh_interval,
+            ...request.memory.profile_refresh_interval,
+          },
+        },
+      };
+
+      return {
+        apply_mode: "immediate",
+        need_restart: false,
+        updated_keys: [
+          "general.voice_type",
+          "general.download.ask_before_save_each_file",
+          "floating_ball.auto_snap",
+          "floating_ball.idle_translucent",
+          "floating_ball.position_mode",
+          "floating_ball.size",
+          "memory.work_summary_interval",
+          "memory.profile_refresh_interval",
+        ],
+        effective_settings: {
+          general: {
+            voice_type: request.general.voice_type,
+            download: {
+              ask_before_save_each_file: request.general.download.ask_before_save_each_file,
+              workspace_path: request.general.download.workspace_path,
+            },
+          },
+          floating_ball: request.floating_ball,
+          memory: request.memory,
+          models: {
+            provider: "openai",
+            budget_auto_downgrade: true,
+            provider_api_key_configured: false,
+            base_url: "https://api.openai.com/v1",
+            model: "gpt-4.1-mini",
+            stronghold: strongholdStatus,
+          },
+        },
+      };
+    },
+    updateTaskInspectorConfig: async () => {
+      inspectorUpdateCount += 1;
+      return {
+        effective_config: inspectorConfig,
+      };
+    },
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    const initialData = await loadControlPanelData();
+    const result = await saveControlPanelData(
+      {
+        ...initialData,
+        settings: {
+          ...initialData.settings,
+          general: {
+            ...initialData.settings.general,
+            voice_type: "voice_nebula",
+            download: {
+              ...initialData.settings.general.download,
+              ask_before_save_each_file: false,
+            },
+          },
+          floating_ball: {
+            ...initialData.settings.floating_ball,
+            auto_snap: false,
+            idle_translucent: false,
+            position_mode: "fixed",
+            size: "large",
+          },
+          memory: {
+            ...initialData.settings.memory,
+            work_summary_interval: {
+              unit: "hour",
+              value: 12,
+            },
+            profile_refresh_interval: {
+              unit: "day",
+              value: 5,
+            },
+          },
+        },
+      },
+      {
+        saveInspector: false,
+        saveSettings: true,
+      },
+    );
+
+    assert.ok(updateSettingsRequest);
+    assert.equal(inspectorUpdateCount, 0);
+    assert.equal(result.source, "rpc");
+    assert.equal(result.needRestart, false);
+    assert.equal(result.effectiveSettings.general.voice_type, "voice_nebula");
+    assert.equal(result.effectiveSettings.general.download.ask_before_save_each_file, false);
+    assert.equal(result.effectiveSettings.floating_ball.auto_snap, false);
+    assert.equal(result.effectiveSettings.floating_ball.idle_translucent, false);
+    assert.equal(result.effectiveSettings.floating_ball.position_mode, "fixed");
+    assert.equal(result.effectiveSettings.floating_ball.size, "large");
+    assert.equal(result.effectiveSettings.memory.work_summary_interval.value, 12);
+    assert.equal(result.effectiveSettings.memory.work_summary_interval.unit, "hour");
+    assert.equal(result.effectiveSettings.memory.profile_refresh_interval.value, 5);
+    assert.equal(result.effectiveSettings.memory.profile_refresh_interval.unit, "day");
+
+    const persisted = loadSettings();
+    assert.equal(persisted.settings.general.voice_type, "voice_nebula");
+    assert.equal(persisted.settings.general.download.ask_before_save_each_file, false);
+    assert.equal(persisted.settings.floating_ball.auto_snap, false);
+    assert.equal(persisted.settings.floating_ball.idle_translucent, false);
+    assert.equal(persisted.settings.floating_ball.position_mode, "fixed");
+    assert.equal(persisted.settings.floating_ball.size, "large");
+    assert.equal(persisted.settings.memory.work_summary_interval.value, 12);
+    assert.equal(persisted.settings.memory.work_summary_interval.unit, "hour");
+    assert.equal(persisted.settings.memory.profile_refresh_interval.value, 5);
+    assert.equal(persisted.settings.memory.profile_refresh_interval.unit, "day");
+
+    const reloaded = await loadControlPanelData();
+    assert.equal(reloaded.source, "rpc");
+    assert.equal(reloaded.settings.general.voice_type, "voice_nebula");
+    assert.equal(reloaded.settings.general.download.ask_before_save_each_file, false);
+    assert.equal(reloaded.settings.floating_ball.auto_snap, false);
+    assert.equal(reloaded.settings.floating_ball.idle_translucent, false);
+    assert.equal(reloaded.settings.floating_ball.position_mode, "fixed");
+    assert.equal(reloaded.settings.floating_ball.size, "large");
+    assert.equal(reloaded.settings.memory.work_summary_interval.value, 12);
+    assert.equal(reloaded.settings.memory.work_summary_interval.unit, "hour");
+    assert.equal(reloaded.settings.memory.profile_refresh_interval.value, 5);
+    assert.equal(reloaded.settings.memory.profile_refresh_interval.unit, "day");
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
