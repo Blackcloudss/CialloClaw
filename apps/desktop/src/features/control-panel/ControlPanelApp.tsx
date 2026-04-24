@@ -579,11 +579,6 @@ export function ControlPanelApp() {
     void (async () => {
       await showShellBallWindow("ball");
       await startDesktopOnboarding("manual", "control-panel");
-      // Control-panel destroys itself on close, so let the dedicated onboarding
-      // window finish its first visible frame before tearing down this JS host.
-      await new Promise<void>((resolve) => {
-        window.setTimeout(resolve, 120);
-      });
       await requestCurrentDesktopWindowClose();
     })();
   };
