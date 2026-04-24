@@ -75,6 +75,11 @@ type ShellBallHelperSnapshotInput = {
   windowLabel?: string;
 };
 
+type QueuedApprovalPendingNotification = {
+  approvalRequest: ApprovalRequest;
+  taskId: string;
+};
+
 type ShellBallTaskOutputServiceModule = {
   openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source?: "rpc" | "mock") => Promise<unknown>;
   performTaskOpenExecution: (
@@ -702,6 +707,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const detachedPinnedBubbleIdsRef = useRef(new Set<string>());
   const deliveryReadyBubbleKeysRef = useRef(new Set<string>());
   const approvalPendingBubbleKeysRef = useRef(new Set<string>());
+  // Approval notifications can win the race against `agent.input.submit`.
+  // Keep them task-scoped until the submit result binds the formal task id to
+  // this shell-ball turn, then replay them into the local bubble timeline.
+  const queuedApprovalPendingNotificationsRef = useRef(new Map<string, QueuedApprovalPendingNotification[]>());
   const autoOpenedDeliveryKeysRef = useRef(new Set<string>());
   const shellBallTaskIdsRef = useRef(new Set<string>());
   const shellBallTaskTurnIndexRef = useRef(new Map<string, number>());
@@ -767,6 +776,39 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     return shellBallTaskTurnIndexRef.current.get(taskId);
   }
 
+  const appendApprovalPendingBubble = useCallback((input: QueuedApprovalPendingNotification) => {
+    const bubbleKey = `${input.taskId}:${input.approvalRequest.approval_id}`;
+    if (approvalPendingBubbleKeysRef.current.has(bubbleKey)) {
+      return;
+    }
+
+    approvalPendingBubbleKeysRef.current.add(bubbleKey);
+
+    if (activeShellBallTaskIdRef.current === input.taskId) {
+      syncShellBallVisualStateFromTaskStatus("waiting_auth");
+    }
+
+    const nextTurnIndex = shellBallTaskTurnIndexRef.current.get(input.taskId) ?? (() => {
+      bubbleTurnIndexRef.current += 1;
+      return bubbleTurnIndexRef.current;
+    })();
+    shellBallTaskTurnIndexRef.current.set(input.taskId, nextTurnIndex);
+
+    setBubbleItems((currentItems) =>
+      sortShellBallBubbleItemsByTimestamp([
+        ...currentItems,
+        createShellBallApprovalPendingBubbleItem({
+          approvalRequest: input.approvalRequest,
+          createdAt: new Date().toISOString(),
+          taskId: input.taskId,
+          turnIndex: nextTurnIndex,
+          turnPhase: 2,
+        }),
+      ]),
+    );
+    revealBubbleRegion();
+  }, [revealBubbleRegion]);
+
   const registerShellBallTask = useCallback((taskId: string, turnIndex?: number) => {
     shellBallTaskIdsRef.current.add(taskId);
     activeShellBallTaskIdRef.current = taskId;
@@ -774,7 +816,14 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     if (turnIndex !== undefined) {
       shellBallTaskTurnIndexRef.current.set(taskId, turnIndex);
     }
-  }, []);
+
+    const queuedNotifications = queuedApprovalPendingNotificationsRef.current.get(taskId) ?? [];
+    queuedApprovalPendingNotificationsRef.current.delete(taskId);
+
+    queuedNotifications.forEach((notification) => {
+      appendApprovalPendingBubble(notification);
+    });
+  }, [appendApprovalPendingBubble]);
 
   const clearBubbleVisibilityTimers = useCallback(() => {
     if (bubbleHideDelayTimeoutRef.current !== null) {
@@ -1657,45 +1706,26 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
     const clearApprovalSubscription = subscribeApprovalPending((payload) => {
       if (!shellBallTaskIdsRef.current.has(payload.task_id)) {
+        const queuedNotifications = queuedApprovalPendingNotificationsRef.current.get(payload.task_id) ?? [];
+        queuedNotifications.push({
+          approvalRequest: payload.approval_request,
+          taskId: payload.task_id,
+        });
+        queuedApprovalPendingNotificationsRef.current.set(payload.task_id, queuedNotifications);
         return;
       }
 
-      if (activeShellBallTaskIdRef.current === payload.task_id) {
-        syncShellBallVisualStateFromTaskStatus("waiting_auth");
-      }
-
-      const bubbleKey = `${payload.task_id}:${payload.approval_request.approval_id}`;
-      if (approvalPendingBubbleKeysRef.current.has(bubbleKey)) {
-        return;
-      }
-
-      approvalPendingBubbleKeysRef.current.add(bubbleKey);
-      const turnIndex = shellBallTaskTurnIndexRef.current.get(payload.task_id) ?? (() => {
-        bubbleTurnIndexRef.current += 1;
-        return bubbleTurnIndexRef.current;
-      })();
-      shellBallTaskTurnIndexRef.current.set(payload.task_id, turnIndex);
-
-      setBubbleItems((currentItems) =>
-        sortShellBallBubbleItemsByTimestamp([
-          ...currentItems,
-          createShellBallApprovalPendingBubbleItem({
-            approvalRequest: payload.approval_request,
-            createdAt: new Date().toISOString(),
-            taskId: payload.task_id,
-            turnIndex,
-            turnPhase: 2,
-          }),
-        ]),
-      );
-      revealBubbleRegion();
+      appendApprovalPendingBubble({
+        approvalRequest: payload.approval_request,
+        taskId: payload.task_id,
+      });
     });
 
     return () => {
       clearTaskSubscription();
       clearApprovalSubscription();
     };
-  }, [revealBubbleRegion]);
+  }, [appendApprovalPendingBubble]);
 
   useEffect(() => {
     return subscribeDeliveryReady((payload) => {

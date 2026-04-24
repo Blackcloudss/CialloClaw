@@ -100,10 +100,12 @@ function mapDesktopWindowPageContext(snapshot: DesktopWindowContextSnapshot | nu
     return undefined;
   }
 
+  const sanitizedUrl = sanitizeDesktopContextUrl(snapshot.url);
+
   return compactContextRecord<PageContext>({
     app_name: snapshot.app_name,
     title: snapshot.title ?? undefined,
-    url: snapshot.url ?? undefined,
+    url: sanitizedUrl,
     window_title: snapshot.title ?? undefined,
   });
 }
@@ -165,7 +167,7 @@ function createDesktopScreenSummary(snapshot: DesktopWindowContextSnapshot | nul
 
   const appName = snapshot.app_name.trim();
   const title = snapshot.title?.trim() ?? "";
-  const url = snapshot.url?.trim() ?? "";
+  const url = sanitizeDesktopContextUrl(snapshot.url) ?? "";
 
   if (title !== "" && url !== "") {
     return `Foreground ${appName || "desktop"} page "${title}" is active at ${url}.`;
@@ -184,6 +186,29 @@ function createDesktopScreenSummary(snapshot: DesktopWindowContextSnapshot | nul
   }
 
   return undefined;
+}
+
+function sanitizeDesktopContextUrl(rawUrl: string | null | undefined): string | undefined {
+  const normalizedUrl = rawUrl?.trim() ?? "";
+
+  if (normalizedUrl === "") {
+    return undefined;
+  }
+
+  try {
+    const parsedUrl = new URL(normalizedUrl);
+    parsedUrl.username = "";
+    parsedUrl.password = "";
+    parsedUrl.search = "";
+    parsedUrl.hash = "";
+    return parsedUrl.toString();
+  } catch {
+    return normalizedUrl.split(/[?#]/u, 1)[0]?.trim() || undefined;
+  }
+}
+
+function shouldEnrichVisualContext(params: AgentInputSubmitParams): boolean {
+  return compactContextRecord(params.context.page) !== undefined || compactContextRecord(params.context.screen) !== undefined;
 }
 
 async function readDesktopWindowContext(): Promise<DesktopWindowContextSnapshot | null> {
@@ -242,23 +267,27 @@ async function enrichTextInputSubmitParams(params: AgentInputSubmitParams): Prom
     readDesktopMouseActivitySnapshot(),
   ]);
 
-  const fallbackPageContext = mapDesktopWindowPageContext(windowContext);
-  const fallbackScreenContext = mapDesktopWindowScreenContext(windowContext);
+  const enrichVisualContext = shouldEnrichVisualContext(params);
+  const fallbackPageContext = enrichVisualContext ? mapDesktopWindowPageContext(windowContext) : undefined;
+  const fallbackScreenContext = enrichVisualContext ? mapDesktopWindowScreenContext(windowContext) : undefined;
   const fallbackBehaviorContext = createFallbackBehaviorContext(params.trigger, mouseActivitySnapshot, windowContext);
+  const mergedPageContext = mergeContextRecord<PageContext>(params.context.page, fallbackPageContext);
+  const mergedScreenContext = mergeContextRecord<ScreenContext>(params.context.screen, fallbackScreenContext);
+  const mergedBehaviorContext = mergeContextRecord<BehaviorContext>(params.context.behavior, fallbackBehaviorContext);
 
   return {
     ...params,
     context: {
       ...params.context,
       files: params.context.files ?? [],
-      ...(mergeContextRecord<PageContext>(params.context.page, fallbackPageContext) ? {
-        page: mergeContextRecord<PageContext>(params.context.page, fallbackPageContext),
+      ...(mergedPageContext ? {
+        page: mergedPageContext,
       } : {}),
-      ...(mergeContextRecord<ScreenContext>(params.context.screen, fallbackScreenContext) ? {
-        screen: mergeContextRecord<ScreenContext>(params.context.screen, fallbackScreenContext),
+      ...(mergedScreenContext ? {
+        screen: mergedScreenContext,
       } : {}),
-      ...(mergeContextRecord<BehaviorContext>(params.context.behavior, fallbackBehaviorContext) ? {
-        behavior: mergeContextRecord<BehaviorContext>(params.context.behavior, fallbackBehaviorContext),
+      ...(mergedBehaviorContext ? {
+        behavior: mergedBehaviorContext,
       } : {}),
     },
   };
