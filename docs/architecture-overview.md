@@ -18,13 +18,15 @@
 
 ### 1.2 文档覆盖范围
 
-本文档覆盖当前仓库中已经进入正式主链或直接支撑正式主链的模块边界，具体包括：
+本文档覆盖当前正式主链涉及的系统子域和职责边界，重点包括：
 
-- `apps/desktop`：桌面宿主、多入口前端、近场承接、任务工作台和控制入口。
-- `services/local-service`：Go 本地 Harness 服务中的 `rpc`、`orchestrator`、`context`、`intent`、`runengine`、`agentloop`、`delivery`、`risk`、`memory`、`audit`、`checkpoint`、`traceeval`、`recommendation`、`taskinspector`、`perception`、`model`、`tools`、`plugin`、`execution`、`storage`、`platform` 等模块。
-- `workers/*`：浏览器自动化、OCR、媒体处理等 sidecar worker，以及它们与本地服务之间的受控协作边界。
-- `packages/protocol`：JSON-RPC 2.0 的方法、共享 schema、错误模型和正式对象口径。
-- `/docs` 中与系统定位、模块分层、协议、数据和实现边界直接相关的文档集。
+- **桌面入口与工作台子域**：负责近场触发、轻量承接、任务工作台、控制入口和状态投影等桌面侧职责边界。
+- **本地 Harness 中枢子域**：负责协议接入、任务编排、上下文归一、意图建议、运行控制、会话串行与任务续接等本地主链职责边界。
+- **治理与交付子域**：负责风险评估、授权承接、正式交付、审计、恢复、记忆、镜像引用以及 Trace / Eval 的职责边界。
+- **能力与存储子域**：负责模型适配、工具路由、插件能力、执行后端、sidecar worker、对象仓储、本地检索、工作区、路径策略和机密存储的职责边界。
+- **长期协作与辅助链路子域**：负责推荐、巡检、事项升级、感知信号接入和长期协作能力与主任务链之间的关系边界。
+
+本文档按这些系统子域说明“讨论哪些部分、讨论到什么边界、哪些职责如何协作”，而不把仓库目录和内部包结构当作主叙事对象。
 
 ### 1.3 非目标
 
