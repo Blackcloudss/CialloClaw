@@ -711,6 +711,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   // Keep them task-scoped until the submit result binds the formal task id to
   // this shell-ball turn, then replay them into the local bubble timeline.
   const queuedApprovalPendingNotificationsRef = useRef(new Map<string, QueuedApprovalPendingNotification[]>());
+  // Only shell-ball submissions that are still waiting for their formal task id
+  // are allowed to buffer approval notifications. This keeps unrelated desktop
+  // approvals from lingering in shell-ball memory forever.
+  const pendingShellBallTaskRegistrationsRef = useRef(0);
   const autoOpenedDeliveryKeysRef = useRef(new Set<string>());
   const shellBallTaskIdsRef = useRef(new Set<string>());
   const shellBallTaskTurnIndexRef = useRef(new Map<string, number>());
@@ -824,6 +828,24 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       appendApprovalPendingBubble(notification);
     });
   }, [appendApprovalPendingBubble]);
+
+  const beginPendingShellBallTaskRegistration = useCallback(() => {
+    pendingShellBallTaskRegistrationsRef.current += 1;
+    let completed = false;
+
+    return () => {
+      if (completed) {
+        return;
+      }
+
+      completed = true;
+      pendingShellBallTaskRegistrationsRef.current = Math.max(0, pendingShellBallTaskRegistrationsRef.current - 1);
+
+      if (pendingShellBallTaskRegistrationsRef.current === 0) {
+        queuedApprovalPendingNotificationsRef.current.clear();
+      }
+    };
+  }, []);
 
   const clearBubbleVisibilityTimers = useCallback(() => {
     if (bubbleHideDelayTimeoutRef.current !== null) {
@@ -1018,6 +1040,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     );
     revealBubbleRegion();
 
+    const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
+
     try {
       const result = await startTaskFromSelectedText(normalizedText, {
         delivery: {
@@ -1064,8 +1088,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         ),
       );
       revealBubbleRegion();
+    } finally {
+      finishPendingTaskRegistration();
     }
-  }, [autoOpenShellBallDeliveryResult, registerShellBallTask, revealBubbleRegion]);
+  }, [autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, registerShellBallTask, revealBubbleRegion]);
 
   /**
    * Submits clipboard text through the formal shell-ball text input path while
@@ -1098,6 +1124,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       ]),
     );
     revealBubbleRegion();
+
+    const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
 
     try {
       const result = await submitTextInput({
@@ -1156,8 +1184,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         ]),
       );
       revealBubbleRegion();
+    } finally {
+      finishPendingTaskRegistration();
     }
-  }, [autoOpenShellBallDeliveryResult, registerShellBallTask, revealBubbleRegion]);
+  }, [autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, registerShellBallTask, revealBubbleRegion]);
 
   /**
    * Shortcut keywords such as `截屏` and `窗口` still enter the formal task
@@ -1197,6 +1227,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       ]),
     );
     revealBubbleRegion();
+
+    const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
 
     try {
       const result = await submitTextInput({
@@ -1262,11 +1294,12 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       );
       revealBubbleRegion();
     } finally {
+      finishPendingTaskRegistration();
       handlersRef.current.setInputValue("");
       handlersRef.current.onInputFocusChange(false);
       revealBubbleRegion();
     }
-  }, [autoOpenShellBallDeliveryResult, registerShellBallTask, revealBubbleRegion]);
+  }, [autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, registerShellBallTask, revealBubbleRegion]);
 
   /**
    * Maps the shell-ball screenshot keyword to the formal visual-task pipeline.
@@ -1637,6 +1670,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
      * hover-text submissions so the shell-ball can track task detail routing and
      * formal delivery auto-open consistently.
      */
+    const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
+
     void Promise.resolve(handlersRef.current.onSubmitVoiceText(finalizedSpeechPayload))
       .then((result) => {
         if (!isShellBallInputSubmitResult(result)) {
@@ -1689,9 +1724,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         revealBubbleRegion();
       })
       .finally(() => {
+        finishPendingTaskRegistration();
         handlersRef.current.onFinalizedSpeechHandled();
       });
-  }, [autoOpenShellBallDeliveryResult, input.finalizedSpeechPayload, registerShellBallTask, revealBubbleRegion]);
+  }, [autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, input.finalizedSpeechPayload, registerShellBallTask, revealBubbleRegion]);
 
   useEffect(() => {
     const clearTaskSubscription = subscribeTaskUpdated((payload) => {
@@ -1706,6 +1742,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
     const clearApprovalSubscription = subscribeApprovalPending((payload) => {
       if (!shellBallTaskIdsRef.current.has(payload.task_id)) {
+        if (pendingShellBallTaskRegistrationsRef.current === 0) {
+          return;
+        }
+
         const queuedNotifications = queuedApprovalPendingNotificationsRef.current.get(payload.task_id) ?? [];
         queuedNotifications.push({
           approvalRequest: payload.approval_request,
@@ -1836,6 +1876,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         ]),
       );
 
+      const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
+
       try {
         const rpcMethods = await importRpcMethods();
         const result = await rpcMethods.confirmTask({
@@ -1874,6 +1916,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           ]),
         );
         revealBubbleRegionRef.current();
+      } finally {
+        finishPendingTaskRegistration();
       }
     }
 
@@ -1923,7 +1967,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         cleanup();
       }
     };
-  }, [autoOpenShellBallDeliveryResult, handleCoordinatorBubbleHoverChange, registerShellBallTask]);
+  }, [autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, handleCoordinatorBubbleHoverChange, registerShellBallTask]);
 
   const handlePrimaryAction = useCallback(async (action: ShellBallPrimaryAction) => {
     switch (action) {
@@ -2046,6 +2090,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
         let result: ShellBallInputSubmitResult | null | void;
 
+        const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
+
         try {
           result = await handlersRef.current.onSubmitText();
         } catch (error) {
@@ -2063,6 +2109,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
             ),
           );
           revealBubbleRegion();
+          finishPendingTaskRegistration();
           break;
         }
 
@@ -2092,19 +2139,21 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           });
           revealBubbleRegion();
           void autoOpenShellBallDeliveryResult(result.task.task_id, result.delivery_result);
+          finishPendingTaskRegistration();
           break;
         }
 
         setBubbleItems((currentItems) =>
           replaceShellBallPendingBubble(currentItems, pendingAgentBubbleItem.bubble.bubble_id),
         );
+        finishPendingTaskRegistration();
         break;
       }
       case "primary_click":
         handlersRef.current.onPrimaryClick();
         break;
     }
-  }, [autoOpenShellBallDeliveryResult, handleScreenshotPrompt, handleWindowPrompt, registerShellBallTask, revealBubbleRegion]);
+  }, [autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, handleScreenshotPrompt, handleWindowPrompt, registerShellBallTask, revealBubbleRegion]);
 
   return {
     snapshot,
