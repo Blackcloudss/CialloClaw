@@ -20,7 +20,15 @@ import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
 import { buildNoteSummary, describeNotePreview, getNoteBucketLabel, getNoteStatusBadgeClass, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
 import { buildDashboardNoteBucketInvalidateKeys, buildDashboardNoteBucketQueryKey, dashboardNoteBucketGroups, getDashboardNoteRefreshPlan } from "./notePage.query";
-import { areDesktopSourceNotesAvailable, createNoteSource, loadNoteSourceConfig, loadNoteSourceSnapshot, runNoteSourceInspection, saveNoteSource } from "./noteSource.service";
+import {
+  areDesktopSourceNotesAvailable,
+  createNoteSource,
+  loadNoteSourceConfig,
+  loadNoteSourceIndex,
+  loadNoteSourceSnapshot,
+  runNoteSourceInspection,
+  saveNoteSource,
+} from "./noteSource.service";
 import { buildSourceNoteFallbackItem, convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
 import type { NoteDetailAction, NoteListItem, NotePreviewGroupKey, SourceNoteDocument } from "./notePage.types";
 import { NoteDetailPanel } from "./components/NoteDetailPanel";
@@ -48,7 +56,7 @@ type NoteDrawerDragPreview = {
 const NOTE_CANVAS_CARD_WIDTH = 360;
 const NOTE_CANVAS_CARD_HEIGHT = 280;
 const NOTE_CANVAS_GRID_SIZE = 28;
-const SOURCE_NOTE_POLL_INTERVAL_MS = 2_500;
+const SOURCE_NOTE_INDEX_POLL_INTERVAL_MS = 2_500;
 const NEW_SOURCE_NOTE_TEMPLATE = "";
 const NOTE_CANVAS_SEED_POSITIONS = [
   { x: 56, y: 48 },
@@ -146,7 +154,7 @@ export function NotePage() {
   const [isSavingSourceNote, setIsSavingSourceNote] = useState(false);
   const [isRunningInspection, setIsRunningInspection] = useState(false);
   const feedbackTimeoutRef = useRef<number | null>(null);
-  const sourceNotesFingerprintRef = useRef<string | null>(null);
+  const sourceNoteIndexFingerprintRef = useRef<string | null>(null);
   const pendingCreatedSourceNotePathRef = useRef<string | null>(null);
   const noteSourcePathByItemIdRef = useRef(new Map<string, string>());
   const pinNoteToCanvasRef = useRef<(itemId: string, placement?: { x: number; y: number }) => void>(() => {});
@@ -232,14 +240,21 @@ export function NotePage() {
 
   const configuredTaskSourceRoots = sourceConfigQuery.data?.task_sources;
   const taskSourceRoots = useMemo(() => configuredTaskSourceRoots ?? [], [configuredTaskSourceRoots]);
+  const sourceNotesBridgeEnabled = dataMode === "rpc" && desktopSourceNotesAvailable && taskSourceRoots.length > 0;
   const sourceNotesQuery = useQuery({
-    enabled: dataMode === "rpc" && desktopSourceNotesAvailable && taskSourceRoots.length > 0,
+    enabled: sourceNotesBridgeEnabled,
     queryFn: () => loadNoteSourceSnapshot(taskSourceRoots),
     queryKey: ["note-source-snapshot", dataMode, taskSourceRoots],
-    refetchInterval:
-      dataMode === "rpc" && desktopSourceNotesAvailable && taskSourceRoots.length > 0
-        ? SOURCE_NOTE_POLL_INTERVAL_MS
-        : false,
+    refetchOnMount: noteRefreshPlan.refetchOnMount,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const sourceNoteIndexQuery = useQuery({
+    enabled: sourceNotesBridgeEnabled,
+    queryFn: () => loadNoteSourceIndex(taskSourceRoots),
+    queryKey: ["note-source-index", dataMode, taskSourceRoots],
+    refetchInterval: sourceNotesBridgeEnabled ? SOURCE_NOTE_INDEX_POLL_INTERVAL_MS : false,
     refetchOnMount: noteRefreshPlan.refetchOnMount,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
@@ -251,6 +266,7 @@ export function NotePage() {
   const recurringItems = sortNotesByUrgency(recurringQuery.data?.items ?? []);
   const closedItems = sortClosedNotes(closedQuery.data?.items ?? []);
   const sourceNotesData = sourceNotesQuery.data?.notes;
+  const sourceNoteIndexData = sourceNoteIndexQuery.data?.notes;
   const sourceRootsData = sourceNotesQuery.data?.sourceRoots;
   const sourceNotes = useMemo(() => sourceNotesData ?? [], [sourceNotesData]);
   const resolvedSourceRoots = useMemo(() => sourceRootsData ?? taskSourceRoots, [sourceRootsData, taskSourceRoots]);
@@ -332,9 +348,9 @@ export function NotePage() {
     [isCreatingSourceNote, selectedSourceNotePath, sourceNotes],
   );
   const sourceEditorDirty = sourceNoteDraft !== sourceNoteBaseline;
-  const sourceNotesFingerprint = useMemo(
-    () => sourceNotes.map((note) => `${note.path}:${note.modifiedAtMs ?? 0}:${note.content.length}`).join("|"),
-    [sourceNotes],
+  const sourceNoteIndexFingerprint = useMemo(
+    () => (sourceNoteIndexData ?? []).map((note) => `${note.path}:${note.modifiedAtMs ?? 0}:${note.sizeBytes}`).join("|"),
+    [sourceNoteIndexData],
   );
   const sourceNoteAvailabilityMessage = useMemo(() => {
     if (dataMode !== "rpc") {
@@ -579,7 +595,7 @@ export function NotePage() {
 
       pendingCreatedSourceNotePathRef.current = savedNote.path;
       skipNextSourceNoteRefreshRef.current = true;
-      await sourceNotesQuery.refetch();
+      await Promise.all([sourceNotesQuery.refetch(), sourceNoteIndexQuery.refetch()]);
       setIsCreatingSourceNote(false);
       setSelectedSourceNotePath(savedNote.path);
       setSourceNoteDraft(savedNote.content);
@@ -603,6 +619,8 @@ export function NotePage() {
 
   const refreshInspectionRef = useRef(refreshInspection);
   refreshInspectionRef.current = refreshInspection;
+  const sourceNotesRefetchRef = useRef(sourceNotesQuery.refetch);
+  sourceNotesRefetchRef.current = sourceNotesQuery.refetch;
 
   function getNextCanvasZIndex(cards: NoteCanvasCard[]) {
     return cards.reduce((max, entry) => Math.max(max, entry.zIndex), 0) + 1;
@@ -761,7 +779,7 @@ export function NotePage() {
   }
 
   useEffect(() => {
-    sourceNotesFingerprintRef.current = null;
+    sourceNoteIndexFingerprintRef.current = null;
   }, [dataMode, taskSourceRoots]);
 
   useEffect(() => {
@@ -812,28 +830,35 @@ export function NotePage() {
   }, [isCreatingSourceNote, selectedSourceNote, sourceEditorDirty, sourceNoteBaseline]);
 
   useEffect(() => {
-    if (!sourceNotesQuery.data || dataMode !== "rpc") {
+    if (!sourceNoteIndexQuery.data || dataMode !== "rpc") {
       return;
     }
 
-    if (sourceNotesFingerprintRef.current === null) {
-      sourceNotesFingerprintRef.current = sourceNotesFingerprint;
+    if (sourceNoteIndexFingerprintRef.current === null) {
+      sourceNoteIndexFingerprintRef.current = sourceNoteIndexFingerprint;
       return;
     }
 
-    if (sourceNotesFingerprint === sourceNotesFingerprintRef.current) {
+    if (sourceNoteIndexFingerprint === sourceNoteIndexFingerprintRef.current) {
       return;
     }
 
-    sourceNotesFingerprintRef.current = sourceNotesFingerprint;
+    sourceNoteIndexFingerprintRef.current = sourceNoteIndexFingerprint;
     if (skipNextSourceNoteRefreshRef.current) {
       skipNextSourceNoteRefreshRef.current = false;
       return;
     }
 
     setSourceNoteSyncMessage("检测到任务来源 markdown 发生变化，正在同步巡检结果。");
-    void refreshInspectionRef.current("notes_source_polled_change", "检测到任务来源文件变更");
-  }, [dataMode, sourceNotesFingerprint, sourceNotesQuery.data]);
+    void (async () => {
+      try {
+        await sourceNotesRefetchRef.current();
+      } catch {
+        // The full snapshot fetch already surfaces its own query error state.
+      }
+      await refreshInspectionRef.current("notes_source_polled_change", "检测到任务来源文件变更");
+    })();
+  }, [dataMode, sourceNoteIndexFingerprint, sourceNoteIndexQuery.data]);
 
   useEffect(() => {
     if (allItems.length === 0) {
@@ -873,6 +898,7 @@ export function NotePage() {
     { label: "已结束", error: closedQuery.error },
     { label: "任务来源配置", error: sourceConfigQuery.error },
     { label: "markdown 便签", error: sourceNotesQuery.error },
+    { label: "markdown 便签索引", error: sourceNoteIndexQuery.error },
   ].filter((item) => item.error);
 
   const pageNotice =
@@ -1677,6 +1703,7 @@ export function NotePage() {
                       onReload={() => {
                         void sourceConfigQuery.refetch();
                         void sourceNotesQuery.refetch();
+                        void sourceNoteIndexQuery.refetch();
                       }}
                       onSave={() => void handleSaveSourceNote()}
                       onSelect={openSourceNote}

@@ -438,6 +438,22 @@ async fn desktop_load_source_notes(
 }
 
 #[tauri::command]
+async fn desktop_load_source_note_index(
+    bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
+    settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
+    sources: Vec<String>,
+) -> Result<source_notes::DesktopSourceNoteIndexSnapshot, String> {
+    let bridge_state = Arc::clone(bridge_state.inner());
+    let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let roots = build_source_note_roots(&bridge_state, &settings_snapshot_state, &sources);
+        source_notes::load_source_note_index(&sources, &roots)
+    })
+    .await
+    .map_err(|error| format!("desktop source note index load task failed: {error}"))?
+}
+
+#[tauri::command]
 async fn desktop_create_source_note(
     bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
@@ -1766,6 +1782,7 @@ fn main() {
             desktop_reveal_local_path,
             desktop_sync_settings_snapshot,
             desktop_load_source_notes,
+            desktop_load_source_note_index,
             desktop_create_source_note,
             desktop_save_source_note,
             pick_shell_ball_files,

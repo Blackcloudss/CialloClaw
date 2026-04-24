@@ -17,12 +17,32 @@ pub struct DesktopSourceNoteDocument {
     pub title: String,
 }
 
+/// DesktopSourceNoteIndexEntry keeps the lightweight file metadata used for
+/// change detection without rereading every markdown note body.
+#[derive(Clone, Serialize)]
+pub struct DesktopSourceNoteIndexEntry {
+    pub file_name: String,
+    pub modified_at_ms: Option<u64>,
+    pub path: String,
+    pub size_bytes: u64,
+    pub source_root: String,
+}
+
 /// DesktopSourceNoteSnapshot returns the current configured source roots plus
 /// the markdown notes discovered under those roots.
 #[derive(Clone, Serialize)]
 pub struct DesktopSourceNoteSnapshot {
     pub default_source_root: Option<String>,
     pub notes: Vec<DesktopSourceNoteDocument>,
+    pub source_roots: Vec<String>,
+}
+
+/// DesktopSourceNoteIndexSnapshot returns the current configured source roots
+/// plus lightweight note metadata for fast polling.
+#[derive(Clone, Serialize)]
+pub struct DesktopSourceNoteIndexSnapshot {
+    pub default_source_root: Option<String>,
+    pub notes: Vec<DesktopSourceNoteIndexEntry>,
     pub source_roots: Vec<String>,
 }
 
@@ -72,6 +92,51 @@ pub fn load_source_notes(
     })
 }
 
+/// Loads markdown note metadata without reading every file body.
+pub fn load_source_note_index(
+    raw_sources: &[String],
+    roots: &LocalPathRoots,
+) -> Result<DesktopSourceNoteIndexSnapshot, String> {
+    let resolved_roots = resolve_source_roots(raw_sources, roots)?;
+    let mut notes = Vec::new();
+
+    for source_root in &resolved_roots {
+        if !source_root.exists() {
+            continue;
+        }
+        if !source_root.is_dir() {
+            return Err(format!(
+                "task source is not a directory: {}",
+                source_root.display()
+            ));
+        }
+
+        let mut markdown_paths = Vec::new();
+        collect_markdown_files(source_root, &mut markdown_paths)?;
+        for markdown_path in markdown_paths {
+            notes.push(build_source_note_index_entry(&markdown_path, source_root)?);
+        }
+    }
+
+    notes.sort_by(|left, right| {
+        right
+            .modified_at_ms
+            .cmp(&left.modified_at_ms)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+
+    Ok(DesktopSourceNoteIndexSnapshot {
+        default_source_root: resolved_roots
+            .first()
+            .map(|path| path.to_string_lossy().to_string()),
+        notes,
+        source_roots: resolved_roots
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect(),
+    })
+}
+
 /// Creates one markdown note file under the first configured task-source root.
 pub fn create_source_note(
     raw_sources: &[String],
@@ -109,10 +174,7 @@ pub fn save_source_note(
     content: &str,
 ) -> Result<DesktopSourceNoteDocument, String> {
     let resolved_roots = resolve_source_roots(raw_sources, roots)?;
-    let canonical_target = PathBuf::from(raw_path.trim())
-        .canonicalize()
-        .map_err(|error| format!("failed to resolve source note {}: {error}", raw_path.trim()))?;
-    let source_root = match_source_root(&canonical_target, &resolved_roots)?;
+    let (canonical_target, source_root) = resolve_source_note_target(raw_path, &resolved_roots)?;
     let normalized_content = normalize_markdown_content(content);
 
     fs::write(&canonical_target, normalized_content).map_err(|error| {
@@ -123,6 +185,41 @@ pub fn save_source_note(
     })?;
 
     build_source_note_document(&canonical_target, source_root)
+}
+
+fn resolve_source_note_target<'a>(
+    raw_path: &str,
+    roots: &'a [PathBuf],
+) -> Result<(PathBuf, &'a PathBuf), String> {
+    let trimmed = raw_path.trim();
+    if trimmed.is_empty() {
+        return Err("source note path is empty".to_string());
+    }
+
+    let canonical_target = PathBuf::from(trimmed)
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve source note {trimmed}: {error}"))?;
+    let metadata = fs::metadata(&canonical_target).map_err(|error| {
+        format!(
+            "failed to inspect source note {}: {error}",
+            canonical_target.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "source note path is not a file: {}",
+            canonical_target.display()
+        ));
+    }
+    if !is_markdown_file(&canonical_target) {
+        return Err(format!(
+            "source note path is not a markdown file: {}",
+            canonical_target.display()
+        ));
+    }
+
+    let source_root = match_source_root(&canonical_target, roots)?;
+    Ok((canonical_target, source_root))
 }
 
 fn resolve_source_roots(
@@ -260,6 +357,31 @@ fn build_source_note_document(
     })
 }
 
+fn build_source_note_index_entry(
+    note_path: &Path,
+    source_root: &Path,
+) -> Result<DesktopSourceNoteIndexEntry, String> {
+    let metadata = fs::metadata(note_path).map_err(|error| {
+        format!(
+            "failed to inspect source note {}: {error}",
+            note_path.display()
+        )
+    })?;
+    let file_name = note_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("source note has no file name: {}", note_path.display()))?
+        .to_string();
+
+    Ok(DesktopSourceNoteIndexEntry {
+        file_name,
+        modified_at_ms: metadata.modified().ok().and_then(system_time_to_unix_ms),
+        path: note_path.to_string_lossy().to_string(),
+        size_bytes: metadata.len(),
+        source_root: source_root.to_string_lossy().to_string(),
+    })
+}
+
 fn read_modified_at_ms(note_path: &Path) -> Option<u64> {
     fs::metadata(note_path)
         .ok()
@@ -381,7 +503,7 @@ fn slugify_title(title: &str) -> String {
 fn match_source_root<'a>(target: &Path, roots: &'a [PathBuf]) -> Result<&'a PathBuf, String> {
     roots
         .iter()
-        .find(|root| target.starts_with(root))
+        .find(|root| target.strip_prefix(root).is_ok())
         .ok_or_else(|| {
             format!(
                 "source note path is outside the configured task source roots: {}",
@@ -392,9 +514,10 @@ fn match_source_root<'a>(target: &Path, roots: &'a [PathBuf]) -> Result<&'a Path
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_source_root, sources_require_workspace_root};
+    use super::{resolve_source_note_target, resolve_source_root, sources_require_workspace_root};
     use crate::local_path::LocalPathRoots;
     use std::env;
+    use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -426,6 +549,42 @@ mod tests {
         assert!(sources_require_workspace_root(&[
             "workspace\\notes".to_string()
         ]));
+    }
+
+    #[test]
+    fn resolve_source_note_target_rejects_sibling_directory_with_shared_prefix() {
+        let allowed_root = unique_temp_path("allowed-root");
+        let sibling_root = PathBuf::from(format!("{}-archive", allowed_root.to_string_lossy()));
+        fs::create_dir_all(&allowed_root).expect("create allowed root");
+        fs::create_dir_all(&sibling_root).expect("create sibling root");
+
+        let sibling_note = sibling_root.join("secret.md");
+        fs::write(&sibling_note, "# Secret\n").expect("write sibling note");
+
+        let error = resolve_source_note_target(
+            sibling_note.to_string_lossy().as_ref(),
+            std::slice::from_ref(&allowed_root),
+        )
+        .expect_err("reject sibling path outside configured root");
+
+        assert!(error.contains("outside the configured task source roots"));
+    }
+
+    #[test]
+    fn resolve_source_note_target_rejects_non_markdown_files_inside_source_root() {
+        let allowed_root = unique_temp_path("non-markdown-root");
+        fs::create_dir_all(&allowed_root).expect("create allowed root");
+
+        let plain_text_note = allowed_root.join("secret.txt");
+        fs::write(&plain_text_note, "secret").expect("write plain text note");
+
+        let error = resolve_source_note_target(
+            plain_text_note.to_string_lossy().as_ref(),
+            std::slice::from_ref(&allowed_root),
+        )
+        .expect_err("reject non-markdown file inside configured root");
+
+        assert!(error.contains("not a markdown file"));
     }
 
     fn unique_temp_path(name: &str) -> PathBuf {

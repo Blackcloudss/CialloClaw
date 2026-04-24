@@ -9,6 +9,20 @@ export type DesktopSourceNoteDocument = {
   title: string;
 };
 
+export type DesktopSourceNoteIndexEntry = {
+  file_name: string;
+  modified_at_ms: number | null;
+  path: string;
+  size_bytes: number;
+  source_root: string;
+};
+
+export type DesktopSourceNoteIndexSnapshot = {
+  default_source_root: string | null;
+  notes: DesktopSourceNoteIndexEntry[];
+  source_roots: string[];
+};
+
 export type DesktopSourceNoteSnapshot = {
   default_source_root: string | null;
   notes: DesktopSourceNoteDocument[];
@@ -29,6 +43,16 @@ export function canUseDesktopSourceNotes() {
  */
 export async function loadDesktopSourceNotes(sources: string[]) {
   return invoke<DesktopSourceNoteSnapshot>("desktop_load_source_notes", { sources });
+}
+
+/**
+ * Loads lightweight source-note metadata so the renderer can detect external
+ * file changes without rereading every markdown file body.
+ *
+ * @param sources Configured task-source directories from the inspector settings.
+ */
+export async function loadDesktopSourceNoteIndex(sources: string[]) {
+  return invoke<DesktopSourceNoteIndexSnapshot>("desktop_load_source_note_index", { sources });
 }
 
 /**

@@ -104,6 +104,20 @@ export type SourceNoteDocument = {
   title: string;
 };
 
+export type SourceNoteIndexEntry = {
+  fileName: string;
+  modifiedAtMs: number | null;
+  path: string;
+  sizeBytes: number;
+  sourceRoot: string;
+};
+
+export type SourceNoteIndexSnapshot = {
+  defaultSourceRoot: string | null;
+  notes: SourceNoteIndexEntry[];
+  sourceRoots: string[];
+};
+
 export type SourceNoteSnapshot = {
   defaultSourceRoot: string | null;
   notes: SourceNoteDocument[];

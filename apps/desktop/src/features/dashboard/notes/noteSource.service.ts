@@ -6,15 +6,23 @@ import type {
 import {
   canUseDesktopSourceNotes,
   createDesktopSourceNote,
+  loadDesktopSourceNoteIndex,
   loadDesktopSourceNotes,
   saveDesktopSourceNote,
   type DesktopSourceNoteDocument,
+  type DesktopSourceNoteIndexEntry,
+  type DesktopSourceNoteIndexSnapshot,
   type DesktopSourceNoteSnapshot,
 } from "@/platform/desktopSourceNotes";
 import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import { getTaskInspectorConfig, runTaskInspector } from "@/rpc/methods";
 import { loadSettings } from "@/services/settingsService";
-import type { SourceNoteDocument, SourceNoteSnapshot } from "./notePage.types";
+import type {
+  SourceNoteDocument,
+  SourceNoteIndexEntry,
+  SourceNoteIndexSnapshot,
+  SourceNoteSnapshot,
+} from "./notePage.types";
 
 const NOTE_SOURCE_TIMEOUT_MS = 10_000;
 
@@ -33,6 +41,24 @@ function mapSourceNoteDocument(document: DesktopSourceNoteDocument): SourceNoteD
     path: document.path,
     sourceRoot: document.source_root,
     title: document.title,
+  };
+}
+
+function mapSourceNoteIndexEntry(entry: DesktopSourceNoteIndexEntry): SourceNoteIndexEntry {
+  return {
+    fileName: entry.file_name,
+    modifiedAtMs: entry.modified_at_ms,
+    path: entry.path,
+    sizeBytes: entry.size_bytes,
+    sourceRoot: entry.source_root,
+  };
+}
+
+function mapSourceNoteIndexSnapshot(snapshot: DesktopSourceNoteIndexSnapshot): SourceNoteIndexSnapshot {
+  return {
+    defaultSourceRoot: snapshot.default_source_root,
+    notes: snapshot.notes.map(mapSourceNoteIndexEntry),
+    sourceRoots: snapshot.source_roots,
   };
 }
 
@@ -128,6 +154,22 @@ export async function loadNoteSourceSnapshot(taskSources: string[]): Promise<Sou
 
   return mapSourceNoteSnapshot(
     await withTimeout(loadDesktopSourceNotes(taskSources), "markdown 便签加载"),
+  );
+}
+
+/**
+ * Loads lightweight source-note metadata so the notes page can poll for
+ * external file changes without rereading every markdown file body.
+ *
+ * @param taskSources Current task-source directory list.
+ */
+export async function loadNoteSourceIndex(taskSources: string[]): Promise<SourceNoteIndexSnapshot> {
+  if (!canUseDesktopSourceNotes()) {
+    throw new Error("当前运行环境不支持桌面端 markdown 便签桥接。");
+  }
+
+  return mapSourceNoteIndexSnapshot(
+    await withTimeout(loadDesktopSourceNoteIndex(taskSources), "markdown 便签索引加载"),
   );
 }
 
