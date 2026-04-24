@@ -708,12 +708,7 @@ export function ControlPanelApp() {
   const handleReplayOnboarding = () => {
     void (async () => {
       await showShellBallWindow("ball");
-      await startDesktopOnboarding("manual", "shell-ball");
-      // Let the dedicated onboarding window paint its first frame before the
-      // control-panel host destroys itself and drops out of the window stack.
-      await new Promise<void>((resolve) => {
-        window.setTimeout(resolve, 120);
-      });
+      await startDesktopOnboarding("manual", "control-panel");
       await requestCurrentDesktopWindowClose();
     })();
   };
