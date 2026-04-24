@@ -39,8 +39,14 @@ export function ShellBallBubbleWindow({ visualState }: ShellBallBubbleWindowProp
       <ShellBallBubbleZone
         visualState={resolvedVisualState}
         bubbleItems={visibleBubbleItems}
+        onAllowApprovalBubble={(bubbleId) => {
+          void emitShellBallBubbleAction("allow_approval", bubbleId);
+        }}
         onDeleteBubble={(bubbleId) => {
           void emitShellBallBubbleAction("delete", bubbleId);
+        }}
+        onDenyApprovalBubble={(bubbleId) => {
+          void emitShellBallBubbleAction("deny_approval", bubbleId);
         }}
         onPinBubble={(bubbleId) => {
           void emitShellBallBubbleAction("pin", bubbleId);

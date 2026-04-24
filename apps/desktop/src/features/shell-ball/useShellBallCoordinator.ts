@@ -1,6 +1,7 @@
-import type { ApprovalRequest, BubbleMessage, DeliveryResult, InputContext } from "@cialloclaw/protocol";
+import type { ApprovalDecision, ApprovalRequest, BubbleMessage, DeliveryResult, InputContext } from "@cialloclaw/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { respondSecurityDetailed } from "@/rpc/methods";
 import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { submitTextInput } from "@/services/agentInputService";
 import {
@@ -409,6 +410,80 @@ function createShellBallApprovalPendingReply(approvalRequest: ApprovalRequest) {
   return "Waiting for approval before the task can continue.";
 }
 
+/**
+ * Pending approval bubbles keep one approval id in shell-ball-local state so
+ * the floating surface can submit the formal decision RPC without inventing a
+ * second approval object outside the backend contract.
+ */
+function createShellBallApprovalPendingBubbleItem(input: {
+  approvalRequest: ApprovalRequest;
+  createdAt: string;
+  taskId: string;
+  turnIndex?: number;
+  turnPhase?: number;
+}) {
+  const bubbleItem = createShellBallTextBubbleItem({
+    role: "agent",
+    text: createShellBallApprovalPendingReply(input.approvalRequest),
+    bubbleType: "status",
+    createdAt: input.createdAt,
+    taskId: input.taskId,
+    turnIndex: input.turnIndex,
+    turnPhase: input.turnPhase,
+  });
+
+  return {
+    ...bubbleItem,
+    desktop: {
+      ...bubbleItem.desktop,
+      inlineApproval: {
+        approvalId: input.approvalRequest.approval_id,
+        status: "idle" as const,
+      },
+    },
+  } satisfies ShellBallBubbleItem;
+}
+
+function createShellBallApprovalResponseBubbleItem(input: {
+  createdAt: string;
+  decision: ApprovalDecision;
+  response: Awaited<ReturnType<typeof respondSecurityDetailed>>["data"];
+  taskId: string;
+  turnIndex?: number;
+  turnPhase?: number;
+}) {
+  const bubbleMessage = input.response.bubble_message;
+  const bubbleText = bubbleMessage?.text.trim() ?? "";
+
+  if (bubbleMessage !== null && bubbleText !== "") {
+    return {
+      bubble: {
+        ...bubbleMessage,
+        task_id: input.taskId,
+        hidden: false,
+        pinned: false,
+      },
+      role: "agent",
+      desktop: createShellBallBubbleDesktopState({
+        turnIndex: input.turnIndex,
+        turnPhase: input.turnPhase,
+      }),
+    } satisfies ShellBallBubbleItem;
+  }
+
+  return createShellBallTextBubbleItem({
+    role: "agent",
+    text: input.decision === "allow_once"
+      ? "Approval granted. The task is continuing."
+      : "Approval denied. The task will stay paused.",
+    bubbleType: "status",
+    createdAt: input.createdAt,
+    taskId: input.taskId,
+    turnIndex: input.turnIndex,
+    turnPhase: input.turnPhase,
+  });
+}
+
 export function createShellBallAgentBubbleItem(
   result: ShellBallInputSubmitResult,
   fallbackCreatedAt: string,
@@ -481,6 +556,21 @@ function getShellBallTaskErrorText(error: unknown) {
   return "任务提交失败，请稍后重试。";
 }
 
+function getShellBallApprovalErrorText(error: unknown) {
+  if (isRpcChannelUnavailable(error)) {
+    return "Approval response could not reach the local service. Please retry.";
+  }
+
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    if (message !== "") {
+      return `Approval response failed: ${message}`;
+    }
+  }
+
+  return "Approval response failed. Please try again.";
+}
+
 // Submission failures stay as local shell-ball status bubbles until the backend
 // accepts a formal task.
 function createShellBallTaskErrorBubbleItem(input: {
@@ -501,12 +591,61 @@ function createShellBallTaskErrorBubbleItem(input: {
   });
 }
 
+function createShellBallApprovalErrorBubbleItem(input: {
+  createdAt: string;
+  error: unknown;
+  taskId?: string;
+  turnIndex?: number;
+  turnPhase?: number;
+}) {
+  return createShellBallTextBubbleItem({
+    role: "agent",
+    text: getShellBallApprovalErrorText(input.error),
+    bubbleType: "status",
+    createdAt: input.createdAt,
+    taskId: input.taskId,
+    turnIndex: input.turnIndex,
+    turnPhase: input.turnPhase,
+  });
+}
+
+function setShellBallInlineApprovalState(
+  items: ShellBallBubbleItem[],
+  bubbleId: string,
+  inlineApproval?: ShellBallBubbleItem["desktop"]["inlineApproval"],
+) {
+  return sortShellBallBubbleItemsByTimestamp(
+    items.map((item) => {
+      if (item.bubble.bubble_id !== bubbleId) {
+        return item;
+      }
+
+      const desktopState = { ...item.desktop };
+      Reflect.deleteProperty(desktopState, "inlineApproval");
+
+      return {
+        ...item,
+        desktop: inlineApproval === undefined
+          ? desktopState
+          : {
+              ...desktopState,
+              inlineApproval: { ...inlineApproval },
+            },
+      };
+    }),
+  );
+}
+
 export function applyShellBallBubbleAction(
   items: ShellBallBubbleItem[],
   payload: Pick<ShellBallBubbleActionPayload, "action" | "bubbleId">,
 ): ShellBallBubbleItem[] {
   if (payload.action === "delete") {
     return sortShellBallBubbleItemsByTimestamp(items.filter((item) => item.bubble.bubble_id !== payload.bubbleId));
+  }
+
+  if (payload.action === "allow_approval" || payload.action === "deny_approval") {
+    return sortShellBallBubbleItemsByTimestamp(items);
   }
 
   return sortShellBallBubbleItemsByTimestamp(
@@ -1315,7 +1454,84 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     };
   }, [clearBubbleVisibilityTimers]);
 
+  const handleInlineApprovalBubbleAction = useCallback(async (payload: ShellBallBubbleActionPayload) => {
+    const bubbleItem = bubbleItemsRef.current.find((item) => item.bubble.bubble_id === payload.bubbleId);
+    const inlineApproval = bubbleItem?.desktop.inlineApproval;
+    const taskId = bubbleItem?.bubble.task_id ?? "";
+
+    if (bubbleItem === undefined || inlineApproval === undefined || inlineApproval.status === "submitting" || taskId === "") {
+      return;
+    }
+
+    const decision: ApprovalDecision = payload.action === "allow_approval" ? "allow_once" : "deny_once";
+    const turnIndex = bubbleItem.desktop.turnIndex ?? getTaskBubbleTurnIndex(taskId) ?? allocateBubbleTurnIndex();
+
+    bindTaskToBubbleTurn(taskId, turnIndex);
+    setBubbleItems((currentItems) =>
+      setShellBallInlineApprovalState(currentItems, payload.bubbleId, {
+        ...inlineApproval,
+        status: "submitting",
+        pendingDecision: decision,
+      }),
+    );
+    revealBubbleRegion();
+
+    try {
+      const response = await respondSecurityDetailed({
+        request_meta: createShellBallRequestMeta(),
+        task_id: taskId,
+        approval_id: inlineApproval.approvalId,
+        decision,
+        remember_rule: false,
+      });
+
+      registerShellBallTask(response.data.task.task_id, turnIndex);
+      syncShellBallVisualStateFromTaskStatus(response.data.task.status);
+
+      setBubbleItems((currentItems) =>
+        replaceShellBallPendingBubble(
+          currentItems,
+          payload.bubbleId,
+          createShellBallApprovalResponseBubbleItem({
+            createdAt: new Date().toISOString(),
+            decision,
+            response: response.data,
+            taskId: response.data.task.task_id,
+            turnIndex,
+            turnPhase: 2,
+          }),
+        ),
+      );
+      revealBubbleRegion();
+    } catch (error) {
+      console.warn("shell-ball approval response failed", error);
+      setBubbleItems((currentItems) => {
+        const resetItems = setShellBallInlineApprovalState(currentItems, payload.bubbleId, {
+          approvalId: inlineApproval.approvalId,
+          status: "idle",
+        });
+
+        return sortShellBallBubbleItemsByTimestamp([
+          ...resetItems,
+          createShellBallApprovalErrorBubbleItem({
+            createdAt: new Date().toISOString(),
+            error,
+            taskId,
+            turnIndex,
+            turnPhase: 3,
+          }),
+        ]);
+      });
+      revealBubbleRegion();
+    }
+  }, [registerShellBallTask, revealBubbleRegion]);
+
   const handleBubbleAction = useCallback((payload: ShellBallBubbleActionPayload) => {
+    if (payload.action === "allow_approval" || payload.action === "deny_approval") {
+      void handleInlineApprovalBubbleAction(payload);
+      return;
+    }
+
     setBubbleItems((currentItems) => applyShellBallBubbleAction(currentItems, payload));
 
     if (payload.action === "pin") {
@@ -1326,7 +1542,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
     detachedPinnedBubbleIdsRef.current.delete(payload.bubbleId);
     void closeShellBallPinnedBubbleWindow(payload.bubbleId);
-  }, [syncPinnedBubbleWindowAnchor]);
+  }, [handleInlineApprovalBubbleAction, syncPinnedBubbleWindowAnchor]);
 
   handleBubbleActionRef.current = handleBubbleAction;
 
@@ -1463,10 +1679,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       setBubbleItems((currentItems) =>
         sortShellBallBubbleItemsByTimestamp([
           ...currentItems,
-          createShellBallTextBubbleItem({
-            role: "agent",
-            text: createShellBallApprovalPendingReply(payload.approval_request),
-            bubbleType: "status",
+          createShellBallApprovalPendingBubbleItem({
+            approvalRequest: payload.approval_request,
             createdAt: new Date().toISOString(),
             taskId: payload.task_id,
             turnIndex,

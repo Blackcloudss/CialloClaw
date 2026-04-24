@@ -3794,6 +3794,8 @@ test("shell-ball bubble zone renders per-bubble pin and delete controls", () => 
           },
         },
       ] satisfies ShellBallBubbleItem[],
+      onDeleteBubble() {},
+      onPinBubble() {},
     }),
   );
 
@@ -3801,6 +3803,45 @@ test("shell-ball bubble zone renders per-bubble pin and delete controls", () => 
   assert.match(markup, /shell-ball-bubble-message__delete-control/g);
   assert.equal(markup.match(/data-bubble-action="pin"/g)?.length, 2);
   assert.equal(markup.match(/data-bubble-action="delete"/g)?.length, 2);
+});
+
+test("shell-ball pending-approval bubbles render inline allow and deny controls", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallBubbleZone, {
+      visualState: "waiting_auth",
+      bubbleItems: [
+        {
+          bubble: {
+            bubble_id: "msg-approval-1",
+            task_id: "task-approval-1",
+            type: "status",
+            text: "Waiting for approval before the task can continue.",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-04-24T09:10:00.000Z",
+          },
+          role: "agent",
+          desktop: {
+            lifecycleState: "visible",
+            inlineApproval: {
+              approvalId: "approval-1",
+              status: "idle",
+            },
+          },
+        },
+      ] satisfies ShellBallBubbleItem[],
+      onAllowApprovalBubble() {},
+      onDenyApprovalBubble() {},
+      onDeleteBubble() {},
+      onPinBubble() {},
+    }),
+  );
+
+  assert.match(markup, /shell-ball-bubble-message__approval-actions/);
+  assert.equal(markup.match(/data-bubble-action="allow_approval"/g)?.length, 1);
+  assert.equal(markup.match(/data-bubble-action="deny_approval"/g)?.length, 1);
+  assert.doesNotMatch(markup, /data-bubble-action="pin"/);
+  assert.doesNotMatch(markup, /data-bubble-action="delete"/);
 });
 
 test("shell-ball coordinator bubble actions pin and delete local items", () => {
@@ -5237,10 +5278,27 @@ test("shell-ball bubble actions stay coordinator-owned and detached-position fre
   assert.equal("x" in bubbleActionPayload, false);
   assert.equal("y" in bubbleActionPayload, false);
   assert.equal("position" in bubbleActionPayload, false);
-  assert.match(syncSource, /export type ShellBallBubbleAction = "pin" \| "unpin" \| "delete";/);
+  assert.match(syncSource, /export type ShellBallBubbleAction = "pin" \| "unpin" \| "delete" \| "allow_approval" \| "deny_approval";/);
   assert.match(syncSource, /export type ShellBallBubbleActionSource = "bubble" \| "pinned_window";/);
   assert.match(coordinatorSource, /currentWindow\.listen<ShellBallBubbleActionPayload>\(shellBallWindowSyncEvents\.bubbleAction/);
   assert.match(coordinatorSource, /setBubbleItems\(\(currentItems\) => applyShellBallBubbleAction\(currentItems, payload\)\)/);
+});
+
+test("shell-ball approval bubble actions stay on the formal security respond path", () => {
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+  const bubbleWindowSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallBubbleWindow.tsx"), "utf8");
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(appSource, /onAllowApprovalBubble=\{\(bubbleId\) => \{\s*handleCoordinatorBubbleAction\(\{ action: "allow_approval", bubbleId, source: "bubble" \}\);/);
+  assert.match(appSource, /onDenyApprovalBubble=\{\(bubbleId\) => \{\s*handleCoordinatorBubbleAction\(\{ action: "deny_approval", bubbleId, source: "bubble" \}\);/);
+  assert.match(bubbleWindowSource, /emitShellBallBubbleAction\("allow_approval", bubbleId\)/);
+  assert.match(bubbleWindowSource, /emitShellBallBubbleAction\("deny_approval", bubbleId\)/);
+  assert.match(coordinatorSource, /if \(payload\.action === "allow_approval" \|\| payload\.action === "deny_approval"\) \{/);
+  assert.match(coordinatorSource, /const decision: ApprovalDecision = payload\.action === "allow_approval" \? "allow_once" : "deny_once";/);
+  assert.match(coordinatorSource, /const response = await respondSecurityDetailed\(\{/);
+  assert.match(coordinatorSource, /approval_id: inlineApproval\.approvalId,/);
+  assert.match(coordinatorSource, /remember_rule: false,/);
+  assert.match(coordinatorSource, /createShellBallApprovalPendingBubbleItem\(\{/);
 });
 
 test("shell-ball pinned bubble windows render one coordinator-owned pinned item and emit detached actions", () => {
