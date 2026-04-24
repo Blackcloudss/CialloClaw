@@ -107,9 +107,9 @@ CialloClaw 采用 **“前端桌面承接层 + JSON-RPC 协议边界 + 后端任
 - 第 5 章负责系统级核心流程图与流程语义；
 - 第 6 章负责按功能模块组织的具体实现、接口、状态与异常路径。
 
-### 2.4.4 架构分层与协作阅读补充
+### 2.4.4 架构分层与协作阅读
 
-为了让模块文档与架构设计稿保持一致，这里额外补一层“总体架构怎么读”的桥接说明。当前系统仍可按 5 层理解：
+本节用于统一“模块设计文档应该怎么读”的层级视角。当前系统仍按 5 层理解：
 
 | 逻辑层 | 当前文档主要承接位置 | 关键职责 | 模块边界提醒 |
 | --- | --- | --- | --- |
@@ -119,7 +119,7 @@ CialloClaw 采用 **“前端桌面承接层 + JSON-RPC 协议边界 + 后端任
 | 治理与交付层 | 第 4.4 节、5.3~5.4 节 | 风险判断、授权承接、正式交付、审计、恢复、预算治理 | 不新建平行业务任务 |
 | 能力与存储层 | 第 4.3 节、4.5 节、5.5 节 | 模型/工具/插件接入、执行隔离、结构化存储、检索与机密存储 | 只提供能力与真源，不直接面向前端输出产品语义 |
 
-补充说明：
+阅读要点：
 
 - 模块图中的实线主要表示主执行链，虚线或回流箭头主要表示授权、结果、状态和恢复的正式反馈链。
 - 推荐、巡检、感知和镜像引用等辅助链路可以服务主链，但都不能绕过 `task` 主对象和正式协议边界直接改写业务状态。
@@ -138,7 +138,7 @@ CialloClaw 采用 **“前端桌面承接层 + JSON-RPC 协议边界 + 后端任
 - 治理层返回的是审批对象、交付对象、恢复结果和安全摘要；编排层返回的是状态推进与下一步待处理状态，两者不能越权。
 - 长期协作链与主任务链必须分层：推荐、巡检、记忆、镜像引用和 Trace / Eval 都围绕主链工作，但不能直接篡改 `task.status`。
 
-### 2.4.5 关键架构对象与边界补充
+### 2.4.5 关键架构对象与边界
 
 模块文档虽然不直接替代架构真源，但需要对齐一组稳定对象边界，避免后续章节把“运行兼容对象”和“前端正式对象”混写：
 
@@ -157,7 +157,7 @@ CialloClaw 采用 **“前端桌面承接层 + JSON-RPC 协议边界 + 后端任
 
 ### 2.4.6 从架构总览到模块设计的快速定位
 
-如果读者先看了 [docs/architecture-overview.md](D:/Code/GO/CialloClaw/docs/architecture-overview.md)，可以按下面的索引直接跳到本文件的对应细化位置：
+如果读者先看了 [architecture-overview.md](./architecture-overview.md)，可以按下面的索引直接跳到本文件的对应细化位置：
 
 | 架构总览关注点 | 在本文件中优先阅读的位置 | 说明 |
 | --- | --- | --- |
@@ -253,6 +253,27 @@ flowchart TB
 ### 模块定位
 该模块负责承载 Tauri 2 Windows 宿主、多窗口入口和应用生命周期，是所有前端交互窗口的运行基础，不直接承担业务推理与任务编排。
 
+### 层内子模块图
+
+```mermaid
+flowchart LR
+    subgraph F1[前端工程与桌面宿主]
+        direction TB
+        BOOT[启动装配器]
+        WINDOW[窗口注册表]
+        LAYOUT[布局与恢复管理器]
+        TRAY[托盘 / 快捷键桥]
+        LIFE[生命周期协调器]
+    end
+
+    BOOT --> WINDOW
+    BOOT --> LAYOUT
+    BOOT --> TRAY
+    BOOT --> LIFE
+    LIFE -.->|resume / suspend / quit| WINDOW
+    LAYOUT -.->|restore layout| WINDOW
+```
+
 ### 职责
 - 承载 Tauri 2 Windows 宿主；
 - 管理多窗口：悬浮球、仪表盘、控制面板；
@@ -264,6 +285,16 @@ flowchart TB
 - 多入口分包：`shell-ball`、`dashboard`、`control-panel`；
 - 托盘、通知、快捷键、更新等宿主能力接入；
 - 崩溃后窗口状态恢复与上次布局恢复。
+
+### 层内处理细节
+
+| 子模块 | 处理入口 | 关键中间产物 | 输出与反馈 |
+| --- | --- | --- | --- |
+| 启动装配器 | 应用冷启动、热恢复、自动启动 | 启动配置、窗口清单、恢复策略 | 初始化窗口、托盘和平台桥 |
+| 窗口注册表 | 打开/关闭/显隐/聚焦请求 | 窗口句柄、窗口角色映射 | 悬浮球、仪表盘、控制面板窗口实例 |
+| 布局与恢复管理器 | 最近布局、本地缓存、崩溃恢复 | 布局快照、默认布局决策 | 启动后的窗口位置和显示状态 |
+| 托盘 / 快捷键桥 | 托盘菜单点击、快捷键命中 | 宿主动作事件 | 打开窗口、切换显示、唤起控制面板 |
+| 生命周期协调器 | `resume / suspend / quit / update` | 生命周期事件、能力可用性标记 | 给状态层和平台层的宿主状态信号 |
 
 ### 输入
 - Tauri 生命周期事件；
@@ -312,6 +343,27 @@ flowchart TB
 ### 模块定位
 该模块负责把状态和结果直接呈现给用户，不承担协议拼装、对象建模和业务执行决策。
 
+### 层内子模块图
+
+```mermaid
+flowchart LR
+    subgraph F2[表现层]
+        direction TB
+        BALL[悬浮球视图]
+        BUBBLE[气泡视图]
+        INPUT[轻量输入视图]
+        DASH[仪表盘视图]
+        PANEL[控制面板视图]
+        RESULT[结果承接视图]
+    end
+
+    BALL --> BUBBLE
+    BALL --> INPUT
+    INPUT --> RESULT
+    DASH --> RESULT
+    PANEL --> DASH
+```
+
 ### 职责
 - 负责悬浮球、气泡、轻量输入区、仪表盘界面、结果承接界面、控制面板界面的直接显示；
 - 保持近场交互低打扰、短反馈和结果可承接；
@@ -324,6 +376,17 @@ flowchart TB
 - 仪表盘界面：任务状态、便签协作、镜子模块、安全卫士、插件面板；
 - 结果承接界面：结果页、文档打开提示、文件结果提示、任务详情入口；
 - 控制面板界面：设置项配置、行为开关、记忆策略、自动化规则、成本与数据治理、密钥与模型配置。
+
+### 层内处理细节
+
+| 子模块 | 处理入口 | 关键中间产物 | 输出与反馈 |
+| --- | --- | --- | --- |
+| 悬浮球视图 | 拖拽、单击、双击、长按、悬停 | 悬浮球局部状态、交互事件 | 触发近场入口编排 |
+| 气泡视图 | 后端短反馈、确认请求、授权提示 | `bubbleVM`、生命周期状态 | 轻量反馈、确认入口、恢复入口 |
+| 轻量输入视图 | 用户补充说明、附件、快捷动作 | 输入草稿、附件草稿、提交动作 | 进入应用编排层 |
+| 仪表盘视图 | 任务列表、详情、安全摘要、插件状态 | 页面视图模型、筛选条件 | 持续任务工作台 |
+| 控制面板视图 | 设置快照、保存结果、重启提示 | 表单草稿、校验错误、apply mode | 系统级配置入口 |
+| 结果承接视图 | `delivery_result / artifact` 投影 | 结果入口视图模型 | 文档、文件、结果页、任务详情入口 |
 
 ### 输入
 - 悬浮球状态、气泡状态、轻量输入状态；
@@ -370,6 +433,25 @@ flowchart TB
 ### 模块定位
 该模块负责把用户动作编排成标准任务请求，并把后端返回结果分流到气泡、结果页、任务详情或仪表盘。
 
+### 层内子模块图
+
+```mermaid
+flowchart LR
+    subgraph F3[应用编排层]
+        direction TB
+        ENTRY[入口动作路由器]
+        OBJECT[对象识别与承接器]
+        CONFIRM[意图确认协调器]
+        EXEC[任务发起协调器]
+        RESULT[结果分流协调器]
+        RECOMMEND[推荐调度器]
+    end
+
+    ENTRY --> OBJECT --> CONFIRM --> EXEC --> RESULT
+    ENTRY --> RECOMMEND --> CONFIRM
+    RESULT -.->|open task / open file / open doc| ENTRY
+```
+
 ### 职责
 - 把前端输入动作编排为可提交给后端的任务请求；
 - 统一承接单击、双击、长按、悬停、文本选中、文件拖拽等入口；
@@ -381,6 +463,17 @@ flowchart TB
 - 推荐调度：推荐触发条件、冷却时间、用户活跃度与当前上下文判断；
 - 任务发起与执行协调：轻量任务、持续任务、授权等待、暂停与恢复；
 - 结果分发：短结果、长文档、网页结果、单文件、多文件、连续任务等多出口交付。
+
+### 层内处理细节
+
+| 子模块 | 处理入口 | 关键中间产物 | 输出与反馈 |
+| --- | --- | --- | --- |
+| 入口动作路由器 | 单击、双击、长按、悬停、拖拽、选中 | 标准前端动作事件 | 路由到对象承接、推荐或窗口动作 |
+| 对象识别与承接器 | 文本、文件、语音、推荐对象 | `taskObject`、对象有效性、输入摘要 | 进入意图确认或直接发起任务 |
+| 意图确认协调器 | 已识别对象、后端建议、用户修正 | 确认 payload、候选输出方式 | `agent.task.confirm` 或回退待机 |
+| 任务发起协调器 | start / submit / control 意图 | 标准 RPC 请求、局部 loading 状态 | 发起任务、控制任务、处理授权等待 |
+| 结果分流协调器 | `delivery_result / artifact / task` 投影 | 交付出口决策、打开动作 | 气泡、结果页、文档、任务详情入口 |
+| 推荐调度器 | 上下文感知信号、冷却策略 | 推荐请求、推荐展示节流 | 轻提示或升级成正式任务 |
 
 ### 输入
 - 表现层的用户动作；
@@ -429,6 +522,24 @@ flowchart TB
 ### 模块定位
 该模块负责承接前端局部状态机、查询缓存和后端订阅回写，是前端“本地反应层”。
 
+### 层内子模块图
+
+```mermaid
+flowchart LR
+    subgraph F4[状态管理与查询层]
+        direction TB
+        LOCAL[局部状态仓]
+        QUERY[查询缓存]
+        EVENT[事件归并器]
+        SELECTOR[视图选择器]
+    end
+
+    LOCAL --> SELECTOR
+    QUERY --> SELECTOR
+    EVENT --> LOCAL
+    EVENT --> QUERY
+```
+
 ### 职责
 - 承接前端本地状态、查询缓存和订阅结果；
 - 区分前端局部状态与正式异步数据；
@@ -460,6 +571,15 @@ flowchart TB
 - 给应用编排层的上下文与冷却信息；
 - 给平台层的窗口和通知刷新依据；
 - 给查询层的失效与重新拉取信号。
+
+### 层内处理细节
+
+| 子模块 | 处理入口 | 关键中间产物 | 输出与反馈 |
+| --- | --- | --- | --- |
+| 局部状态仓 | 悬浮球、气泡、输入、语音、面板动作 | 前端局部状态机快照 | 直接驱动表现层 |
+| 查询缓存 | RPC 查询结果、列表分页、详情数据 | 缓存记录、失效标记 | 任务列表、详情和设置视图 |
+| 事件归并器 | `task.updated / delivery.ready / approval.pending / loop.*` | 事件去重、按 `task_id` 合并后的更新 | 回写局部状态和查询缓存 |
+| 视图选择器 | 局部状态 + 正式异步数据 | 表现层可消费的 VM | 表现层、应用编排层共享视图数据 |
 
 ### 关键接口
 - `shellBallStore`
@@ -498,6 +618,29 @@ flowchart TB
 ### 模块定位
 该模块负责把应用编排层的业务意图翻译成具体服务调用，是“前端业务能力封装层”。
 
+### 层内子模块图
+
+```mermaid
+flowchart LR
+    subgraph F5[前端服务层]
+        direction TB
+        TASK[任务服务]
+        CTX[上下文服务]
+        RECO[推荐服务]
+        FILE[文件服务]
+        MEMORY[记忆服务]
+        SAFE[安全服务]
+        SETTINGS[设置服务]
+    end
+
+    TASK --> SAFE
+    TASK --> FILE
+    TASK --> MEMORY
+    CTX --> TASK
+    RECO --> TASK
+    SETTINGS --> TASK
+```
+
 ### 核心服务
 - 上下文服务：获取当前任务现场上下文、悬停/选中/当前界面相关输入；
 - 任务服务：发起任务、查询任务状态、获取任务步骤、历史任务与任务详情；
@@ -507,6 +650,18 @@ flowchart TB
 - 记忆服务：镜子摘要、用户画像、近期记忆命中读取；
 - 安全服务：待确认操作、风险等级、审计记录、恢复点与授权提交；
 - 设置服务：设置读取、保存、校验与默认值回填。
+
+### 层内处理细节
+
+| 子模块 | 处理入口 | 关键中间产物 | 输出与反馈 |
+| --- | --- | --- | --- |
+| 上下文服务 | 近场对象、页面、语音、拖拽输入 | 结构化上下文请求体 | 给任务服务和推荐服务使用 |
+| 任务服务 | start / submit / confirm / control / query | 标准 RPC 参数与响应映射 | 正式任务对象和任务详情 |
+| 推荐服务 | 感知信号、冷却规则、用户反馈 | 推荐请求、反馈请求 | 推荐列表和推荐反馈结果 |
+| 文件服务 | 拖拽文件、artifact 打开、结果文件定位 | 文件元信息、打开动作请求 | 文件摘要、文档入口、打开结果 |
+| 记忆服务 | 镜子概览、近期命中、用户画像 | 记忆查询请求 | 记忆摘要、检索命中 |
+| 安全服务 | 待授权项、授权响应、恢复点查询 | 安全请求体、安全视图模型 | 授权结果、安全摘要 |
+| 设置服务 | 设置读取、保存、草稿校验 | 设置 patch、校验结果、apply mode | 设置快照、保存结果、重启提示 |
 
 ### 输入
 - 应用编排层的结构化需求；
@@ -555,6 +710,29 @@ flowchart TB
 ### 模块定位
 该模块负责把前端世界与桌面平台能力、协议传输层连接起来，是“前端最底层的系统桥接层”。
 
+### 层内子模块图
+
+```mermaid
+flowchart LR
+    subgraph F6[平台集成与协议适配层]
+        direction TB
+        RPC[Typed JSON-RPC Client]
+        PIPE[Named Pipe / 调试传输]
+        SUB[通知与订阅适配]
+        WIN[窗口桥]
+        TRAY[托盘 / 快捷键桥]
+        FILE[文件 / 系统动作桥]
+        CACHE[本地存储桥]
+    end
+
+    RPC --> PIPE
+    RPC --> SUB
+    WIN --> RPC
+    TRAY --> WIN
+    FILE --> RPC
+    CACHE --> WIN
+```
+
 ### 核心能力
 - Typed JSON-RPC Client：统一 method、params、result、错误模型和订阅注册；
 - Windows Named Pipe 连接适配：负责主前后端本地 IPC 建链、重连、权限与错误处理；
@@ -567,6 +745,18 @@ flowchart TB
 - 文件系统集成：打开文件、打开文件夹、高亮结果文件、读取本地文件元信息；
 - 本地存储集成：前端草稿缓存、偏好镜像、面板状态记忆；正式设置真源仍通过 `agent.settings.*` 维护；
 - 外部能力集成：浏览器打开、剪贴板桥接和其他 Tauri 插件统一接入。
+
+### 层内处理细节
+
+| 子模块 | 处理入口 | 关键中间产物 | 输出与反馈 |
+| --- | --- | --- | --- |
+| Typed JSON-RPC Client | 服务层标准请求 | method/params/result/error 统一模型 | 标准协议响应 |
+| Named Pipe / 调试传输 | 本地 IPC 建链、断链、重连 | 连接状态、传输错误、重试状态 | 稳定的 RPC 传输通道 |
+| 通知与订阅适配 | `task.updated / delivery.ready / approval.pending / plugin.updated` | 订阅注册、通知事件对象 | 回写状态层和查询缓存 |
+| 窗口桥 | 打开/关闭/显隐/聚焦请求 | 窗口动作请求、窗口句柄 | 多窗口协同结果 |
+| 托盘 / 快捷键桥 | 托盘菜单、全局快捷键 | 宿主输入事件 | 唤起窗口和触发入口动作 |
+| 文件 / 系统动作桥 | 打开文件、定位文件夹、浏览器打开 | 平台动作请求 | 文件、目录、浏览器等宿主动作结果 |
+| 本地存储桥 | 草稿、布局、面板状态缓存 | 本地缓存键值 | 前端草稿和恢复信息 |
 
 ### 输入
 - 上层请求；
@@ -671,7 +861,7 @@ flowchart TB
 - 前端工作台负责呈现事项桶与转任务入口；
 - 后端巡检服务、规则引擎和 `agent.notepad.convert_to_task` 负责正式升级。
 
-当前 owner-5 底座约束：
+实现约束：
 
 - `notes` 详情补强优先复用现有 `TodoItem / RecurringRule` 数据来源，不新增独立底座对象名；
 - 详情补强字段中，`note_text`、`prerequisite`、`related_resources`、`linked_task_id` 已进入稳定 `TodoItem` 协议投影；`planned_at`、`ended_at` 等存储补强字段继续留在后端运行态与持久化层承接。
@@ -745,7 +935,7 @@ flowchart TB
 
 - 插件与技能不直接面向前端开放调用，必须通过 `/services/local-service` 统一编排。
 - 模型切换不改变 `task / run / delivery_result` 等核心协议对象。
-- 插件、技能、模型配置都必须有版本、来源与权限描述，以便进入审计和 Trace；当前 owner-5 后端已把 built-in skill / blueprint / prompt、model provider route 与 plugin manifest 统一归到 extension asset attribution 边界。
+- 插件、技能、模型配置都必须有版本、来源与权限描述，以便进入审计和 Trace；文档中的 built-in skill / blueprint / prompt、model provider route 与 plugin manifest 应统一归到 extension asset attribution 边界。
 
 ### 3.7.8 上下文感知与主动协助域
 
@@ -765,10 +955,10 @@ flowchart TB
 - 复制、停留、切换等弱信号默认保守处理，不得变成高频打扰源。
 - 感知信号只能作为输入候选，正式执行仍需经过意图确认、风险治理和交付内核。
 
-当前 owner-5 底座实现约束：
+实现约束：
 
-- 后端可先维护 richer perception signal snapshot（如 `clipboard_text`、`window_title`、`visible_text`、`screen_summary`、`dwell_millis`、`copy_count`、`window_switch_count`、`page_switch_count`），并可把当前内建 perception package 的 version/source/permissions 通过 execution attribution 回流到 Trace/Eval，但不得绕过现有稳定 RPC 直接发明新的正式协议对象；
-- recommendation 与 dashboard 可消费这些 richer signals 做机会识别和高价值信号增强，但正式推荐触发边界仍需由 4 号统一冻结；
+- 后端可维护 richer perception signal snapshot（如 `clipboard_text`、`window_title`、`visible_text`、`screen_summary`、`dwell_millis`、`copy_count`、`window_switch_count`、`page_switch_count`），并可把内建 perception package 的 version/source/permissions 通过 execution attribution 回流到 Trace/Eval，但不得绕过现有稳定 RPC 直接发明新的正式协议对象；
+- recommendation 与 dashboard 可消费这些 richer signals 做机会识别和高价值信号增强，但正式推荐触发边界仍以稳定协议真源为准；
 - 屏幕 / 页面 / 复制 / 停留 / 切换信号属于上下文候选输入，不得直接替代 `task` 创建、授权或正式交付链路；
 - 感知能力增强应优先服务主动推荐、Context Manager 和 memory query，而不是先扩散到新的前端页面状态模型。
 
@@ -776,7 +966,7 @@ flowchart TB
 
 ### 4.0 后端分层阅读总览
 
-后端章节以 [docs/architecture-overview.md](D:/Code/GO/CialloClaw/docs/architecture-overview.md) 的层级命名为主来展开：
+后端章节以 [architecture-overview.md](./architecture-overview.md) 的层级命名为主来展开：
 
 - `4.1` 对应 **本地接入层**；
 - `4.2` 对应 **任务编排与运行层**；
@@ -1077,7 +1267,7 @@ flowchart LR
 - 审批、重规划、需要补充输入、Doom Loop 与恢复结果是否都能重新进入编排循环；
 - worker / plugin / sidecar 输出是否全部回到了统一对象链。
 
-### 当前实现对齐补充
+### 实现边界
 - `context.Service` 的稳定输出是 `TaskContextSnapshot`，职责是把页面、选区、文件、错误和行为信号归一化，而不是直接推进 `task.status`。
 - `intent.Service` 当前仍是轻量建议层，其产物是 `Suggestion`；是否创建任务、是否等待确认、是否直接执行，仍由编排层与运行态收敛。
 - `runengine.TaskRecord` 是当前后端桥接 `task` 与 `run` 的核心运行态结构，用于承接主对象投影、治理摘要、通知队列和会话排队。
@@ -1193,7 +1383,7 @@ flowchart LR
 - 组装任务 continuation classifier Prompt 与正式执行 Prompt；
 - 把资产命中结果登记进 Trace / Eval，而不是只留在临时字符串里。
 
-#### 当前实现落点
+#### 实现落点
 - `task_continuation.go` 负责 continuation classifier Prompt；
 - `execution/service.go` 中的 `buildPrompt()` 负责正式执行 Prompt；
 - `storage` 中的 `skill_manifest / blueprint_definition / prompt_template_version` 负责资产真源；
@@ -1326,7 +1516,7 @@ flowchart LR
 - 插件命中资产版本进入 Trace / Eval；
 - 仪表盘、任务详情和安全摘要消费的永远是正式事件与正式查询视图。
 
-#### 当前实现约束
+#### 实现约束
 - 当前代码已具备 `agent.plugin.runtime.list / agent.plugin.list / agent.plugin.detail.get` 的查询装配；
 - 插件运行态与任务详情 runtime 观察已经进入正式可见层；
 - 后续仍应以正式任务详情、仪表盘和安全摘要承接为主，不在本模块文档里提前冻结超出当前协议稿范围的附加执行接口。
@@ -1335,9 +1525,9 @@ flowchart LR
 - 插件启动失败：写入正式插件错误事件；
 - 插件权限不足：直接拒绝并进入安全或审计链路。
 
-### 4.2.10 当前实现边界与反馈回流
+### 4.2.10 实现边界与反馈回流
 
-#### 当前实现边界
+#### 实现边界
 - 资产路由与 Prompt 组装当前仍是逻辑切面，尚未独立成单独 service；
 - 入口规划只解决“怎样入链”，不直接替代执行期 Planner；
 - 记忆与交付在本层只负责挂计划与交接，不在本层完成最终拥有。
@@ -1456,6 +1646,18 @@ flowchart LR
 - 支持 tool calling、流式结果与多轮关联；
 - 模型调用审计与预算治理纳入统一链路。
 
+#### 处理主线
+1. 根据任务意图、预算策略和设置快照解析当前模型路由。
+2. 读取密钥与 provider 配置，形成一次受控 `model invocation`。
+3. 调用 Responses API，接收文本、工具调用和 usage 元数据。
+4. 把 provider 响应归一成执行层可消费的标准输出块。
+5. 把 `latency / token / cost / route` 元数据回写给 Trace / Eval 和成本治理。
+
+#### 关键中间产物
+- model route descriptor
+- model invocation metadata
+- normalized response blocks
+
 ### 4.3.2 工具执行适配器
 
 #### 模块定位
@@ -1469,6 +1671,18 @@ flowchart LR
 - 外部执行后端路由。
 
 补充约束：`exec_command` 默认优先路由到 Docker sandbox；仅对 `cmd` / `powershell` / `pwsh` 这类 Windows shell 入口保留受控宿主执行路径，避免在 Windows 主目标上把本地命令误送入 Linux 容器。
+
+#### 处理主线
+1. 根据 `Intent` 和 arguments 解析目标工具及目标对象。
+2. 在真正执行前先生成治理评估，判断是否需要授权、是否越界、是否需要恢复点。
+3. 形成标准工具请求并路由到文件、网页、命令、worker 或执行后端。
+4. 把返回值归一成 `ToolCallRecord / tool output / artifact candidate / citation_seed`。
+5. 把错误统一映射为正式错误码，而不是透传底层异常文本。
+
+#### 关键中间产物
+- governance assessment
+- tool request payload
+- `ToolCallRecord`
 
 ### 4.3.3 LSP / 代码语义能力
 
@@ -1484,6 +1698,17 @@ flowchart LR
 - 作为 Context Manager 和 Agent Review 的代码语义输入源；
 - 优先以独立 Worker 或 sidecar 形式接入，不把多语言语义分析硬塞进主业务内核。
 
+#### 处理主线
+1. 接收来自上下文准备器或审查引擎的符号定位请求。
+2. 调用对应语言服务，获取 definition、hover、diagnostics 或引用信息。
+3. 把语言服务结果压平为统一语义摘要，而不是把 IDE 私有结构直接透出。
+4. 把结果交给上下文准备器补全 Prompt，或交给审查引擎做一致性检查。
+
+#### 关键中间产物
+- symbol lookup result
+- diagnostics summary
+- code reference snapshot
+
 ### 4.3.4 Node Playwright Sidecar
 
 #### 模块定位
@@ -1495,12 +1720,19 @@ flowchart LR
 - 网页抓取；
 - 结构化 DOM/页面结果回传。
 
-#### 当前实现约束
+#### 实现约束
 - Playwright sidecar 至少支持 `page_read`、`page_search`、`page_interact`、`structured_dom` 四类正式能力；
 - sidecar 启动前必须通过健康检查，避免把未就绪 worker 暴露给主执行链；
 - 传输层失败要清空 ready 状态并触发回收，普通请求失败则保留 ready 状态；
 - 页面交互与结构化 DOM 结果必须通过 `tool_call -> event -> delivery_result` 链回写，而不是前端直连 sidecar；
 - `tool_call.completed` 事件需要回写 worker/source/output 元信息，便于任务详情、通知订阅和后续审计复用。
+
+#### 处理主线
+1. 先确认 sidecar 健康状态与浏览器能力可用。
+2. 接收标准页面能力请求，路由到 `page_read / page_search / page_interact / structured_dom`。
+3. 把页面结果、结构化 DOM、截图或 URL 元数据组装成标准工具输出。
+4. 为需要证据链的场景生成 `citation_seed` 与 artifact 候选。
+5. 通过 `tool_call.completed` 和正式交付链回流，而不是独立暴露页面结果。
 
 ### 4.3.5 OCR / 媒体 / 视频 Worker
 
@@ -1513,12 +1745,19 @@ flowchart LR
 - yt-dlp 下载与元数据提取；
 - MediaRecorder 结果后处理。
 
-#### 当前实现约束
+#### 实现约束
 - OCR worker 至少支持 `extract_text`、`ocr_image`、`ocr_pdf`；
 - Media worker 至少支持 `transcode_media`、`normalize_recording`、`extract_frames`；
 - worker 启动必须通过健康检查，失败时返回统一 worker 错误码并触发 ready 状态清理；
 - worker 输出需要带回标准化摘要和 artifact 元信息，供后续 `task_detail`、审计与交付链复用；
 - worker 结果应回写 `tool_call.completed` 事件通知，至少包含 `source`、目标路径或 URL、以及关键产出元信息。
+
+#### 处理主线
+1. 根据任务意图选择 OCR、转码、抽帧或媒体后处理路径。
+2. 调用对应 worker，并在调用前确认 worker ready 状态。
+3. 把文本提取结果、帧列表、媒体产物和元数据归一成标准工具输出。
+4. 为屏幕分析、录屏分析等场景补充 artifact 与 citation 候选。
+5. 把 worker 状态和错误映射到正式通知和正式错误码。
 
 ### 4.3.6 授权式屏幕 / 视频能力
 
@@ -1529,6 +1768,13 @@ flowchart LR
 - `getDisplayMedia` 发起用户授权捕获；
 - `MediaRecorder` 负责录制；
 - 本地 worker 做切片、转码、OCR 与摘要。
+
+#### 处理主线
+1. 先生成待授权能力请求，并进入治理层授权链。
+2. 授权通过后，再调用 `getDisplayMedia` 或录制能力采样。
+3. 对原始截图、关键帧或录屏片段形成候选素材。
+4. 把素材交给 OCR / 媒体 worker，产出可分析文本和证据产物。
+5. 最终仍通过正式任务链交付，不形成前端私有结果通道。
 
 ### 4.3.7 RAG / 记忆检索层
 
@@ -1543,6 +1789,13 @@ flowchart LR
 - 记忆回填摘要；
 - 结构化状态与语义检索解耦；
 - 优先采用本地存储、本地索引、本地检索闭环。
+
+#### 处理主线
+1. 接收编排层登记的 memory read plan 或后续检索请求。
+2. 并行执行关键词召回、向量召回和精确键值检索。
+3. 合并候选结果并做去重、排序、摘要压缩。
+4. 返回 `retrieval_hit` 与可注入摘要，而不是直接改写任务运行态。
+5. 把检索命中情况回写给 Trace / Eval 作为前馈证据。
 
 ---
 
@@ -1653,7 +1906,7 @@ flowchart LR
 - 是否存在“动作做了但没进入审计”的空洞；
 - 是否存在“错误发生了但前端看不到正式对象”的问题。
 
-### 当前实现对齐补充
+### 实现边界
 - `risk.Service` 只负责输出可测试的风险判断结果；等待授权、继续执行、终止收敛和恢复回流仍由编排层与运行态接管。
 - `delivery.Service` 与记忆沉淀相关写入在逻辑分层上归入治理与交付层；任务编排与运行层只负责挂计划和触发交接，不拥有最终发布语义。
 - `checkpoint` 模块定位为恢复点能力的最小收口层，不独占完整回滚编排；恢复结果必须重新并入正式任务主链。
@@ -1675,6 +1928,12 @@ flowchart LR
 - `impact_scope`
 - 是否需要恢复点。
 
+#### 处理主线
+1. 读取动作类型、目标对象、工作区范围和副作用类型。
+2. 判断是否允许直接执行、是否必须授权、是否必须先建恢复点。
+3. 生成 `impact_scope` 与待授权说明。
+4. 把判断结果回交运行层，由运行层决定等待授权、继续执行或阻断。
+
 ### 4.4.2 结果审查引擎
 
 #### 职责
@@ -1690,6 +1949,12 @@ flowchart LR
 - 结构化失败原因；
 - 需要人工升级或重试的建议。
 
+#### 处理主线
+1. 收集执行结果、工具调用记录和交付对象。
+2. 运行 lint、schema、格式、引用和语义一致性检查。
+3. 输出通过、不通过或需要人工复核的结构化结论。
+4. 把结论回交治理与交付层决定继续交付、重规划或 HITL。
+
 ### 4.4.3 Hooks 引擎
 
 #### 职责
@@ -1701,6 +1966,11 @@ flowchart LR
 - `stop`；
 - 安全检查、日志埋点、格式规范化与总结逻辑挂载。
 
+#### 处理主线
+1. 在规划、工具调用、交付和停止边界上挂接规则。
+2. 输出拦截、放行、补写元数据或格式修正结果。
+3. 不直接推进任务状态，而是把 hook 结果交回运行层和治理层收敛。
+
 ### 4.4.4 Trace / Eval 引擎
 
 #### 职责
@@ -1711,12 +1981,18 @@ flowchart LR
 - 正确率、完成率、token 效率与违规次数评估；
 - 回放与对比实验基础数据沉淀。
 
-当前 owner-5 底座实现约束：
+实现约束：
 
 - Trace / Eval 先通过 `trace_records / eval_snapshots` 落盘，不绕过现有稳定 RPC 直接发明新的前端正式对象；
 - Trace 必须优先记录模型输入/输出摘要、loop round、tool 调用、latency、cost 和 review 结果，而不是只保留最近一次字符串日志；
 - Trace / Eval 必须记录当前 `task / run` 实际命中的 `Skill / Blueprint / Prompt / Plugin` 资产版本，便于回放和问题定位；
-- Eval Snapshot 先作为后端质量/回放真源，前端展示与协议冻结由 4 号统一收口。
+- Eval Snapshot 先作为后端质量/回放真源，前端展示与协议冻结应通过稳定协议真源统一收口。
+
+#### 处理主线
+1. 收集本轮执行的模型输入摘要、输出摘要、tool calls、资产命中和 token/cost。
+2. 生成 `trace_record` 与 `eval_snapshot`。
+3. 检测 Doom Loop 和人工复核触发条件。
+4. 将结果写入存储，并把 review/eval 结论回交治理层。
 
 ### 4.4.5 Doom Loop 检测与熔断引擎
 
@@ -1727,11 +2003,16 @@ flowchart LR
 - 输出无实质变化检测；
 - 熔断、换路、重规划与人工升级触发。
 
-当前 owner-5 底座实现约束：
+实现约束：
 
 - Doom Loop 检测先在后端执行链路中产出结构化命中结果，并能改变主链路状态；
 - 当前阶段允许通过 `trace_records.review_result`、Eval 状态和运行态 blocked task 承接结果，但不直接新增前端协议对象；
 - 规则应优先覆盖重复调用签名和重复无进展错误等高确定性命中。
+
+#### 处理主线
+1. 检查重复错误、重复调用签名、重复修改和无进展输出。
+2. 命中后判断应重规划还是升级人工复核。
+3. 输出结构化命中原因，并通过运行层把任务推进到重规划或 blocked 状态。
 
 ### 4.4.6 Entropy Cleanup 引擎
 
@@ -1742,6 +2023,11 @@ flowchart LR
 - 孤立 TODO / FIXME 标记收敛；
 - 废弃产物与无用分支状态回收。
 
+#### 处理主线
+1. 在任务完成、失败或阶段结束后检查临时产物与冗余上下文。
+2. 只清理不再影响正式交付和恢复链的临时对象。
+3. 把清理结果回写为审计或 Trace 记录，保证可追踪。
+
 ### 4.4.7 Human-in-the-loop 升级引擎
 
 #### 职责
@@ -1751,11 +2037,17 @@ flowchart LR
 - 需求模糊与架构冲突场景人工决策；
 - 结构化失败报告与回滚确认。
 
-当前 owner-5 底座实现约束：
+实现约束：
 
 - Human-in-the-loop 升级先形成结构化 escalation payload，并把任务推进到可持续恢复的 blocked / pending 承接状态；
-- escalation payload 可先挂在运行态 pending execution 侧，正式协议暴露方式由 4 号统一冻结；
+- escalation payload 可先挂在运行态 pending execution 侧，正式协议暴露方式仍以稳定协议真源为准；
 - 人工升级必须与 Trace / Eval / Doom Loop 命中保持稳定引用关系，避免只留下孤立文案。
+
+#### 处理主线
+1. 接收审查失败、Doom Loop 命中或高风险确认请求。
+2. 生成结构化 escalation payload，包括原因、建议动作、复核说明和可选 corrected intent。
+3. 通过运行层把任务推进到 `blocked` 或重新确认状态。
+4. 在人工批准或要求重规划后重新并入任务主链。
 
 ### 4.4.8 审计与追踪引擎
 
@@ -1768,6 +2060,11 @@ flowchart LR
 - Token 日志；
 - 费用日志。
 
+#### 处理主线
+1. 在高风险动作执行前后收集标准审计字段。
+2. 把工具调用、授权结果、恢复结果和预算事件转成统一审计记录。
+3. 为安全摘要、恢复入口和问题排查提供正式读模型基础。
+
 ### 4.4.9 恢复与回滚引擎
 
 #### 职责
@@ -1775,6 +2072,12 @@ flowchart LR
 - checkpoint 恢复；
 - diff/sync plan 展示；
 - 容器执行失败后的恢复策略。
+
+#### 处理主线
+1. 在需要恢复点的动作前准备 checkpoint。
+2. 在失败、中断或显式恢复请求时执行恢复策略。
+3. 生成恢复结果、安全摘要和后续续跑信号。
+4. 把恢复结果重新并入运行层，而不是在治理层内部结束。
 
 ### 4.4.10 成本治理引擎
 
@@ -1784,10 +2087,15 @@ flowchart LR
 - 降级执行；
 - 熔断与预算提醒。
 
-#### 当前实现约束
+#### 实现约束
 - `budget_auto_downgrade` 已进入 Harness 主链路：编排层在执行前依据 token/cost、provider 可用性和 failure signal window 评估预算策略。
 - 执行层在模型或 provider 失败后会转入 lightweight delivery fallback，并对高成本工具类别执行阻断。
 - 命中结果统一回流到 audit / event / trace 链路，而不是只停留在设置项展示。
+
+#### 处理主线
+1. 在执行前计算当前预算策略、provider 可用性和高成本能力风险。
+2. 必要时生成 downgrade decision，并修改执行请求。
+3. 在命中、失败和恢复时把预算事件写入 audit / event / trace。
 
 ### 4.4.11 边界与策略引擎
 
@@ -1797,6 +2105,11 @@ flowchart LR
 - 网络代理与外连策略；
 - sidecar / worker / plugin 权限边界；
 - 插件权限显式授权。
+
+#### 处理主线
+1. 在执行前校验路径、命令、网络和插件权限边界。
+2. 生成 deny / allow / approval required 三类策略结果。
+3. 将结果回交风险评估与运行层，而不是直接跳过主链执行。
 
 ---
 
@@ -1906,6 +2219,11 @@ flowchart LR
 - Artifact 文件落盘；
 - 不暴露平台专属路径实现。
 
+#### 处理主线
+1. 统一把上层目标路径归一为受控路径对象。
+2. 执行 workspace 边界校验和 artifact 目录映射。
+3. 提供读写、落盘和文件存在性检查结果给上层。
+
 ### 4.5.2 系统能力抽象层
 
 #### 职责
@@ -1916,6 +2234,11 @@ flowchart LR
 - 外部命令启动；
 - sidecar 生命周期管理。
 
+#### 处理主线
+1. 接收上层平台动作请求。
+2. 选择 Windows 当前实现或未来跨平台实现。
+3. 返回统一能力结果，而不是暴露宿主私有 API 细节。
+
 ### 4.5.3 执行后端适配层
 
 #### 职责
@@ -1924,6 +2247,11 @@ flowchart LR
 - ResourceLimit；
 - Remote Backend；
 - Windows 当前实现优先，其他平台保留接口。
+
+#### 处理主线
+1. 根据工具类型、风险等级和策略选择执行后端。
+2. 附加 sandbox profile、resource limit 和工作目录约束。
+3. 返回统一执行结果和失败原因，供运行层和治理层继续收敛。
 
 ---
 
@@ -2014,7 +2342,7 @@ flowchart TB
     M -. trace / eval / review .-> D
 ```
 
-补充说明：
+设计要点：
 
 - `TaskContextSnapshot` 是入口阶段的统一上下文快照，不等同于最终 Prompt。
 - `Suggestion` 只决定“怎样入链”，例如 `Intent`、`RequiresConfirm`、`TaskTitle` 和交付偏好，不直接替代执行期 Planner。
@@ -2069,7 +2397,7 @@ flowchart TB
     C -. 审查摘要 / trace / eval .-> H
 ```
 
-补充说明：
+设计要点：
 
 - 反馈闭环不是“执行完再补日志”，而是执行结果先回到运行控制器，再进入治理与交付层决定继续、重规划、人工复核或正式交付。
 - `task.updated` 和 `delivery.ready` 是前端看到反馈链的正式出口；它们必须与任务详情查询口径一致。
@@ -2165,7 +2493,7 @@ flowchart TB
     E --> J
 ```
 
-### 5.8 结果审查、Trace 与熔断闭环补充说明
+### 5.8 结果审查、Trace 与熔断闭环说明
 
 `5.4 反馈闭环与熔断图` 已经覆盖了结果审查、Hooks、Trace / Eval、Doom Loop、Human-in-the-loop 与 Entropy Cleanup 的主链闭环。这里不再重复放同一张图，只补充当前模块文档需要强调的实现侧要点：
 
@@ -2243,7 +2571,7 @@ flowchart TB
     A -. 执行失败 / 被阻断 .-> M --> N --> F
 ```
 
-补充说明：
+设计要点：
 
 - 结果先形成正式交付对象，再决定前端展示位置；前端不应自己拼接“临时结果”。
 - 失败与中断也必须走正式反馈链，至少要给出卡点说明、是否可恢复、以及恢复点或任务详情入口。
@@ -2321,7 +2649,7 @@ sequenceDiagram
 **异常分支**：执行失败或用户中断时，必须显式回滚或保留可恢复信息。  
 **实现说明**：此链路是治理链的最小闭环，凡是跨工作区、命令执行、联网下载、删除/覆盖等动作，都必须从这里经过。
 
-补充说明：对于 `exec_command` 这类高风险执行，默认应优先进入 Docker Sandbox，并且支持上下文中断后的容器清理；仅在 Windows shell 命令入口上允许走受控宿主路径，其他失败情形不能静默回退到宿主直接执行。
+设计约束：对于 `exec_command` 这类高风险执行，默认应优先进入 Docker Sandbox，并且支持上下文中断后的容器清理；仅在 Windows shell 命令入口上允许走受控宿主路径，其他失败情形不能静默回退到宿主直接执行。
 
 ```mermaid
 sequenceDiagram
