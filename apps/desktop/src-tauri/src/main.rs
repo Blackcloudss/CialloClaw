@@ -444,32 +444,29 @@ fn focus_webview_window(app: &tauri::AppHandle, label: &str) -> Result<(), Strin
     Ok(())
 }
 
-fn open_or_focus_control_panel_window(app: &tauri::AppHandle) {
+fn open_or_focus_control_panel_window(app: &tauri::AppHandle) -> Result<(), String> {
     if app.get_webview_window(CONTROL_PANEL_WINDOW_LABEL).is_some() {
-        if let Err(error) = focus_webview_window(app, CONTROL_PANEL_WINDOW_LABEL) {
-            eprintln!("failed to focus control panel from tray: {error}");
-        }
-        return;
+        return focus_webview_window(app, CONTROL_PANEL_WINDOW_LABEL);
     }
 
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        let create_result = WebviewWindowBuilder::new(
-            &handle,
-            CONTROL_PANEL_WINDOW_LABEL,
-            WebviewUrl::App("control-panel.html".into()),
-        )
+    WebviewWindowBuilder::new(
+        app,
+        CONTROL_PANEL_WINDOW_LABEL,
+        WebviewUrl::App("control-panel.html".into()),
+    )
         .title("CialloClaw Control Panel")
         .inner_size(1080.0, 760.0)
         .decorations(false)
         .visible(true)
         .focused(true)
-        .build();
+        .build()
+        .map(|_| ())
+        .map_err(|error| format!("failed to create control panel from tray: {error}"))
+}
 
-        if let Err(error) = create_result {
-            eprintln!("failed to create control panel from tray: {error}");
-        }
-    });
+#[tauri::command]
+fn desktop_open_or_focus_control_panel(app: tauri::AppHandle) -> Result<(), String> {
+    open_or_focus_control_panel_window(&app)
 }
 
 fn request_shell_ball_dashboard_open_transition(app: &tauri::AppHandle) -> Result<(), String> {
@@ -743,7 +740,9 @@ fn install_system_tray(app: &mut tauri::App) -> tauri::Result<()> {
                 }
             }
             TRAY_MENU_OPEN_CONTROL_PANEL_ID => {
-                open_or_focus_control_panel_window(app);
+                if let Err(error) = open_or_focus_control_panel_window(app) {
+                    eprintln!("failed to open control panel from tray: {error}");
+                }
             }
             TRAY_MENU_QUIT_ID => {
                 app.exit(0);
@@ -1391,6 +1390,7 @@ fn main() {
             desktop_get_mouse_activity_snapshot,
             desktop_capture_screenshot,
             desktop_get_active_window_context,
+            desktop_open_or_focus_control_panel,
             desktop_open_local_path,
             desktop_reveal_local_path,
             pick_shell_ball_files,

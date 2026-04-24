@@ -519,22 +519,22 @@ function withSourceModuleRuntime<T>(
 }
 
 function withTrayControllerRuntime<T>(
-  openOrFocusDesktopWindow: (label: "dashboard" | "control-panel") => Promise<string>,
-  callback: (mod: { openControlPanelFromTray: () => Promise<string>; calls: Array<"dashboard" | "control-panel"> }) => Promise<T> | T,
+  invokeDesktopCommand: (command: string) => Promise<void>,
+  callback: (mod: { openControlPanelFromTray: () => Promise<void>; calls: string[] }) => Promise<T> | T,
 ) {
   const NodeModule = require("node:module") as any;
   const originalLoad = NodeModule._load;
   const modulePath = resolve(desktopRoot, ".cache/shell-ball-tests/platform/trayController.js");
-  const calls: Array<"dashboard" | "control-panel"> = [];
+  const calls: string[] = [];
 
   delete require.cache[modulePath];
 
   NodeModule._load = function loadTrayController(request: string, parent: unknown, isMain: boolean) {
-    if (request === "@/platform/windowController") {
+    if (request === "@tauri-apps/api/core") {
       return {
-        openOrFocusDesktopWindow(label: "dashboard" | "control-panel") {
-          calls.push(label);
-          return openOrFocusDesktopWindow(label);
+        invoke(command: string) {
+          calls.push(command);
+          return invokeDesktopCommand(command);
         },
       };
     }
@@ -543,7 +543,7 @@ function withTrayControllerRuntime<T>(
   };
 
   const loaded = require(modulePath) as {
-    openControlPanelFromTray: () => Promise<string>;
+    openControlPanelFromTray: () => Promise<void>;
   };
 
   const finalize = () => {
@@ -1368,11 +1368,11 @@ test("control-panel entrypoint and view keep frameless window close and drag con
   assert.match(controlPanelAppSource, /关闭控制面板/);
 });
 
-test("tray controller opens the control panel through the desktop window API", async () => {
-  await withTrayControllerRuntime(async () => "control-panel", async ({ openControlPanelFromTray, calls }) => {
+test("tray controller opens the control panel through the desktop host command", async () => {
+  await withTrayControllerRuntime(async () => undefined, async ({ openControlPanelFromTray, calls }) => {
     await openControlPanelFromTray();
 
-    assert.deepEqual(calls, ["control-panel"]);
+    assert.deepEqual(calls, ["desktop_open_or_focus_control_panel"]);
   });
 });
 
