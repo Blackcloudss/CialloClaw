@@ -47,6 +47,12 @@ type stubModelClient struct {
 	generateText func(request model.GenerateTextRequest) (model.GenerateTextResponse, error)
 }
 
+type stubToolCallingModelClient struct {
+	output                 string
+	toolCalls              []model.ToolCallResult
+	generateToolCallsCount int
+}
+
 type failingExecutionBackend struct {
 	err error
 }
@@ -492,6 +498,32 @@ func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateT
 	}, nil
 }
 
+func (s *stubToolCallingModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	return model.GenerateTextResponse{
+		TaskID:     request.TaskID,
+		RunID:      request.RunID,
+		RequestID:  "req_text_unused",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: s.output,
+	}, nil
+}
+
+func (s *stubToolCallingModelClient) GenerateToolCalls(_ context.Context, request model.ToolCallRequest) (model.ToolCallResult, error) {
+	s.generateToolCallsCount++
+	if len(s.toolCalls) == 0 {
+		return model.ToolCallResult{
+			RequestID:  "req_tool_final",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: s.output,
+		}, nil
+	}
+	result := s.toolCalls[0]
+	s.toolCalls = s.toolCalls[1:]
+	return result, nil
+}
+
 func timePointer(value time.Time) *time.Time {
 	return &value
 }
@@ -915,7 +947,7 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 }
 
 func TestServiceSubmitInputRoutesShortFreeTextToAgentLoopWithoutForcedConfirmation(t *testing.T) {
-	service, _ := newTestServiceWithExecution(t, "请补充你的目标。")
+	service, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{})
 
 	testCases := []string{"解释下", "你好", "这个", "🙂", "a.go", "v1.2", `C:\`, `@me`}
 	for index, testCase := range testCases {
@@ -934,19 +966,19 @@ func TestServiceSubmitInputRoutesShortFreeTextToAgentLoopWithoutForcedConfirmati
 			}
 
 			task := result["task"].(map[string]any)
-			if task["status"] != "completed" {
-				t.Fatalf("expected short free text to execute directly through agent_loop, got %v", task["status"])
+			if task["status"] != "waiting_input" {
+				t.Fatalf("expected short free text clarification to keep task open, got %v", task["status"])
 			}
 			intentValue, ok := task["intent"].(map[string]any)
 			if !ok || intentValue["name"] != "agent_loop" {
 				t.Fatalf("expected short free text to route through agent_loop, got %+v", task["intent"])
 			}
-			deliveryResult, ok := result["delivery_result"].(map[string]any)
-			if !ok {
-				t.Fatal("expected short free text to return delivery_result")
+			if result["delivery_result"] != nil {
+				t.Fatalf("expected short free text clarification not to finalize delivery_result, got %+v", result["delivery_result"])
 			}
-			if deliveryResult["type"] != "bubble" {
-				t.Fatalf("expected short free text to prefer bubble delivery, got %v", deliveryResult["type"])
+			bubble := result["bubble_message"].(map[string]any)
+			if !strings.Contains(stringValue(bubble, "text", ""), "请补充你的目标") {
+				t.Fatalf("expected short free text clarification bubble, got %+v", bubble)
 			}
 		})
 	}
@@ -1562,7 +1594,7 @@ func TestServiceSecurityRespondResumesQueuedScreenAnalyzeTaskThroughApproval(t *
 }
 
 func TestServiceConfirmTaskRunsStoredAgentLoopIntentWithoutCorrection(t *testing.T) {
-	service, _ := newTestServiceWithExecution(t, "请补充你的目标。")
+	service, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{})
 
 	startResult, err := service.SubmitInput(map[string]any{
 		"session_id": "sess_unknown_confirm",
@@ -1590,8 +1622,8 @@ func TestServiceConfirmTaskRunsStoredAgentLoopIntentWithoutCorrection(t *testing
 	}
 
 	task := confirmResult["task"].(map[string]any)
-	if task["status"] != "completed" {
-		t.Fatalf("expected confirmed task to execute stored agent_loop intent, got %v", task["status"])
+	if task["status"] != "waiting_input" {
+		t.Fatalf("expected confirmed task to stay open when agent_loop needs more input, got %v", task["status"])
 	}
 	intentValue, ok := task["intent"].(map[string]any)
 	if !ok || intentValue["name"] != "agent_loop" {
@@ -1601,12 +1633,15 @@ func TestServiceConfirmTaskRunsStoredAgentLoopIntentWithoutCorrection(t *testing
 	if !strings.Contains(stringValue(bubble, "text", ""), "请补充你的目标") {
 		t.Fatalf("expected agent_loop clarification bubble, got %v", bubble["text"])
 	}
-	deliveryResult, ok := confirmResult["delivery_result"].(map[string]any)
-	if !ok {
-		t.Fatal("expected confirmed agent_loop task to produce delivery_result")
+	if confirmResult["delivery_result"] != nil {
+		t.Fatalf("expected clarification flow not to finalize delivery_result, got %+v", confirmResult["delivery_result"])
 	}
-	if !strings.Contains(stringValue(deliveryResult, "preview_text", ""), "请补充你的目标") {
-		t.Fatalf("expected delivery_result preview to carry clarification text, got %+v", deliveryResult)
+	record, ok := service.runEngine.GetTask(task["task_id"].(string))
+	if !ok {
+		t.Fatal("expected reopened waiting_input task to remain in runtime")
+	}
+	if record.FinishedAt != nil {
+		t.Fatal("expected reopened waiting_input task to keep finished_at nil")
 	}
 }
 
