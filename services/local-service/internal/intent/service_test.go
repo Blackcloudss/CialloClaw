@@ -52,6 +52,38 @@ func TestSuggestKeepsAgentLoopForPlainTextWithoutVisualSignals(t *testing.T) {
 	}
 }
 
+func TestSuggestRoutesShortActionTextToAgentLoopWithoutConfirmation(t *testing.T) {
+	service := NewService()
+
+	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
+		InputType: "text",
+		Text:      "解释下",
+	}, nil, false)
+
+	if got := stringValue(suggestion.Intent, "name"); got != defaultAgentLoopIntent {
+		t.Fatalf("expected short action text to route through agent loop, got %q", got)
+	}
+	if suggestion.RequiresConfirm {
+		t.Fatal("expected short action text to skip forced confirmation")
+	}
+}
+
+func TestSuggestKeepsAmbiguousShortTextInConfirmation(t *testing.T) {
+	service := NewService()
+
+	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
+		InputType: "text",
+		Text:      "你好",
+	}, nil, false)
+
+	if len(suggestion.Intent) != 0 {
+		t.Fatalf("expected ambiguous short text to keep empty intent payload, got %+v", suggestion.Intent)
+	}
+	if !suggestion.RequiresConfirm {
+		t.Fatal("expected ambiguous short text to remain in confirmation flow")
+	}
+}
+
 func TestSuggestKeepsPlainTextSubjectAheadOfPageContextForAgentLoop(t *testing.T) {
 	service := NewService()
 

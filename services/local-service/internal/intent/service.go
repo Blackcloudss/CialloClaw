@@ -238,7 +238,30 @@ func shouldConfirmTextGoal(snapshot contextsvc.TaskContextSnapshot) bool {
 	if isLongContent(trimmed) || isQuestionText(trimmed) {
 		return false
 	}
-	return utf8.RuneCountInString(trimmed) <= 4
+	if utf8.RuneCountInString(trimmed) > 4 {
+		return false
+	}
+
+	// Short text should only pause for intent confirmation when it does not
+	// contain any execution signal. This avoids hard-gating concise requests such
+	// as "解释下" while still keeping greeting-like inputs in the confirm flow.
+	return !hasShortTextExecutionSignal(trimmed)
+}
+
+func hasShortTextExecutionSignal(text string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(text))
+	if normalized == "" {
+		return false
+	}
+
+	if containsAny(normalized,
+		"翻译", "解释", "总结", "概括", "改写", "润色", "分析", "检查", "查看", "看看",
+		"读取", "搜索", "整理", "提取", "定位", "修复", "查", "看", "写", "做",
+		"fix", "read", "scan", "grep") {
+		return true
+	}
+
+	return strings.ContainsAny(normalized, "/\\.:#@")
 }
 
 func directDeliveryTypeForSnapshot(snapshot contextsvc.TaskContextSnapshot, intentName string) string {
