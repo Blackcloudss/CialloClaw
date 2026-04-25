@@ -147,6 +147,10 @@ export function waitForOnboardingCardReady(timeoutMs: number) {
  */
 export async function showOnboardingWindow() {
   const onboardingWindow = await getOrCreateOnboardingWindow();
+  await setOnboardingIgnoreCursorEvents(false);
+  // Keep the overlay clickable without stealing focus so the underlying window
+  // remains immediately interactive after the user leaves the guide card.
+  await onboardingWindow.setFocusable(false);
   await onboardingWindow.show();
 }
 
