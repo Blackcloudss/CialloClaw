@@ -147,6 +147,17 @@ impl DesktopSettingsSnapshotState {
             .and_then(read_workspace_root_from_settings_snapshot))
     }
 
+    fn task_sources(&self) -> Result<Option<Vec<String>>, String> {
+        let snapshot = self
+            .settings
+            .lock()
+            .map_err(|_| "desktop settings snapshot lock poisoned".to_string())?;
+
+        Ok(snapshot
+            .as_ref()
+            .map(read_task_sources_from_settings_snapshot))
+    }
+
     fn has_snapshot(&self) -> Result<bool, String> {
         let snapshot = self
             .settings
@@ -430,8 +441,11 @@ async fn desktop_load_source_notes(
     let bridge_state = Arc::clone(bridge_state.inner());
     let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        let roots = build_source_note_roots(&bridge_state, &settings_snapshot_state, &sources);
-        source_notes::load_source_notes(&sources, &roots)
+        let trusted_sources =
+            resolve_trusted_source_note_sources(&bridge_state, &settings_snapshot_state, &sources)?;
+        let roots =
+            build_source_note_roots(&bridge_state, &settings_snapshot_state, &trusted_sources);
+        source_notes::load_source_notes(&trusted_sources, &roots)
     })
     .await
     .map_err(|error| format!("desktop source notes load task failed: {error}"))?
@@ -446,8 +460,11 @@ async fn desktop_load_source_note_index(
     let bridge_state = Arc::clone(bridge_state.inner());
     let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        let roots = build_source_note_roots(&bridge_state, &settings_snapshot_state, &sources);
-        source_notes::load_source_note_index(&sources, &roots)
+        let trusted_sources =
+            resolve_trusted_source_note_sources(&bridge_state, &settings_snapshot_state, &sources)?;
+        let roots =
+            build_source_note_roots(&bridge_state, &settings_snapshot_state, &trusted_sources);
+        source_notes::load_source_note_index(&trusted_sources, &roots)
     })
     .await
     .map_err(|error| format!("desktop source note index load task failed: {error}"))?
@@ -463,8 +480,11 @@ async fn desktop_create_source_note(
     let bridge_state = Arc::clone(bridge_state.inner());
     let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        let roots = build_source_note_roots(&bridge_state, &settings_snapshot_state, &sources);
-        source_notes::create_source_note(&sources, &roots, &content)
+        let trusted_sources =
+            resolve_trusted_source_note_sources(&bridge_state, &settings_snapshot_state, &sources)?;
+        let roots =
+            build_source_note_roots(&bridge_state, &settings_snapshot_state, &trusted_sources);
+        source_notes::create_source_note(&trusted_sources, &roots, &content)
     })
     .await
     .map_err(|error| format!("desktop source note create task failed: {error}"))?
@@ -481,8 +501,11 @@ async fn desktop_save_source_note(
     let bridge_state = Arc::clone(bridge_state.inner());
     let settings_snapshot_state = Arc::clone(settings_snapshot_state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        let roots = build_source_note_roots(&bridge_state, &settings_snapshot_state, &sources);
-        source_notes::save_source_note(&sources, &roots, &path, &content)
+        let trusted_sources =
+            resolve_trusted_source_note_sources(&bridge_state, &settings_snapshot_state, &sources)?;
+        let roots =
+            build_source_note_roots(&bridge_state, &settings_snapshot_state, &trusted_sources);
+        source_notes::save_source_note(&trusted_sources, &roots, &path, &content)
     })
     .await
     .map_err(|error| format!("desktop source note save task failed: {error}"))?
@@ -531,6 +554,31 @@ fn build_source_note_roots(
     };
 
     local_path::LocalPathRoots::new(workspace_root, repo_root)
+}
+
+/// Source-note file access must be scoped by the host-side settings snapshot
+/// instead of any renderer-provided allowlist. Renderer `sources` are kept only
+/// for request compatibility and drift diagnostics.
+fn resolve_trusted_source_note_sources(
+    bridge_state: &Arc<NamedPipeBridgeState>,
+    settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
+    renderer_sources: &[String],
+) -> Result<Vec<String>, String> {
+    if let Some(task_sources) =
+        read_trusted_source_note_sources(settings_snapshot_state, renderer_sources)?
+    {
+        return Ok(task_sources);
+    }
+
+    refresh_desktop_settings_snapshot(
+        bridge_state,
+        settings_snapshot_state,
+        Duration::from_millis(DESKTOP_SETTINGS_REQUEST_TIMEOUT_MS),
+    )?;
+
+    read_trusted_source_note_sources(settings_snapshot_state, renderer_sources)?.ok_or_else(|| {
+        "desktop settings snapshot is unavailable for trusted source note access".to_string()
+    })
 }
 
 fn build_repo_root() -> Option<PathBuf> {
@@ -648,6 +696,77 @@ fn read_workspace_root_from_settings_snapshot(settings: &Value) -> Option<PathBu
         .map(PathBuf::from)
 }
 
+fn read_task_sources_from_settings_snapshot(settings: &Value) -> Vec<String> {
+    let mut task_sources: Vec<String> = Vec::new();
+
+    if let Some(raw_sources) = settings
+        .get("task_automation")
+        .and_then(|automation| automation.get("task_sources"))
+        .and_then(Value::as_array)
+    {
+        for raw_source in raw_sources {
+            let Some(raw_source) = raw_source.as_str() else {
+                continue;
+            };
+            let trimmed = raw_source.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if task_sources
+                .iter()
+                .any(|existing| existing.as_str() == trimmed)
+            {
+                continue;
+            }
+            task_sources.push(trimmed.to_string());
+        }
+    }
+
+    task_sources
+}
+
+fn read_trusted_source_note_sources(
+    settings_snapshot_state: &DesktopSettingsSnapshotState,
+    renderer_sources: &[String],
+) -> Result<Option<Vec<String>>, String> {
+    let task_sources = settings_snapshot_state.task_sources()?;
+    if let Some(ref task_sources) = task_sources {
+        report_source_note_source_drift(renderer_sources, task_sources);
+    }
+    Ok(task_sources)
+}
+
+fn report_source_note_source_drift(renderer_sources: &[String], trusted_sources: &[String]) {
+    if renderer_sources.is_empty() || normalize_source_entries(renderer_sources) == trusted_sources
+    {
+        return;
+    }
+
+    eprintln!(
+        "desktop source note bridge ignored renderer-supplied sources because they diverged from the trusted settings snapshot"
+    );
+}
+
+fn normalize_source_entries(raw_sources: &[String]) -> Vec<String> {
+    let mut normalized: Vec<String> = Vec::new();
+
+    for raw_source in raw_sources {
+        let trimmed = raw_source.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if normalized
+            .iter()
+            .any(|existing| existing.as_str() == trimmed)
+        {
+            continue;
+        }
+        normalized.push(trimmed.to_string());
+    }
+
+    normalized
+}
+
 fn prefetch_desktop_settings_snapshot(app: &mut tauri::App) {
     let bridge_state = Arc::clone(app.state::<Arc<NamedPipeBridgeState>>().inner());
     let settings_snapshot_state =
@@ -666,7 +785,10 @@ fn prefetch_desktop_settings_snapshot(app: &mut tauri::App) {
 
 #[cfg(test)]
 mod desktop_settings_snapshot_tests {
-    use super::{read_workspace_root_from_settings_snapshot, DesktopSettingsSnapshotState};
+    use super::{
+        read_task_sources_from_settings_snapshot, read_trusted_source_note_sources,
+        read_workspace_root_from_settings_snapshot, DesktopSettingsSnapshotState,
+    };
     use serde_json::json;
     use std::env;
 
@@ -685,6 +807,48 @@ mod desktop_settings_snapshot_tests {
             read_workspace_root_from_settings_snapshot(&snapshot),
             Some(workspace_root)
         );
+    }
+
+    #[test]
+    fn read_task_sources_from_settings_snapshot_reads_task_sources() {
+        let snapshot = json!({
+            "task_automation": {
+                "task_sources": [
+                    " D:/trusted-notes ",
+                    "",
+                    "D:/trusted-notes",
+                    "workspace/notes",
+                    42
+                ]
+            }
+        });
+
+        assert_eq!(
+            read_task_sources_from_settings_snapshot(&snapshot),
+            vec![
+                "D:/trusted-notes".to_string(),
+                "workspace/notes".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn read_trusted_source_note_sources_ignores_renderer_supplied_sources() {
+        let state = DesktopSettingsSnapshotState::default();
+        state
+            .replace(json!({
+                "task_automation": {
+                    "task_sources": ["D:/trusted-notes"]
+                }
+            }))
+            .expect("replace settings snapshot");
+
+        let trusted_sources =
+            read_trusted_source_note_sources(&state, &[String::from("C:/Users/example/outside")])
+                .expect("read trusted source note sources")
+                .expect("source note sources from snapshot");
+
+        assert_eq!(trusted_sources, vec!["D:/trusted-notes".to_string()]);
     }
 
     #[test]

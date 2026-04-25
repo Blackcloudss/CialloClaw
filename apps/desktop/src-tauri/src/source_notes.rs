@@ -48,10 +48,10 @@ pub struct DesktopSourceNoteIndexSnapshot {
 
 /// Loads every markdown file found under the configured task-source roots.
 pub fn load_source_notes(
-    raw_sources: &[String],
+    trusted_sources: &[String],
     roots: &LocalPathRoots,
 ) -> Result<DesktopSourceNoteSnapshot, String> {
-    let resolved_roots = resolve_source_roots(raw_sources, roots)?;
+    let resolved_roots = resolve_source_roots(trusted_sources, roots)?;
     let mut notes = Vec::new();
 
     for source_root in &resolved_roots {
@@ -94,10 +94,10 @@ pub fn load_source_notes(
 
 /// Loads markdown note metadata without reading every file body.
 pub fn load_source_note_index(
-    raw_sources: &[String],
+    trusted_sources: &[String],
     roots: &LocalPathRoots,
 ) -> Result<DesktopSourceNoteIndexSnapshot, String> {
-    let resolved_roots = resolve_source_roots(raw_sources, roots)?;
+    let resolved_roots = resolve_source_roots(trusted_sources, roots)?;
     let mut notes = Vec::new();
 
     for source_root in &resolved_roots {
@@ -139,11 +139,11 @@ pub fn load_source_note_index(
 
 /// Creates one markdown note file under the first configured task-source root.
 pub fn create_source_note(
-    raw_sources: &[String],
+    trusted_sources: &[String],
     roots: &LocalPathRoots,
     content: &str,
 ) -> Result<DesktopSourceNoteDocument, String> {
-    let resolved_roots = resolve_source_roots(raw_sources, roots)?;
+    let resolved_roots = resolve_source_roots(trusted_sources, roots)?;
     let target_root = resolved_roots
         .first()
         .ok_or_else(|| "task source list is empty".to_string())?;
@@ -168,12 +168,12 @@ pub fn create_source_note(
 
 /// Saves the updated markdown content back into an existing source note file.
 pub fn save_source_note(
-    raw_sources: &[String],
+    trusted_sources: &[String],
     roots: &LocalPathRoots,
     raw_path: &str,
     content: &str,
 ) -> Result<DesktopSourceNoteDocument, String> {
-    let resolved_roots = resolve_source_roots(raw_sources, roots)?;
+    let resolved_roots = resolve_source_roots(trusted_sources, roots)?;
     let (canonical_target, source_root) = resolve_source_note_target(raw_path, &resolved_roots)?;
     let normalized_content = normalize_markdown_content(content);
 
@@ -222,14 +222,17 @@ fn resolve_source_note_target<'a>(
     Ok((canonical_target, source_root))
 }
 
+/// Source roots are resolved only from the host-trusted settings snapshot.
+/// The Tauri command layer is responsible for filtering out renderer-provided
+/// paths before calling into this module.
 fn resolve_source_roots(
-    raw_sources: &[String],
+    trusted_sources: &[String],
     roots: &LocalPathRoots,
 ) -> Result<Vec<PathBuf>, String> {
     let mut seen = HashSet::new();
     let mut resolved = Vec::new();
 
-    for raw_source in raw_sources {
+    for raw_source in trusted_sources {
         let candidate = resolve_source_root(raw_source, roots)?;
         let fingerprint = candidate.to_string_lossy().to_lowercase();
         if seen.insert(fingerprint) {
