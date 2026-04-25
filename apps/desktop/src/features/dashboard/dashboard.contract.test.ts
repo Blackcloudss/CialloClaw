@@ -364,12 +364,31 @@ function loadControlPanelAboutServiceModule() {
     delete requireFn.cache[modulePath];
 
     return requireFn(modulePath) as {
+      getControlPanelAboutFeedbackChannels: () => Array<
+        | {
+            actionLabel: string;
+            description: string;
+            href: string;
+            hrefLabel: string;
+            id: string;
+            kind: "link";
+            title: string;
+          }
+        | {
+            description: string;
+            id: string;
+            kind: "placeholder";
+            note: string;
+            placeholderLabel: string;
+            title: string;
+          }
+      >;
       getControlPanelAboutFallbackSnapshot: () => {
         appName: string;
         appVersion: string;
       };
-      resolveControlPanelAboutActionUrl: (action: "help" | "feedback") => string;
-      runControlPanelAboutAction: (action: "help" | "feedback" | "share") => Promise<string>;
+      copyControlPanelAboutValue: (value: string, successMessage: string) => Promise<string>;
+      runControlPanelAboutAction: (action: "share") => Promise<string>;
     };
   });
 }
@@ -1452,64 +1471,82 @@ test("settings service keeps RPC data_log fields authoritative over stale deskto
   }
 });
 
-test("control panel about service exposes fallback metadata and stable external routes", () => {
-  const { getControlPanelAboutFallbackSnapshot, resolveControlPanelAboutActionUrl } = loadControlPanelAboutServiceModule();
+test("control panel about service exposes fallback metadata and feedback channel config", () => {
+  const { getControlPanelAboutFallbackSnapshot, getControlPanelAboutFeedbackChannels } = loadControlPanelAboutServiceModule();
   const fallback = getControlPanelAboutFallbackSnapshot();
+  const feedbackChannels = getControlPanelAboutFeedbackChannels();
 
   assert.deepEqual(fallback, {
     appName: "CialloClaw",
     appVersion: "0.1.0",
   });
-  assert.equal(resolveControlPanelAboutActionUrl("help"), "https://github.com/1024XEngineer/CialloClaw");
-  assert.equal(resolveControlPanelAboutActionUrl("feedback"), "https://github.com/1024XEngineer/CialloClaw/issues");
+  assert.deepEqual(feedbackChannels, [
+    {
+      actionLabel: "复制链接",
+      description: "公开问题反馈、功能建议与版本回归记录。",
+      href: "https://github.com/1024XEngineer/CialloClaw/issues",
+      hrefLabel: "github.com/1024XEngineer/CialloClaw/issues",
+      id: "github_issues",
+      kind: "link",
+      title: "GitHub Issues",
+    },
+    {
+      description: "预留微信群、QQ群或 Discord 等社群二维码图片。",
+      id: "community_qr",
+      kind: "placeholder",
+      note: "后续放入二维码图片后，会在这里直接显示预览。",
+      placeholderLabel: "待放置二维码图片",
+      title: "社群二维码",
+    },
+    {
+      description: "预留邮箱、工单表单或其它定向联系入口。",
+      id: "contact_form",
+      kind: "placeholder",
+      note: "支持后续替换成链接、表单地址或其它说明文本。",
+      placeholderLabel: "待放置链接或表单",
+      title: "邮箱 / 表单",
+    },
+  ]);
 });
 
-test("control panel about actions open external pages and copy the share link", async () => {
-  const { runControlPanelAboutAction } = loadControlPanelAboutServiceModule();
+test("control panel about helpers copy feedback and share links", async () => {
+  const { copyControlPanelAboutValue, runControlPanelAboutAction } = loadControlPanelAboutServiceModule();
   const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
   const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
-  const openedUrls: string[] = [];
-  let copiedText = "";
+  const copiedValues: string[] = [];
 
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: {
-      open: (url: string) => {
-        openedUrls.push(url);
-        return null;
-      },
-    },
-  });
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
     value: {
       clipboard: {
         writeText: async (value: string) => {
-          copiedText = value;
+          copiedValues.push(value);
         },
       },
     },
   });
 
   try {
-    const helpFeedback = await runControlPanelAboutAction("help");
+    const feedbackCopy = await copyControlPanelAboutValue("https://github.com/1024XEngineer/CialloClaw/issues", "已复制反馈渠道链接。");
     const shareFeedback = await runControlPanelAboutAction("share");
 
-    assert.equal(helpFeedback, "已打开帮助与项目主页。");
+    assert.equal(feedbackCopy, "已复制反馈渠道链接。");
     assert.equal(shareFeedback, "已复制分享链接。");
-    assert.deepEqual(openedUrls, ["https://github.com/1024XEngineer/CialloClaw"]);
-    assert.equal(copiedText, "https://github.com/1024XEngineer/CialloClaw");
+    assert.deepEqual(copiedValues, [
+      "https://github.com/1024XEngineer/CialloClaw/issues",
+      "https://github.com/1024XEngineer/CialloClaw",
+    ]);
   } finally {
-    if (originalWindowDescriptor) {
-      Object.defineProperty(globalThis, "window", originalWindowDescriptor);
-    } else {
-      Reflect.deleteProperty(globalThis, "window");
-    }
-
     if (originalNavigatorDescriptor) {
       Object.defineProperty(globalThis, "navigator", originalNavigatorDescriptor);
     } else {
       Reflect.deleteProperty(globalThis, "navigator");
+    }
+
+    if (originalWindowDescriptor) {
+      Object.defineProperty(globalThis, "window", originalWindowDescriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, "window");
     }
   }
 });
@@ -1523,6 +1560,17 @@ test("control panel app wires the about navigation without update-only fields", 
   assert.match(controlPanelAppSource, /case "about":/);
   assert.match(controlPanelAppSource, /title="帮助与反馈"/);
   assert.match(controlPanelAppSource, /title="版本信息"/);
+  assert.match(controlPanelAppSource, /应用内新手引导/);
+  assert.match(controlPanelAppSource, /反馈渠道/);
+  assert.match(controlPanelAppSource, /CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS/);
+  assert.match(controlPanelAppSource, /复制链接/);
+  assert.doesNotMatch(controlPanelAppSource, /快捷操作/);
+  assert.doesNotMatch(controlPanelAppSource, /打开帮助/);
+  assert.doesNotMatch(controlPanelAppSource, /提交反馈/);
+  assert.doesNotMatch(controlPanelAppSource, /打开链接/);
+  assert.doesNotMatch(controlPanelAppSource, /GitHub 项目主页/);
+  assert.doesNotMatch(controlPanelAppSource, /当前反馈/);
+  assert.doesNotMatch(controlPanelAppSource, /更多渠道/);
   assert.doesNotMatch(controlPanelAppSource, /应用标识/);
   assert.doesNotMatch(controlPanelAppSource, /元信息来源/);
   assert.doesNotMatch(controlPanelAppSource, /检查更新/);

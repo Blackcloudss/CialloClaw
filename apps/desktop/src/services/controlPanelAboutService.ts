@@ -1,15 +1,70 @@
-export type ControlPanelAboutAction = "help" | "feedback" | "share";
+export type ControlPanelAboutAction = "share";
 
 export type ControlPanelAboutSnapshot = {
   appName: string;
   appVersion: string;
 };
 
+export type ControlPanelAboutFeedbackChannel =
+  | {
+      actionLabel: string;
+      description: string;
+      href: string;
+      hrefLabel: string;
+      id: string;
+      kind: "link";
+      title: string;
+    }
+  | {
+      description: string;
+      id: string;
+      kind: "image";
+      note?: string;
+      previewAlt: string;
+      previewSrc: string;
+      title: string;
+    }
+  | {
+      description: string;
+      id: string;
+      kind: "placeholder";
+      note: string;
+      placeholderLabel: string;
+      title: string;
+    };
+
 const CONTROL_PANEL_ABOUT_URLS = {
   feedback: "https://github.com/1024XEngineer/CialloClaw/issues",
-  help: "https://github.com/1024XEngineer/CialloClaw",
   share: "https://github.com/1024XEngineer/CialloClaw",
 } as const;
+
+const CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS = [
+  {
+    description: "公开问题反馈、功能建议与版本回归记录。",
+    href: CONTROL_PANEL_ABOUT_URLS.feedback,
+    hrefLabel: "github.com/1024XEngineer/CialloClaw/issues",
+    id: "github_issues",
+    kind: "link",
+    actionLabel: "复制链接",
+    title: "GitHub Issues",
+  },
+  {
+    description: "预留微信群、QQ群或 Discord 等社群二维码图片。",
+    id: "community_qr",
+    kind: "placeholder",
+    note: "后续放入二维码图片后，会在这里直接显示预览。",
+    placeholderLabel: "待放置二维码图片",
+    title: "社群二维码",
+  },
+  {
+    description: "预留邮箱、工单表单或其它定向联系入口。",
+    id: "contact_form",
+    kind: "placeholder",
+    note: "支持后续替换成链接、表单地址或其它说明文本。",
+    placeholderLabel: "待放置链接或表单",
+    title: "邮箱 / 表单",
+  },
+] as const satisfies readonly ControlPanelAboutFeedbackChannel[];
 
 const CONTROL_PANEL_ABOUT_FALLBACK_SNAPSHOT: ControlPanelAboutSnapshot = {
   appName: "CialloClaw",
@@ -26,13 +81,15 @@ export function getControlPanelAboutFallbackSnapshot(): ControlPanelAboutSnapsho
 }
 
 /**
- * Resolves the external URL behind each non-copy about action.
+ * Returns the feedback channel definitions used by the control-panel about page.
  *
- * @param action About action that opens an external page.
- * @returns The URL used by that action.
+ * Link and image values live in one dedicated place so the React view does not
+ * hardcode channel-specific copy, URLs, or future QR image paths.
+ *
+ * @returns The list of feedback channels shown in the about section.
  */
-export function resolveControlPanelAboutActionUrl(action: Exclude<ControlPanelAboutAction, "share">): string {
-  return CONTROL_PANEL_ABOUT_URLS[action];
+export function getControlPanelAboutFeedbackChannels(): ControlPanelAboutFeedbackChannel[] {
+  return CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS.map((channel) => ({ ...channel }));
 }
 
 /**
@@ -55,26 +112,24 @@ export async function loadControlPanelAboutSnapshot(): Promise<ControlPanelAbout
   }
 }
 
-function openControlPanelAboutUrl(url: string, successMessage: string) {
-  if (typeof window !== "undefined" && typeof window.open === "function") {
-    window.open(url, "_blank", "noopener,noreferrer");
-    return successMessage;
-  }
-
-  return `当前环境暂不支持直接打开，请访问：${url}`;
-}
-
-async function copyControlPanelShareUrl(url: string) {
+/**
+ * Copies an about-page value without touching formal settings state.
+ *
+ * @param value Value copied to the clipboard.
+ * @param successMessage User-facing confirmation shown in the control panel.
+ * @returns Success or fallback copy for the current runtime.
+ */
+export async function copyControlPanelAboutValue(value: string, successMessage: string) {
   if (globalThis.navigator?.clipboard?.writeText) {
     try {
-      await globalThis.navigator.clipboard.writeText(url);
-      return "已复制分享链接。";
+      await globalThis.navigator.clipboard.writeText(value);
+      return successMessage;
     } catch {
-      return `当前环境暂不支持直接复制，请手动分享：${url}`;
+      return `当前环境暂不支持直接复制，请手动处理：${value}`;
     }
   }
 
-  return `当前环境暂不支持直接复制，请手动分享：${url}`;
+  return `当前环境暂不支持直接复制，请手动处理：${value}`;
 }
 
 /**
@@ -86,11 +141,7 @@ async function copyControlPanelShareUrl(url: string) {
  */
 export async function runControlPanelAboutAction(action: ControlPanelAboutAction): Promise<string> {
   switch (action) {
-    case "help":
-      return openControlPanelAboutUrl(CONTROL_PANEL_ABOUT_URLS.help, "已打开帮助与项目主页。");
-    case "feedback":
-      return openControlPanelAboutUrl(CONTROL_PANEL_ABOUT_URLS.feedback, "已打开反馈页。");
     case "share":
-      return copyControlPanelShareUrl(CONTROL_PANEL_ABOUT_URLS.share);
+      return copyControlPanelAboutValue(CONTROL_PANEL_ABOUT_URLS.share, "已复制分享链接。");
   }
 }

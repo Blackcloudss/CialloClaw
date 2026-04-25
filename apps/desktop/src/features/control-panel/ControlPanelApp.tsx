@@ -18,10 +18,13 @@ import {
 import { Button, Heading, Select, Slider, Text, TextArea, TextField } from "@radix-ui/themes";
 import isEqual from "react-fast-compare";
 import {
+  copyControlPanelAboutValue,
+  getControlPanelAboutFeedbackChannels,
   getControlPanelAboutFallbackSnapshot,
   loadControlPanelAboutSnapshot,
   runControlPanelAboutAction,
   type ControlPanelAboutAction,
+  type ControlPanelAboutFeedbackChannel,
   type ControlPanelAboutSnapshot,
 } from "@/services/controlPanelAboutService";
 import {
@@ -146,6 +149,7 @@ const POSITION_MODE_OPTIONS = [
 ] as const satisfies readonly ChoiceOption<"fixed" | "draggable">[];
 
 const FLOATING_BALL_SIZE_VALUES = ["small", "medium", "large"] as const;
+const CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS = getControlPanelAboutFeedbackChannels();
 
 const DEFAULT_TIME_UNIT_OPTIONS = [
   { label: "分钟", value: "minute" },
@@ -364,7 +368,7 @@ function HelpTooltip({ content }: { content: string }) {
   return (
     <Tooltip>
       <TooltipTrigger className="control-panel-shell__help-trigger" aria-label={content}>
-        <CircleHelp size={14} strokeWidth={1.9} />
+        <CircleHelp size={15} strokeWidth={2.35} />
       </TooltipTrigger>
       <TooltipContent className="control-panel-shell__tooltip">{content}</TooltipContent>
     </Tooltip>
@@ -529,6 +533,56 @@ function InfoRow({ label, value }: InfoRowProps) {
   );
 }
 
+function FeedbackChannelCard({ channel, onCopyLink }: { channel: ControlPanelAboutFeedbackChannel; onCopyLink: (url: string) => void }) {
+  return (
+    <article className="control-panel-shell__feedback-card" data-kind={channel.kind}>
+      <div className="control-panel-shell__feedback-card-copy">
+        <Text as="p" size="2" weight="medium" className="control-panel-shell__feedback-card-title">
+          {channel.title}
+        </Text>
+        <Text as="p" size="1" className="control-panel-shell__feedback-card-description">
+          {channel.description}
+        </Text>
+      </div>
+
+      {channel.kind === "link" ? (
+        <div className="control-panel-shell__feedback-card-body">
+          <button
+            type="button"
+            className="control-panel-shell__feedback-link-button"
+            onClick={() => onCopyLink(channel.href)}
+          >
+            {channel.actionLabel}
+          </button>
+          <code className="control-panel-shell__feedback-link-copy">{channel.hrefLabel}</code>
+        </div>
+      ) : null}
+
+      {channel.kind === "image" ? (
+        <div className="control-panel-shell__feedback-card-body">
+          <img className="control-panel-shell__feedback-image" src={channel.previewSrc} alt={channel.previewAlt} />
+          {channel.note ? (
+            <Text as="p" size="1" className="control-panel-shell__feedback-note">
+              {channel.note}
+            </Text>
+          ) : null}
+        </div>
+      ) : null}
+
+      {channel.kind === "placeholder" ? (
+        <div className="control-panel-shell__feedback-card-body">
+          <div className="control-panel-shell__feedback-placeholder" aria-hidden="true">
+            <span>{channel.placeholderLabel}</span>
+          </div>
+          <Text as="p" size="1" className="control-panel-shell__feedback-note">
+            {channel.note}
+          </Text>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
 // applyControlPanelSaveResult keeps unsaved groups intact so partial saves do
 // not accidentally discard the user's remaining local edits.
 function applyControlPanelSaveResult(base: ControlPanelData, result: ControlPanelSaveResult): ControlPanelData {
@@ -563,7 +617,6 @@ export function ControlPanelApp() {
   const autoAdvancedControlPanelStepRef = useRef(false);
   const [activeSection, setActiveSection] = useState<ControlPanelSectionId>("general");
   const [aboutSnapshot, setAboutSnapshot] = useState<ControlPanelAboutSnapshot>(() => getControlPanelAboutFallbackSnapshot());
-  const [aboutActionFeedback, setAboutActionFeedback] = useState<string | null>(null);
   const [panelData, setPanelData] = useState<ControlPanelData | null>(null);
   const [draft, setDraft] = useState<ControlPanelData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -847,11 +900,11 @@ export function ControlPanelApp() {
   };
 
   const handleAboutAction = async (action: ControlPanelAboutAction) => {
-    try {
-      setAboutActionFeedback(await runControlPanelAboutAction(action));
-    } catch (error) {
-      setAboutActionFeedback(error instanceof Error ? error.message : "关于页动作执行失败。");
-    }
+    void runControlPanelAboutAction(action).catch(() => undefined);
+  };
+
+  const handleAboutLinkCopy = (url: string) => {
+    void copyControlPanelAboutValue(url, "已复制反馈渠道链接。").catch(() => undefined);
   };
 
   const renderSectionContent = () => {
@@ -1430,18 +1483,18 @@ export function ControlPanelApp() {
       case "about":
         return (
           <>
-            <SettingsCard title="帮助与反馈" description="快速进入项目主页与反馈入口。">
-              <InfoRow label="帮助入口" value="GitHub 项目主页" />
-              <InfoRow label="反馈方式" value="GitHub Issues" />
+            <SettingsCard title="帮助与反馈" description="集中展示应用内帮助入口与可扩展的反馈渠道。">
+              <InfoRow label="帮助入口" value="应用内新手引导" />
 
-              <ControlLine label="快捷操作" hint="这些入口不会改动正式设置，只在当前窗口中反馈执行结果。" className="control-panel-shell__row--stacked">
-                <div className="control-panel-shell__about-actions">
-                  <Button type="button" variant="soft" className="control-panel-shell__about-button" onClick={() => void handleAboutAction("help")}>
-                    打开帮助
-                  </Button>
-                  <Button type="button" variant="soft" className="control-panel-shell__about-button" onClick={() => void handleAboutAction("feedback")}>
-                    提交反馈
-                  </Button>
+              <ControlLine
+                label="反馈渠道"
+                hint="支持放置链接、二维码图片和预留位；后续只需要改 about 配置，不需要改 JSX 结构。"
+                className="control-panel-shell__row--stacked"
+              >
+                <div className="control-panel-shell__feedback-grid">
+                  {CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS.map((channel) => (
+                    <FeedbackChannelCard key={channel.id} channel={channel} onCopyLink={handleAboutLinkCopy} />
+                  ))}
                 </div>
               </ControlLine>
             </SettingsCard>
@@ -1463,11 +1516,6 @@ export function ControlPanelApp() {
               <InfoRow label="应用版本" value={aboutSnapshot.appVersion} />
             </SettingsCard>
 
-            {aboutActionFeedback ? (
-              <Text as="p" size="1" className="control-panel-shell__field-note control-panel-shell__about-feedback" aria-live="polite">
-                {aboutActionFeedback}
-              </Text>
-            ) : null}
           </>
         );
 
