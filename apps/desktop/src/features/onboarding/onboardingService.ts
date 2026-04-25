@@ -332,13 +332,16 @@ export async function startDesktopOnboarding(
 
   try {
     if (welcomePresentation !== null) {
+      const readyPromise = waitForOnboardingWindowReady(DESKTOP_ONBOARDING_READY_TIMEOUT_MS);
       await syncOnboardingWindowFrame(welcomePresentation.monitorFrame, {
         alwaysOnTop: true,
       });
-      await waitForOnboardingWindowReady(DESKTOP_ONBOARDING_READY_TIMEOUT_MS);
+      await readyPromise;
+
+      const cardReadyPromise = waitForOnboardingCardReady(DESKTOP_ONBOARDING_READY_TIMEOUT_MS);
       await setDesktopOnboardingSession(session);
       await setDesktopOnboardingPresentation(welcomePresentation);
-      await waitForOnboardingCardReady(DESKTOP_ONBOARDING_READY_TIMEOUT_MS);
+      await cardReadyPromise;
       await showOnboardingWindow();
     } else {
       await setDesktopOnboardingSession(session);
