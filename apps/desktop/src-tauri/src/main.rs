@@ -564,21 +564,40 @@ fn resolve_trusted_source_note_sources(
     settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
     renderer_sources: &[String],
 ) -> Result<Vec<String>, String> {
-    if let Some(task_sources) =
-        read_trusted_source_note_sources(settings_snapshot_state, renderer_sources)?
-    {
-        return Ok(task_sources);
+    let cached_task_sources = read_trusted_source_note_sources(settings_snapshot_state)?;
+    if let Some(task_sources) = cached_task_sources {
+        if !source_note_sources_drift(renderer_sources, &task_sources) {
+            return Ok(task_sources);
+        }
+
+        replace_desktop_settings_snapshot(
+            bridge_state,
+            settings_snapshot_state,
+            Duration::from_millis(DESKTOP_SETTINGS_REQUEST_TIMEOUT_MS),
+        )?;
+
+        let refreshed_task_sources = read_trusted_source_note_sources(settings_snapshot_state)?
+            .ok_or_else(|| {
+                "desktop settings snapshot is unavailable for trusted source note access"
+                    .to_string()
+            })?;
+
+        report_source_note_source_drift(renderer_sources, &refreshed_task_sources);
+        return Ok(refreshed_task_sources);
     }
 
-    refresh_desktop_settings_snapshot(
+    seed_desktop_settings_snapshot(
         bridge_state,
         settings_snapshot_state,
         Duration::from_millis(DESKTOP_SETTINGS_REQUEST_TIMEOUT_MS),
     )?;
 
-    read_trusted_source_note_sources(settings_snapshot_state, renderer_sources)?.ok_or_else(|| {
-        "desktop settings snapshot is unavailable for trusted source note access".to_string()
-    })
+    let task_sources =
+        read_trusted_source_note_sources(settings_snapshot_state)?.ok_or_else(|| {
+            "desktop settings snapshot is unavailable for trusted source note access".to_string()
+        })?;
+    report_source_note_source_drift(renderer_sources, &task_sources);
+    Ok(task_sources)
 }
 
 fn build_repo_root() -> Option<PathBuf> {
@@ -621,7 +640,7 @@ fn resolve_workspace_root(
 
     let should_refresh = settings_snapshot_state.has_snapshot().ok() == Some(false);
     if should_refresh {
-        let _ = refresh_desktop_settings_snapshot(
+        let _ = seed_desktop_settings_snapshot(
             bridge_state,
             settings_snapshot_state,
             Duration::from_millis(DESKTOP_SETTINGS_REQUEST_TIMEOUT_MS),
@@ -631,15 +650,40 @@ fn resolve_workspace_root(
     resolve_workspace_root_from_snapshot(settings_snapshot_state, repo_root)
 }
 
-fn refresh_desktop_settings_snapshot(
+fn seed_desktop_settings_snapshot(
     bridge_state: &Arc<NamedPipeBridgeState>,
     settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
     timeout: Duration,
 ) -> Result<(), String> {
+    refresh_desktop_settings_snapshot(bridge_state, settings_snapshot_state, timeout, false)
+}
+
+fn replace_desktop_settings_snapshot(
+    bridge_state: &Arc<NamedPipeBridgeState>,
+    settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
+    timeout: Duration,
+) -> Result<(), String> {
+    refresh_desktop_settings_snapshot(bridge_state, settings_snapshot_state, timeout, true)
+}
+
+/// Host-side settings refresh supports both "seed if empty" and "replace with
+/// the latest formal snapshot" modes so startup prefetch will not clobber newer
+/// renderer syncs while bounded drift recovery can still replace stale caches.
+fn refresh_desktop_settings_snapshot(
+    bridge_state: &Arc<NamedPipeBridgeState>,
+    settings_snapshot_state: &Arc<DesktopSettingsSnapshotState>,
+    timeout: Duration,
+    replace_existing: bool,
+) -> Result<(), String> {
     let settings = fetch_settings_snapshot_with(bridge_state, |state, payload| {
         state.request_with_timeout(payload, timeout)
     })?;
-    settings_snapshot_state.seed(settings)
+
+    if replace_existing {
+        settings_snapshot_state.replace(settings)
+    } else {
+        settings_snapshot_state.seed(settings)
+    }
 }
 
 fn fetch_settings_snapshot_with<F>(
@@ -727,18 +771,16 @@ fn read_task_sources_from_settings_snapshot(settings: &Value) -> Vec<String> {
 
 fn read_trusted_source_note_sources(
     settings_snapshot_state: &DesktopSettingsSnapshotState,
-    renderer_sources: &[String],
 ) -> Result<Option<Vec<String>>, String> {
-    let task_sources = settings_snapshot_state.task_sources()?;
-    if let Some(ref task_sources) = task_sources {
-        report_source_note_source_drift(renderer_sources, task_sources);
-    }
-    Ok(task_sources)
+    settings_snapshot_state.task_sources()
+}
+
+fn source_note_sources_drift(renderer_sources: &[String], trusted_sources: &[String]) -> bool {
+    !renderer_sources.is_empty() && normalize_source_entries(renderer_sources) != trusted_sources
 }
 
 fn report_source_note_source_drift(renderer_sources: &[String], trusted_sources: &[String]) {
-    if renderer_sources.is_empty() || normalize_source_entries(renderer_sources) == trusted_sources
-    {
+    if !source_note_sources_drift(renderer_sources, trusted_sources) {
         return;
     }
 
@@ -773,7 +815,7 @@ fn prefetch_desktop_settings_snapshot(app: &mut tauri::App) {
         Arc::clone(app.state::<Arc<DesktopSettingsSnapshotState>>().inner());
 
     std::thread::spawn(move || {
-        if let Err(error) = refresh_desktop_settings_snapshot(
+        if let Err(error) = seed_desktop_settings_snapshot(
             &bridge_state,
             &settings_snapshot_state,
             Duration::from_millis(DESKTOP_SETTINGS_REQUEST_TIMEOUT_MS),
@@ -787,7 +829,8 @@ fn prefetch_desktop_settings_snapshot(app: &mut tauri::App) {
 mod desktop_settings_snapshot_tests {
     use super::{
         read_task_sources_from_settings_snapshot, read_trusted_source_note_sources,
-        read_workspace_root_from_settings_snapshot, DesktopSettingsSnapshotState,
+        read_workspace_root_from_settings_snapshot, source_note_sources_drift,
+        DesktopSettingsSnapshotState,
     };
     use serde_json::json;
     use std::env;
@@ -843,12 +886,51 @@ mod desktop_settings_snapshot_tests {
             }))
             .expect("replace settings snapshot");
 
-        let trusted_sources =
-            read_trusted_source_note_sources(&state, &[String::from("C:/Users/example/outside")])
-                .expect("read trusted source note sources")
-                .expect("source note sources from snapshot");
+        let trusted_sources = read_trusted_source_note_sources(&state)
+            .expect("read trusted source note sources")
+            .expect("source note sources from snapshot");
 
         assert_eq!(trusted_sources, vec!["D:/trusted-notes".to_string()]);
+    }
+
+    #[test]
+    fn source_note_sources_drift_detects_stale_cached_snapshot() {
+        assert!(source_note_sources_drift(
+            &[String::from("D:/trusted-notes-next")],
+            &[String::from("D:/trusted-notes")]
+        ));
+        assert!(!source_note_sources_drift(
+            &[String::from(" D:/trusted-notes ")],
+            &[String::from("D:/trusted-notes")]
+        ));
+        assert!(!source_note_sources_drift(
+            &[],
+            &[String::from("D:/trusted-notes")]
+        ));
+    }
+
+    #[test]
+    fn replace_updates_existing_task_source_snapshot() {
+        let state = DesktopSettingsSnapshotState::default();
+        state
+            .replace(json!({
+                "task_automation": {
+                    "task_sources": ["D:/trusted-notes"]
+                }
+            }))
+            .expect("replace initial settings snapshot");
+        state
+            .replace(json!({
+                "task_automation": {
+                    "task_sources": ["D:/trusted-notes-next"]
+                }
+            }))
+            .expect("replace stale task sources");
+
+        assert_eq!(
+            read_trusted_source_note_sources(&state).expect("read refreshed task sources"),
+            Some(vec!["D:/trusted-notes-next".to_string()])
+        );
     }
 
     #[test]
