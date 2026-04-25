@@ -7145,6 +7145,30 @@ func TestServiceFailExecutionTaskAppendsBudgetFailureSignal(t *testing.T) {
 	}
 }
 
+func TestExecutionFailureBubbleSurfacesModelConfigurationError(t *testing.T) {
+	bubbleText := executionFailureBubble(model.ErrClientNotConfigured)
+	if bubbleText != "执行失败：当前模型未完成配置，请检查 Provider、Base URL、Model 和 API Key。" {
+		t.Fatalf("expected model configuration failure bubble, got %q", bubbleText)
+	}
+}
+
+func TestExecutionFailureBubbleSurfacesHTTPStatusDetailsSafely(t *testing.T) {
+	bubbleText := executionFailureBubble(&model.OpenAIHTTPStatusError{StatusCode: 400, Message: `Cannot read "image.png" (this model does not support image input). Inform the user.`})
+	if !strings.Contains(bubbleText, "Cannot read \"image.png\"") {
+		t.Fatalf("expected upstream model error detail in bubble, got %q", bubbleText)
+	}
+	if !strings.Contains(bubbleText, "模型请求被上游拒绝") {
+		t.Fatalf("expected 400 status bubble prefix, got %q", bubbleText)
+	}
+}
+
+func TestExecutionFailureBubbleRedactsSecretBearingProviderMessages(t *testing.T) {
+	bubbleText := executionFailureBubble(&model.OpenAIHTTPStatusError{StatusCode: 401, Message: "Authorization: Bearer sk-secret-value invalid"})
+	if bubbleText != "执行失败：模型鉴权失败，请检查 API Key 或访问权限。" {
+		t.Fatalf("expected secret-bearing provider message to be redacted, got %q", bubbleText)
+	}
+}
+
 func TestServiceBudgetFallbackSuccessStillAppendsFailureSignal(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed fallback success signal")
 	result, err := service.SubmitInput(map[string]any{

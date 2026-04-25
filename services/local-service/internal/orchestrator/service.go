@@ -7544,8 +7544,97 @@ func executionFailureBubble(err error) string {
 	case errors.Is(err, tools.ErrToolExecutionFailed):
 		return "执行失败：工具运行失败，请检查环境后重试。"
 	default:
+		if detail := modelExecutionFailureBubble(err); detail != "" {
+			return detail
+		}
 		return "执行失败：请稍后重试。"
 	}
+}
+
+// modelExecutionFailureBubble keeps upstream model failures actionable without
+// exposing raw transport details or secrets in the task-facing bubble copy.
+func modelExecutionFailureBubble(err error) string {
+	if err == nil {
+		return ""
+	}
+	var statusErr *model.OpenAIHTTPStatusError
+	switch {
+	case errors.Is(err, model.ErrClientNotConfigured):
+		return "执行失败：当前模型未完成配置，请检查 Provider、Base URL、Model 和 API Key。"
+	case errors.Is(err, model.ErrToolCallingNotSupported):
+		return "执行失败：当前模型接口不支持工具调用，请切换到兼容工具调用的模型或关闭相关工具路径。"
+	case errors.Is(err, model.ErrOpenAIResponseInvalid):
+		return "执行失败：模型返回内容无法解析，请检查上游接口兼容性。"
+	case errors.Is(err, model.ErrOpenAIRequestTimeout):
+		return "执行失败：模型请求超时，请稍后重试。"
+	case errors.Is(err, model.ErrOpenAIRequestFailed):
+		return "执行失败：模型请求发送失败，请检查网络连接或上游地址。"
+	case errors.As(err, &statusErr):
+		return modelHTTPStatusFailureBubble(statusErr)
+	default:
+		return ""
+	}
+}
+
+func modelHTTPStatusFailureBubble(statusErr *model.OpenAIHTTPStatusError) string {
+	if statusErr == nil {
+		return ""
+	}
+	safeMessage := sanitizeModelProviderMessage(statusErr.Message)
+	switch statusErr.StatusCode {
+	case 400:
+		if safeMessage != "" {
+			return "执行失败：模型请求被上游拒绝（" + safeMessage + "）。"
+		}
+		return "执行失败：模型请求被上游拒绝，请检查输入内容、模型能力和接口兼容性。"
+	case 401, 403:
+		if safeMessage != "" {
+			return "执行失败：模型鉴权失败（" + safeMessage + "），请检查 API Key 或访问权限。"
+		}
+		return "执行失败：模型鉴权失败，请检查 API Key 或访问权限。"
+	case 404:
+		if safeMessage != "" {
+			return "执行失败：模型接口不存在（" + safeMessage + "），请检查 Base URL 或接口兼容性。"
+		}
+		return "执行失败：模型接口不存在，请检查 Base URL 或接口兼容性。"
+	case 408, 504:
+		return "执行失败：模型请求超时，请稍后重试。"
+	case 429:
+		if safeMessage != "" {
+			return "执行失败：模型请求过于频繁（" + safeMessage + "），请稍后重试。"
+		}
+		return "执行失败：模型请求过于频繁，请稍后重试。"
+	case 500, 502, 503:
+		if safeMessage != "" {
+			return "执行失败：模型服务暂时不可用（" + safeMessage + "），请稍后重试。"
+		}
+		return "执行失败：模型服务暂时不可用，请稍后重试。"
+	default:
+		if safeMessage != "" {
+			return "执行失败：模型调用失败（" + safeMessage + "）。"
+		}
+		return "执行失败：模型调用失败，请稍后重试。"
+	}
+}
+
+func sanitizeModelProviderMessage(message string) string {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.Join(strings.Fields(trimmed), " ")
+	trimmed = strings.ReplaceAll(trimmed, "\r", " ")
+	trimmed = strings.ReplaceAll(trimmed, "\n", " ")
+	lowerTrimmed := strings.ToLower(trimmed)
+	for _, secretMarker := range []string{"api key", "authorization", "bearer ", "sk-"} {
+		if strings.Contains(lowerTrimmed, secretMarker) {
+			return ""
+		}
+	}
+	if len(trimmed) > 120 {
+		trimmed = strings.TrimSpace(trimmed[:120]) + "..."
+	}
+	return trimmed
 }
 
 func (s *Service) buildExecutionAudit(task runengine.TaskRecord, toolCalls []tools.ToolCallRecord, deliveryResult map[string]any) ([]map[string]any, map[string]any) {
