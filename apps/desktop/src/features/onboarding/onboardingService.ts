@@ -81,14 +81,11 @@ let desktopOnboardingLoadingState: DesktopOnboardingLoadingState | null = null;
 async function buildDefaultWelcomePresentation(windowLabel: DesktopOnboardingPresentation["windowLabel"]) {
   const currentWindow = getCurrentWindow();
   const outerPosition = await currentWindow.outerPosition();
+  const outerSize = await currentWindow.outerSize();
   const monitor = await monitorFromPoint(outerPosition.x, outerPosition.y);
 
-  if (monitor === null) {
-    return null;
-  }
-
-  const monitorPosition = monitor.position.toLogical(monitor.scaleFactor);
-  const monitorSize = monitor.size.toLogical(monitor.scaleFactor);
+  const monitorPosition = monitor?.position.toLogical(monitor.scaleFactor) ?? outerPosition.toLogical(await currentWindow.scaleFactor());
+  const monitorSize = monitor?.size.toLogical(monitor.scaleFactor) ?? outerSize.toLogical(await currentWindow.scaleFactor());
 
   return {
     highlights: [] as DesktopOnboardingPresentationRect[],

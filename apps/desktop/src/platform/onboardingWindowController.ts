@@ -40,40 +40,38 @@ async function waitForOnboardingWindowHandle(timeoutMs: number) {
 
 async function waitForOnboardingWindowEvent(eventName: string, timeoutMs: number) {
   const onboardingWindow = await getOrCreateOnboardingWindow();
+  let timeoutHandle = 0;
+  let disposed = false;
+  let resolveEvent: (() => void) | null = null;
+  let rejectEvent: ((error: Error) => void) | null = null;
 
-  return new Promise<void>((resolve, reject) => {
-    let timeoutHandle = 0;
-    let disposed = false;
-    let disposeWindowListener: (() => void) | null = null;
-
-    void onboardingWindow.listen(eventName, () => {
-      if (disposed) {
-        return;
-      }
-
-      disposed = true;
-      window.clearTimeout(timeoutHandle);
-      disposeWindowListener?.();
-      resolve();
-    }).then((unlisten) => {
-      if (disposed) {
-        unlisten();
-        return;
-      }
-
-      disposeWindowListener = unlisten;
-    });
-
-    timeoutHandle = window.setTimeout(() => {
-      if (disposed) {
-        return;
-      }
-
-      disposed = true;
-      disposeWindowListener?.();
-      reject(new Error(`Timed out waiting for onboarding event: ${eventName}`));
-    }, timeoutMs);
+  const eventPromise = new Promise<void>((resolve, reject) => {
+    resolveEvent = resolve;
+    rejectEvent = reject;
   });
+
+  const disposeWindowListener = await onboardingWindow.listen(eventName, () => {
+    if (disposed) {
+      return;
+    }
+
+    disposed = true;
+    window.clearTimeout(timeoutHandle);
+    void disposeWindowListener();
+    resolveEvent?.();
+  });
+
+  timeoutHandle = window.setTimeout(() => {
+    if (disposed) {
+      return;
+    }
+
+    disposed = true;
+    void disposeWindowListener();
+    rejectEvent?.(new Error(`Timed out waiting for onboarding event: ${eventName}`));
+  }, timeoutMs);
+
+  return eventPromise;
 }
 
 async function getOrCreateOnboardingWindow() {
