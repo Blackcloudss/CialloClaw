@@ -516,14 +516,24 @@ fn ensure_onboarding_window(app: &tauri::AppHandle) {
         .resizable(false)
         .skip_taskbar(true)
         .shadow(false)
-        .visible(false)
+        .visible(true)
         .focused(false)
         .build();
 
         ONBOARDING_WINDOW_CREATION_IN_PROGRESS.store(false, Ordering::SeqCst);
 
-        if let Err(error) = create_result {
+        match create_result {
+            Ok(window) => {
+                if let Ok(hwnd) = window.hwnd() {
+                    unsafe {
+                        set_forward_mouse_messages(hwnd, false);
+                        set_window_ignore_cursor_events(hwnd, true);
+                    }
+                }
+            }
+            Err(error) => {
             eprintln!("failed to create onboarding window: {error}");
+            }
         }
     });
 }
