@@ -147,8 +147,6 @@ export function waitForOnboardingCardReady(timeoutMs: number) {
  */
 export async function showOnboardingWindow() {
   const onboardingWindow = await getOrCreateOnboardingWindow();
-  await setOnboardingIgnoreCursorEvents(false);
-  await onboardingWindow.setFocusable(true);
   await onboardingWindow.show();
 }
 

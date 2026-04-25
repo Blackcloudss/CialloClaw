@@ -37,6 +37,7 @@ export function useDesktopOnboardingLoading(windowLabel: DesktopOnboardingLoadin
         }
 
         disposeWindowListener = unlisten;
+        setLoadingState(loadDesktopOnboardingLoadingState());
       });
 
     return () => {

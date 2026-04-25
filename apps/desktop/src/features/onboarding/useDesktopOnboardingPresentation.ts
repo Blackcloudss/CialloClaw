@@ -38,6 +38,7 @@ export function useDesktopOnboardingPresentation() {
         }
 
         disposeWindowListener = unlisten;
+        setPresentation(loadDesktopOnboardingPresentation());
       });
 
     return () => {
