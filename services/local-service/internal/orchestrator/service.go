@@ -3649,7 +3649,7 @@ func (s *Service) attachSensitiveSettingAvailability(settings map[string]any) (m
 }
 
 func (s *Service) modelSecretConfigured(provider string) (string, bool, error) {
-	resolvedProvider := firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider())
+	resolvedProvider := model.CanonicalProviderName(firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider()))
 	if s.storage == nil || s.storage.SecretStore() == nil || resolvedProvider == "" {
 		return resolvedProvider, false, nil
 	}
@@ -3670,7 +3670,7 @@ func (s *Service) modelSecretConfigured(provider string) (string, bool, error) {
 }
 
 func (s *Service) persistModelSecret(provider, apiKey string) error {
-	resolvedProvider := firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider())
+	resolvedProvider := model.CanonicalProviderName(firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider()))
 	if s.storage == nil || s.storage.SecretStore() == nil || resolvedProvider == "" {
 		return ErrStrongholdAccessFailed
 	}
@@ -3690,7 +3690,7 @@ func (s *Service) persistModelSecret(provider, apiKey string) error {
 }
 
 func (s *Service) deleteModelSecret(provider string) error {
-	resolvedProvider := firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider())
+	resolvedProvider := model.CanonicalProviderName(firstNonEmptyString(strings.TrimSpace(provider), s.defaultSettingsProvider()))
 	if s.storage == nil || s.storage.SecretStore() == nil || resolvedProvider == "" {
 		return ErrStrongholdAccessFailed
 	}
@@ -6479,7 +6479,7 @@ func containsString(values []string, expected string) bool {
 }
 
 func supportsBudgetProvider(provider string) bool {
-	switch strings.TrimSpace(provider) {
+	switch model.CanonicalProviderName(provider) {
 	case "", model.OpenAIResponsesProvider:
 		return true
 	default:

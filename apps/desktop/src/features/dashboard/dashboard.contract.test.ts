@@ -2018,7 +2018,7 @@ test("control panel saves full floating-ball ownership through the real rpc sett
   }
 });
 
-test("control-panel save warns when an API key is saved for an unsupported provider name", async () => {
+test("control-panel save keeps z-ai aliases on the supported OpenAI-compatible route", async () => {
   const strongholdStatus = {
     backend: "stronghold",
     available: true,
@@ -2189,7 +2189,7 @@ test("control-panel save warns when an API key is saved for an unsupported provi
       },
     );
 
-    assert.deepEqual(result.warnings, ["API Key 已保存，但当前 provider 名暂不受支持；请改用 openai / openai_responses。"]);
+    assert.deepEqual(result.warnings, []);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");

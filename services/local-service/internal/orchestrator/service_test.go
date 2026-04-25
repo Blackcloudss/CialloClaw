@@ -11173,6 +11173,45 @@ func TestSettingsUpdateReturnsStrongholdErrorWhenStoreUnavailable(t *testing.T) 
 	}
 }
 
+func TestSettingsUpdateStoresZAIAliasSecretsUnderCanonicalProvider(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings z-ai secret alias")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	result, err := service.SettingsUpdate(map[string]any{
+		"models": map[string]any{
+			"provider": "z-ai",
+			"api_key":  "z-ai-secret-key",
+		},
+	})
+	if err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+	stored, err := service.storage.SecretStore().GetSecret(context.Background(), "model", model.OpenAIResponsesProvider+"_api_key")
+	if err != nil {
+		t.Fatalf("expected canonical provider secret to be stored, got %v", err)
+	}
+	if stored.Value != "z-ai-secret-key" {
+		t.Fatalf("unexpected canonical provider secret value: %+v", stored)
+	}
+	_, err = service.storage.SecretStore().GetSecret(context.Background(), "model", "z-ai_api_key")
+	if !errors.Is(err, storage.ErrSecretNotFound) {
+		t.Fatalf("expected z-ai alias secret key to stay unused, got %v", err)
+	}
+	if result["apply_mode"] != "next_task_effective" || result["need_restart"] != false {
+		t.Fatalf("expected z-ai secret update to be next_task_effective, got %+v", result)
+	}
+	result, err = service.SettingsGet(map[string]any{"scope": "models"})
+	if err != nil {
+		t.Fatalf("settings get failed: %v", err)
+	}
+	models := result["settings"].(map[string]any)["models"].(map[string]any)
+	credentials := models["credentials"].(map[string]any)
+	if models["provider"] != "z-ai" || credentials["provider_api_key_configured"] != true {
+		t.Fatalf("expected alias provider to report configured state, got models=%+v credentials=%+v", models, credentials)
+	}
+}
+
 func TestSettingsUpdateReturnsStrongholdErrorWithoutStorage(t *testing.T) {
 	service := newTestService()
 	_, err := service.SettingsUpdate(map[string]any{

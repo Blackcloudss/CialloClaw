@@ -11,6 +11,9 @@ func TestCanonicalProviderNameNormalizesKnownAliases(t *testing.T) {
 	tests := map[string]string{
 		"openai":                OpenAIResponsesProvider,
 		" openai ":              OpenAIResponsesProvider,
+		"z-ai":                  OpenAIResponsesProvider,
+		" Z_AI ":                OpenAIResponsesProvider,
+		"zai":                   OpenAIResponsesProvider,
 		OpenAIResponsesProvider: OpenAIResponsesProvider,
 		"anthropic":             "anthropic",
 		"":                      "",

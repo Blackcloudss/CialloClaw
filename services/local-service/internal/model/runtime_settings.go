@@ -5,15 +5,29 @@ import (
 	"strings"
 )
 
+var openAICompatibleProviderAliases = map[string]string{
+	"openai":           OpenAIResponsesProvider,
+	"openai_responses": OpenAIResponsesProvider,
+	"z-ai":             OpenAIResponsesProvider,
+	"z_ai":             OpenAIResponsesProvider,
+	"zai":              OpenAIResponsesProvider,
+}
+
 // CanonicalProviderName normalizes persisted settings aliases into the runtime
 // provider identifiers registered by the model layer.
 func CanonicalProviderName(provider string) string {
-	switch strings.TrimSpace(provider) {
-	case "openai":
-		return OpenAIResponsesProvider
-	default:
-		return strings.TrimSpace(provider)
+	trimmed := strings.TrimSpace(provider)
+	if canonical, ok := openAICompatibleProviderAliases[strings.ToLower(trimmed)]; ok {
+		return canonical
 	}
+	return trimmed
+}
+
+// IsOpenAICompatibleProviderAlias reports whether one control-panel provider
+// label should resolve to the built-in OpenAI-compatible runtime route.
+func IsOpenAICompatibleProviderAlias(provider string) bool {
+	_, ok := openAICompatibleProviderAliases[strings.ToLower(strings.TrimSpace(provider))]
+	return ok
 }
 
 // RuntimeConfigFromSettings overlays the persisted `models` settings scope onto

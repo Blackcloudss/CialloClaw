@@ -62,7 +62,7 @@ const CONTROL_PANEL_INSPECTOR_UPDATED_KEYS = [
   "task_automation.remind_when_stale",
 ];
 
-const CONTROL_PANEL_SUPPORTED_MODEL_PROVIDERS = new Set(["openai", "openai_responses"]);
+const CONTROL_PANEL_SUPPORTED_MODEL_PROVIDERS = new Set(["openai", "openai_responses", "z-ai", "z_ai", "zai"]);
 
 /**
  * ControlPanelSaveError reports a save failure while optionally carrying the

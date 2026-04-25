@@ -68,3 +68,34 @@ func TestSettingsUpdateKeepsUnsupportedProvidersAsPlaceholderRuntimeConfig(t *te
 		t.Fatalf("expected placeholder runtime model to preserve unsupported provider settings, got %+v", configSnapshot)
 	}
 }
+
+func TestSettingsUpdateMapsZAIProviderAliasToOpenAIResponsesRuntime(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings z-ai alias runtime")
+
+	result, err := service.SettingsUpdate(map[string]any{
+		"models": map[string]any{
+			"provider": "z-ai",
+			"base_url": "https://api.qnaigc.com/v1",
+			"model":    "z-ai/glm-5",
+		},
+	})
+	if err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+	if result["apply_mode"] != "next_task_effective" || result["need_restart"] != false {
+		t.Fatalf("expected z-ai alias update to be next_task_effective, got %+v", result)
+	}
+	runtimeModel := service.currentModel()
+	if runtimeModel == nil {
+		t.Fatal("expected runtime model to stay wired")
+	}
+	configSnapshot := runtimeModel.RuntimeConfig()
+	if configSnapshot.Provider != model.OpenAIResponsesProvider || configSnapshot.Endpoint != "https://api.qnaigc.com/v1" || configSnapshot.ModelID != "z-ai/glm-5" {
+		t.Fatalf("expected z-ai alias to normalize into openai runtime config, got %+v", configSnapshot)
+	}
+	runtimeSettings := service.runEngine.Settings()
+	models := runtimeSettings["models"].(map[string]any)
+	if models["provider"] != "z-ai" {
+		t.Fatalf("expected persisted settings provider to keep z-ai alias, got %+v", models)
+	}
+}
