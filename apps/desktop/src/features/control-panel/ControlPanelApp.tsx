@@ -32,7 +32,9 @@ import {
   loadControlPanelData,
   runControlPanelInspection,
   saveControlPanelData,
+  validateControlPanelModel,
   type ControlPanelData,
+  type ControlPanelModelValidationOptions,
   type ControlPanelSaveResult,
 } from "@/services/controlPanelService";
 import { loadSettings } from "@/services/settingsService";
@@ -67,6 +69,11 @@ type SectionMeta = {
 type StatusPillProps = {
   children: ReactNode;
   tone: "live" | "pending" | "synced";
+};
+
+type ModelValidationFeedback = {
+  message: string;
+  tone: "neutral" | "warning";
 };
 
 type SidebarItemProps = {
@@ -603,6 +610,7 @@ function applyControlPanelSaveResult(base: ControlPanelData, result: ControlPane
     providerApiKeyInput: result.savedSettings ? "" : base.providerApiKeyInput,
     settings: nextSettings,
     source: result.source,
+    warnings: result.warnings,
   };
 }
 
@@ -624,8 +632,10 @@ export function ControlPanelApp() {
   const [draft, setDraft] = useState<ControlPanelData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
+  const [modelValidationFeedback, setModelValidationFeedback] = useState<ModelValidationFeedback | null>(null);
   const [inspectionSummary, setInspectionSummary] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isValidatingModel, setIsValidatingModel] = useState(false);
   const [isRunningInspection, setIsRunningInspection] = useState(false);
   const [systemAppearance, setSystemAppearance] = useState<ControlPanelAppearance>(() => {
     if (typeof window === "undefined") {
@@ -670,6 +680,7 @@ export function ControlPanelApp() {
         setLoadError(null);
         setPanelData(nextData);
         setDraft(nextData);
+        setModelValidationFeedback(null);
       } catch (error) {
         if (cancelled) {
           return;
@@ -709,6 +720,7 @@ export function ControlPanelApp() {
       setLoadError(null);
       setPanelData(nextData);
       setDraft(nextData);
+      setModelValidationFeedback(null);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "控制面板加载失败。");
     }
@@ -799,6 +811,7 @@ export function ControlPanelApp() {
   const activeMeta = SECTION_META[activeSection];
   const inspectorDirty = !isEqual(draft.inspector, panelData.inspector);
   const settingsDirty = !isEqual(draft.settings, panelData.settings) || draft.providerApiKeyInput.trim() !== "";
+  const modelSettingsDirty = !isEqual(draft.settings.models, panelData.settings.models) || draft.providerApiKeyInput.trim() !== "";
   const hasChanges = inspectorDirty || settingsDirty;
   const providerApiKeyStatus = draft.settings.models.provider_api_key_configured ? "已配置" : "未配置";
   const resolvedAppearance = resolveControlPanelAppearance(draft.settings.general.theme_mode, systemAppearance);
@@ -808,7 +821,18 @@ export function ControlPanelApp() {
   const saveStateValue = hasChanges ? <StatusPill tone="pending">待保存</StatusPill> : <StatusPill tone="synced">已同步</StatusPill>;
 
   const updateSettings = (updater: (current: ControlPanelData) => ControlPanelData) => {
-    setDraft((current) => (current ? updater(current) : current));
+    setDraft((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const next = updater(current);
+      const modelRouteChanged = !isEqual(next.settings.models, current.settings.models) || next.providerApiKeyInput !== current.providerApiKeyInput;
+      if (modelRouteChanged) {
+        setModelValidationFeedback(null);
+      }
+      return next;
+    });
   };
 
   // The custom titlebar is draggable, but embedded controls must keep their own
@@ -839,6 +863,32 @@ export function ControlPanelApp() {
   const handleReset = () => {
     setDraft(panelData);
     setSaveFeedback("已恢复为上次载入的设置快照。");
+    setModelValidationFeedback(null);
+  };
+
+  const handleValidateModel = async (options: ControlPanelModelValidationOptions = {}) => {
+    setIsValidatingModel(true);
+    try {
+      const result = await validateControlPanelModel(draft, options);
+      setLoadError(null);
+      setModelValidationFeedback({
+        message: result.message,
+        tone: result.ok ? "neutral" : "warning",
+      });
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "模型配置校验失败，请稍后重试。";
+      if (shouldSurfaceRpcErrorBanner(message)) {
+        setLoadError(message);
+      }
+      setModelValidationFeedback({
+        message,
+        tone: "warning",
+      });
+      throw error;
+    } finally {
+      setIsValidatingModel(false);
+    }
   };
 
   const handleReplayOnboarding = () => {
@@ -860,6 +910,7 @@ export function ControlPanelApp() {
         confirmedInspector: panelData.inspector,
         saveInspector: inspectorDirty,
         saveSettings: settingsDirty,
+        validateModel: modelSettingsDirty,
       });
       const nextPanelData = applyControlPanelSaveResult(panelData, result);
       const nextDraft = applyControlPanelSaveResult(draft, result);
@@ -867,6 +918,12 @@ export function ControlPanelApp() {
       setPanelData(nextPanelData);
       setDraft(nextDraft);
       setSaveFeedback(getApplyModeCopy(result.applyMode, result.needRestart));
+      if (result.modelValidation) {
+        setModelValidationFeedback({
+          message: result.modelValidation.message,
+          tone: result.modelValidation.ok ? "neutral" : "warning",
+        });
+      }
     } catch (error) {
       if (error instanceof ControlPanelSaveError && error.partialResult) {
         const nextPanelData = applyControlPanelSaveResult(panelData, error.partialResult);
@@ -876,6 +933,14 @@ export function ControlPanelApp() {
       }
 
       const errorMessage = error instanceof Error ? error.message : "保存控制面板设置失败。";
+      if (error instanceof ControlPanelSaveError && error.kind === "model_validation_failed") {
+        setSaveFeedback("模型配置校验未通过，当前设置未保存。");
+        setModelValidationFeedback({
+          message: errorMessage,
+          tone: "warning",
+        });
+        return;
+      }
       if (shouldSurfaceRpcErrorBanner(errorMessage)) {
         setLoadError(errorMessage);
       }
@@ -1455,6 +1520,28 @@ export function ControlPanelApp() {
                   }))
                 }
               />
+              <div className="control-panel-shell__model-actions">
+                <Button
+                  className="control-panel-shell__button control-panel-shell__button--ghost"
+                  variant="soft"
+                  color="gray"
+                  onClick={() => void handleValidateModel()}
+                  disabled={isSaving || isRunningInspection || isValidatingModel}
+                >
+                  {isValidatingModel ? "校验中…" : "测试连接"}
+                </Button>
+                {modelValidationFeedback ? (
+                  <Text
+                    as="p"
+                    size="2"
+                    color={modelValidationFeedback.tone === "warning" ? "amber" : undefined}
+                    className="control-panel-shell__action-feedback control-panel-shell__model-feedback"
+                    aria-live="polite"
+                  >
+                    {modelValidationFeedback.message}
+                  </Text>
+                ) : null}
+              </div>
               </SettingsCard>
             </div>
 

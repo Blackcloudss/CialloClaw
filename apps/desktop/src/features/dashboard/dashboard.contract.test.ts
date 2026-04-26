@@ -297,6 +297,13 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
               value: number;
             };
           };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
+          };
         };
         inspector: {
           task_sources: string[];
@@ -310,19 +317,29 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
           remind_when_stale: boolean;
         };
         providerApiKeyInput: string;
+        warnings?: string[];
       }>;
       saveControlPanelData: (
         data: unknown,
         options?: {
           saveInspector?: boolean;
           saveSettings?: boolean;
+          validateModel?: boolean;
           timeoutMs?: number;
         },
       ) => Promise<{
         source: "rpc";
         applyMode: string;
         needRestart: boolean;
+        savedInspector?: boolean;
+        savedSettings?: boolean;
         updatedKeys: string[];
+        warnings: string[];
+        modelValidation?: {
+          ok: boolean;
+          status: string;
+          message: string;
+        } | null;
         effectiveSettings: {
           general: {
             voice_type: string;
@@ -347,7 +364,30 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
               value: number;
             };
           };
+          models: {
+            provider: string;
+            provider_api_key_configured: boolean;
+            budget_auto_downgrade: boolean;
+            base_url: string;
+            model: string;
+          };
         };
+      }>;
+      validateControlPanelModel: (
+        data: unknown,
+        options?: {
+          timeoutMs?: number;
+        },
+      ) => Promise<{
+        ok: boolean;
+        status: string;
+        message: string;
+        provider: string;
+        canonical_provider: string;
+        base_url: string;
+        model: string;
+        text_generation_ready: boolean;
+        tool_calling_ready: boolean;
       }>;
     };
   }, rpcMethods);
@@ -557,6 +597,7 @@ type DashboardContractRpcMethodOverrides = {
   listNotepad?: (params: AgentNotepadListParams) => Promise<AgentNotepadListResult>;
   listTasks?: (params: AgentTaskListParams) => Promise<AgentTaskListResult>;
   runTaskInspector?: (params: unknown) => Promise<unknown>;
+  validateSettingsModel?: (params: unknown) => Promise<unknown>;
   updateTaskInspectorConfig?: (params: unknown) => Promise<unknown>;
   updateNotepad?: (params: AgentNotepadUpdateParams) => Promise<AgentNotepadUpdateResult>;
 };
@@ -687,6 +728,19 @@ function withDesktopAliasRuntime<T>(
           (() => Promise.reject(new Error("updateTaskInspectorConfig should not run in dashboard contract tests"))),
         getSettingsDetailed: rpcMethods?.getSettingsDetailed ?? (() => Promise.reject(new Error("getSettingsDetailed should not run in dashboard contract tests"))),
         updateSettings: rpcMethods?.updateSettings ?? (() => Promise.reject(new Error("updateSettings should not run in dashboard contract tests"))),
+        validateSettingsModel:
+          rpcMethods?.validateSettingsModel ??
+          (() => Promise.resolve({
+            ok: true,
+            status: "valid",
+            message: "当前模型配置校验通过，可执行文本生成与工具调用。",
+            provider: "openai",
+            canonical_provider: "openai_responses",
+            base_url: "https://api.openai.com/v1",
+            model: "gpt-4.1-mini",
+            text_generation_ready: true,
+            tool_calling_ready: true,
+          })),
       };
     }
 
@@ -1293,12 +1347,13 @@ test("task context links back into mirror detail state instead of plain text dea
   assert.match(mirrorAppSource, /setHistoryDetailView\(options\.historyDetailView\)/);
 });
 
-test("task page keeps waiting-auth anchors and waiting-input escape hatches", () => {
+test("task page keeps waiting-auth anchors and routes follow-up steering through the detail panel", () => {
   const { getTaskPrimaryActions } = loadTaskPageMapperModule();
   const waitingAuthTask = createTask({ status: "waiting_auth" });
   const waitingInputTask = createTask({ status: "waiting_input" });
   const mapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mapper.ts"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+  const taskDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
   assert.equal(getTaskPrimaryActions(waitingAuthTask, createDetail({ approval_request: null, security_summary: { latest_restore_point: null, pending_authorizations: 0, risk_level: "yellow", security_status: "normal" }, task: waitingAuthTask })).at(-1)?.label, "安全详情");
   assert.deepEqual(
@@ -1306,7 +1361,8 @@ test("task page keeps waiting-auth anchors and waiting-input escape hatches", ()
     ["cancel", "open-safety"],
   );
   assert.doesNotMatch(mapperSource, /当前任务还在等待补充输入，如需修改或补充，请到悬浮球继续处理。/);
-  assert.match(taskPageSource, /如需修改或补充当前任务，请到悬浮球继续处理。/);
+  assert.match(taskPageSource, /onSteerTask=\{handleSteerTask\}/);
+  assert.match(taskDetailPanelSource, /placeholder=\{canSteerTask \? "例如：保留现有结果，再额外补一份简短结论。" : "当前任务已结束，不能继续补充要求。"\}/);
 });
 
 test("settings service normalizes legacy stored snapshots before returning and saving", () => {
@@ -2139,6 +2195,562 @@ test("control panel saves full floating-ball ownership through the real rpc sett
     assert.equal(reloaded.settings.memory.work_summary_interval.unit, "hour");
     assert.equal(reloaded.settings.memory.profile_refresh_interval.value, 5);
     assert.equal(reloaded.settings.memory.profile_refresh_interval.unit, "day");
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control-panel save keeps arbitrary provider aliases on the supported OpenAI-compatible route", async () => {
+  const strongholdStatus = {
+    backend: "stronghold",
+    available: true,
+    fallback: false,
+    initialized: true,
+    formal_store: true,
+  };
+  let remoteSettings = {
+    general: {
+      language: "zh-CN",
+      auto_launch: true,
+      theme_mode: "follow_system",
+      voice_notification_enabled: true,
+      voice_type: "default_female",
+      download: {
+        workspace_path: "D:/CialloClawWorkspace",
+        ask_before_save_each_file: true,
+      },
+    },
+    floating_ball: {
+      auto_snap: true,
+      idle_translucent: true,
+      position_mode: "draggable",
+      size: "medium",
+    },
+    memory: {
+      enabled: true,
+      lifecycle: "30d",
+      work_summary_interval: {
+        unit: "day",
+        value: 7,
+      },
+      profile_refresh_interval: {
+        unit: "week",
+        value: 2,
+      },
+    },
+    models: {
+      provider: "openai",
+      credentials: {
+        budget_auto_downgrade: true,
+        provider_api_key_configured: false,
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        stronghold: strongholdStatus,
+      },
+    },
+  };
+  const inspectorConfig = {
+    task_sources: ["D:/workspace/todos"],
+    inspection_interval: {
+      unit: "minute",
+      value: 15,
+    },
+    inspect_on_file_change: true,
+    inspect_on_startup: true,
+    remind_before_deadline: true,
+    remind_when_stale: false,
+  };
+  const { loadControlPanelData, saveControlPanelData } = loadControlPanelServiceModule({
+    getSecuritySummary: async () => ({
+      summary: {
+        security_status: "normal",
+        pending_authorizations: 0,
+        latest_restore_point: null,
+        token_cost_summary: {
+          current_task_tokens: 0,
+          current_task_cost: 0,
+          today_tokens: 0,
+          today_cost: 0,
+          single_task_limit: 50000,
+          daily_limit: 300000,
+          budget_auto_downgrade: true,
+        },
+      },
+    }),
+    getSettings: async () => ({
+      settings: remoteSettings,
+    }),
+    getTaskInspectorConfig: async () => inspectorConfig,
+    updateSettings: async (params) => {
+      const request = params as {
+        models: {
+          provider: string;
+          budget_auto_downgrade: boolean;
+          base_url: string;
+          model: string;
+          api_key?: string;
+        };
+      };
+
+      assert.equal(request.models.provider, "anthropic");
+      assert.equal(request.models.api_key, "saved-secret-key");
+
+      remoteSettings = {
+        ...remoteSettings,
+        models: {
+          provider: request.models.provider,
+          credentials: {
+            ...remoteSettings.models.credentials,
+            budget_auto_downgrade: request.models.budget_auto_downgrade,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+          },
+        },
+      };
+
+      return {
+        apply_mode: "next_task_effective",
+        need_restart: false,
+        updated_keys: ["models.provider", "models.api_key"],
+        effective_settings: {
+          models: {
+            provider: request.models.provider,
+            budget_auto_downgrade: request.models.budget_auto_downgrade,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+            stronghold: strongholdStatus,
+          },
+        },
+      };
+    },
+    updateTaskInspectorConfig: async () => ({
+      effective_config: inspectorConfig,
+    }),
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      localStorage,
+    },
+  });
+
+  try {
+    const initialData = await loadControlPanelData();
+    const result = await saveControlPanelData(
+      {
+        ...initialData,
+        providerApiKeyInput: "saved-secret-key",
+        settings: {
+          ...initialData.settings,
+          models: {
+            ...initialData.settings.models,
+            provider: "anthropic",
+            base_url: "https://api.qnaigc.com/v1",
+            model: "claude-3-7-sonnet",
+          },
+        },
+      },
+      {
+        saveInspector: false,
+        saveSettings: true,
+      },
+    );
+
+    assert.deepEqual(result.warnings, []);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control-panel save blocks invalid model routes before persisting settings", async () => {
+  const strongholdStatus = {
+    backend: "stronghold",
+    available: true,
+    fallback: false,
+    initialized: true,
+    formal_store: true,
+  };
+  const remoteSettings = {
+    general: {
+      language: "zh-CN",
+      auto_launch: true,
+      theme_mode: "follow_system",
+      voice_notification_enabled: true,
+      voice_type: "default_female",
+      download: {
+        workspace_path: "D:/CialloClawWorkspace",
+        ask_before_save_each_file: true,
+      },
+    },
+    floating_ball: {
+      auto_snap: true,
+      idle_translucent: true,
+      position_mode: "draggable",
+      size: "medium",
+    },
+    memory: {
+      enabled: true,
+      lifecycle: "30d",
+      work_summary_interval: { unit: "day", value: 7 },
+      profile_refresh_interval: { unit: "week", value: 2 },
+    },
+    models: {
+      provider: "openai",
+      credentials: {
+        budget_auto_downgrade: true,
+        provider_api_key_configured: false,
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        stronghold: strongholdStatus,
+      },
+    },
+  };
+  const inspectorConfig = {
+    task_sources: ["D:/workspace/todos"],
+    inspection_interval: { unit: "minute", value: 15 },
+    inspect_on_file_change: true,
+    inspect_on_startup: true,
+    remind_before_deadline: true,
+    remind_when_stale: false,
+  };
+  let updateSettingsCalled = false;
+  const { loadControlPanelData, saveControlPanelData, validateControlPanelModel } = loadControlPanelServiceModule({
+    getSecuritySummary: async () => ({
+      summary: {
+        security_status: "normal",
+        pending_authorizations: 0,
+        latest_restore_point: null,
+        token_cost_summary: {
+          current_task_tokens: 0,
+          current_task_cost: 0,
+          today_tokens: 0,
+          today_cost: 0,
+          single_task_limit: 50000,
+          daily_limit: 300000,
+          budget_auto_downgrade: true,
+        },
+      },
+    }),
+    getSettings: async () => ({ settings: remoteSettings }),
+    getTaskInspectorConfig: async () => inspectorConfig,
+    updateSettings: async (params) => {
+      updateSettingsCalled = true;
+      const request = params as { models: { provider: string; base_url: string; model: string; api_key?: string } };
+      assert.equal(request.models.provider, "broken-provider");
+      assert.equal(request.models.base_url, "https://broken.example/v1");
+      assert.equal(request.models.model, "bad-model");
+      assert.equal(request.models.api_key, "bad-secret");
+
+      return {
+        apply_mode: "next_task_effective",
+        need_restart: false,
+        updated_keys: ["models.provider", "models.base_url", "models.model", "models.api_key"],
+        effective_settings: {
+          models: {
+            provider: request.models.provider,
+            budget_auto_downgrade: true,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+            stronghold: strongholdStatus,
+          },
+        },
+      };
+    },
+    validateSettingsModel: async () => ({
+      ok: false,
+      status: "auth_failed",
+      message: "模型配置校验失败：鉴权失败，请检查 API Key 或访问权限。",
+      provider: "broken-provider",
+      canonical_provider: "openai_responses",
+      base_url: "https://broken.example/v1",
+      model: "bad-model",
+      text_generation_ready: false,
+      tool_calling_ready: false,
+    }),
+    updateTaskInspectorConfig: async () => ({ effective_config: inspectorConfig }),
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, { window: { localStorage } });
+
+  try {
+    const initialData = await loadControlPanelData();
+    await assert.rejects(
+      saveControlPanelData(
+        {
+          ...initialData,
+          providerApiKeyInput: "bad-secret",
+          settings: {
+            ...initialData.settings,
+            models: {
+              ...initialData.settings.models,
+              provider: "broken-provider",
+              base_url: "https://broken.example/v1",
+              model: "bad-model",
+            },
+          },
+        },
+        { saveInspector: false, saveSettings: true, validateModel: true },
+      ),
+      /当前设置未保存。/,
+    );
+    assert.equal(updateSettingsCalled, false);
+
+    const validation = await validateControlPanelModel(
+      {
+        ...initialData,
+        providerApiKeyInput: "bad-secret",
+        settings: {
+          ...initialData.settings,
+          models: {
+            ...initialData.settings.models,
+            provider: "broken-provider",
+            base_url: "https://broken.example/v1",
+            model: "bad-model",
+          },
+        },
+      },
+    );
+    assert.equal(validation.ok, false);
+    assert.equal(validation.status, "auth_failed");
+
+    const controlPanelSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+    assert.match(controlPanelSource, /测试连接/);
+    assert.match(controlPanelSource, /handleValidateModel/);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("shell-ball protocol stub stays aligned with formal settings snapshot shape", () => {
+  const protocolStubSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/test-stubs/protocol.ts"), "utf8");
+
+  assert.match(protocolStubSource, /models:\s*\{[\s\S]*credentials:\s*\{/);
+  assert.doesNotMatch(protocolStubSource, /data_log\?:/);
+});
+
+test("control-panel save persists local settings after model-only saves and keeps validation metadata", async () => {
+  const strongholdStatus = {
+    backend: "stronghold",
+    available: true,
+    fallback: false,
+    initialized: true,
+    formal_store: true,
+  };
+  let remoteSettings = {
+    general: {
+      language: "zh-CN",
+      auto_launch: true,
+      theme_mode: "follow_system",
+      voice_notification_enabled: true,
+      voice_type: "default_female",
+      download: {
+        workspace_path: "D:/CialloClawWorkspace",
+        ask_before_save_each_file: true,
+      },
+    },
+    floating_ball: {
+      auto_snap: true,
+      idle_translucent: true,
+      position_mode: "draggable",
+      size: "medium",
+    },
+    memory: {
+      enabled: true,
+      lifecycle: "30d",
+      work_summary_interval: { unit: "day", value: 7 },
+      profile_refresh_interval: { unit: "week", value: 2 },
+    },
+    task_automation: {
+      inspect_on_startup: true,
+      inspect_on_file_change: true,
+      inspection_interval: { unit: "minute", value: 15 },
+      task_sources: ["D:/workspace/todos"],
+      remind_before_deadline: true,
+      remind_when_stale: false,
+    },
+    models: {
+      provider: "openai",
+      credentials: {
+        budget_auto_downgrade: true,
+        provider_api_key_configured: false,
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        stronghold: strongholdStatus,
+      },
+    },
+  };
+  const inspectorConfig = {
+    task_sources: ["D:/workspace/todos"],
+    inspection_interval: { unit: "minute", value: 15 },
+    inspect_on_file_change: true,
+    inspect_on_startup: true,
+    remind_before_deadline: true,
+    remind_when_stale: false,
+  };
+  let validationCount = 0;
+  const { loadControlPanelData, saveControlPanelData } = loadControlPanelServiceModule({
+    getSecuritySummary: async () => ({
+      summary: {
+        security_status: "normal",
+        pending_authorizations: 0,
+        latest_restore_point: null,
+        token_cost_summary: {
+          current_task_tokens: 0,
+          current_task_cost: 0,
+          today_tokens: 0,
+          today_cost: 0,
+          single_task_limit: 50000,
+          daily_limit: 300000,
+          budget_auto_downgrade: true,
+        },
+      },
+    }),
+    getSettings: async () => ({ settings: remoteSettings }),
+    getTaskInspectorConfig: async () => inspectorConfig,
+    updateSettings: async (params) => {
+      const request = params as {
+        models: {
+          provider: string;
+          budget_auto_downgrade: boolean;
+          base_url: string;
+          model: string;
+          api_key?: string;
+        };
+      };
+      remoteSettings = {
+        ...remoteSettings,
+        models: {
+          provider: request.models.provider,
+          credentials: {
+            ...remoteSettings.models.credentials,
+            budget_auto_downgrade: request.models.budget_auto_downgrade,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+          },
+        },
+      };
+
+      return {
+        apply_mode: "next_task_effective",
+        need_restart: false,
+        updated_keys: ["models.provider", "models.base_url", "models.model", "models.api_key"],
+        effective_settings: {
+          models: {
+            provider: request.models.provider,
+            budget_auto_downgrade: request.models.budget_auto_downgrade,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+            stronghold: strongholdStatus,
+          },
+        },
+      };
+    },
+    validateSettingsModel: async () => {
+      validationCount += 1;
+      return {
+        ok: true,
+        status: "ok",
+        message: "validated",
+        provider: "anthropic",
+        canonical_provider: "openai_responses",
+        base_url: "https://api.qnaigc.com/v1",
+        model: "claude-3-7-sonnet",
+        text_generation_ready: true,
+        tool_calling_ready: true,
+      };
+    },
+    updateTaskInspectorConfig: async () => ({ effective_config: inspectorConfig }),
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, { window: { localStorage } });
+
+  try {
+    const initialData = await loadControlPanelData();
+    const result = await saveControlPanelData(
+      {
+        ...initialData,
+        providerApiKeyInput: "saved-secret-key",
+        settings: {
+          ...initialData.settings,
+          models: {
+            ...initialData.settings.models,
+            provider: "anthropic",
+            base_url: "https://api.qnaigc.com/v1",
+            model: "claude-3-7-sonnet",
+          },
+        },
+      },
+      {
+        saveInspector: false,
+        saveSettings: true,
+      },
+    );
+
+    assert.equal(validationCount, 1);
+    assert.equal(result.savedSettings, true);
+    assert.equal(result.savedInspector, false);
+    assert.equal(result.modelValidation?.ok, true);
+    const persisted = JSON.parse(localStorage.getItem("cialloclaw.settings") ?? "{}");
+    assert.equal(persisted.settings.models.provider, "anthropic");
+    assert.equal(persisted.settings.models.base_url, "https://api.qnaigc.com/v1");
+    assert.equal(persisted.settings.models.model, "claude-3-7-sonnet");
+    assert.equal(persisted.settings.models.provider_api_key_configured, true);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
