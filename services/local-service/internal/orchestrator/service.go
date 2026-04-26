@@ -2880,11 +2880,7 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 		}
 	}
 	if _, ok := effectiveSettings["models"]; ok {
-		effectiveSettingsWithSecrets, err := s.attachSensitiveSettingAvailability(effectiveSettings)
-		if err != nil {
-			return nil, err
-		}
-		effectiveSettings = effectiveSettingsWithSecrets
+		effectiveSettings = s.attachSensitiveSettingAvailabilityForCommittedUpdate(effectiveSettings, secretUpdatedKeys)
 	}
 	effectiveSettings = outwardSettingsUpdatePatch(effectiveSettings)
 	updatedKeys = outwardSettingsUpdateKeys(updatedKeys, secretUpdatedKeys)
@@ -2894,6 +2890,21 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 		"apply_mode":         applyMode,
 		"need_restart":       needRestart,
 	}, nil
+}
+
+// attachSensitiveSettingAvailabilityForCommittedUpdate decorates the response
+// payload after a settings update has already committed. At this point the
+// runtime model, secrets, and settings snapshot may already be live, so a
+// follow-up Stronghold read must not turn the committed save back into an RPC
+// error. When the readonly secret probe fails, the response degrades to stable
+// metadata derived from the just-applied mutation hints and current Stronghold
+// descriptor instead of reopening a partial-apply path.
+func (s *Service) attachSensitiveSettingAvailabilityForCommittedUpdate(settings map[string]any, secretUpdatedKeys []string) map[string]any {
+	decorated, err := s.attachSensitiveSettingAvailability(settings)
+	if err == nil {
+		return decorated
+	}
+	return attachSensitiveSettingAvailabilityFallback(settings, strongholdStatusFromStorage(s.storage), settingsUpdateSecretAvailabilityHint(secretUpdatedKeys))
 }
 
 // previewSettingsUpdate computes the future settings snapshot without mutating
@@ -3713,6 +3724,46 @@ func (s *Service) modelSecretConfigured(provider string) (string, bool, error) {
 		return resolvedProvider, false, ErrStrongholdAccessFailed
 	}
 	return resolvedProvider, false, err
+}
+
+func attachSensitiveSettingAvailabilityFallback(settings map[string]any, stronghold map[string]any, providerConfigured *bool) map[string]any {
+	cloned := normalizeSettingsSnapshot(cloneMap(settings))
+	if cloned == nil {
+		cloned = map[string]any{}
+	}
+	models := cloneMap(mapValue(cloned, "models"))
+	if models == nil {
+		models = map[string]any{}
+	}
+	credentials := cloneMap(mapValue(models, "credentials"))
+	if credentials == nil {
+		credentials = map[string]any{}
+	}
+	if providerConfigured != nil {
+		credentials["provider_api_key_configured"] = *providerConfigured
+	} else if _, ok := credentials["provider_api_key_configured"]; !ok {
+		credentials["provider_api_key_configured"] = false
+	}
+	if len(stronghold) > 0 {
+		credentials["stronghold"] = cloneMap(stronghold)
+	}
+	models["credentials"] = credentials
+	cloned["models"] = models
+	return cloned
+}
+
+func settingsUpdateSecretAvailabilityHint(secretUpdatedKeys []string) *bool {
+	for _, key := range secretUpdatedKeys {
+		switch key {
+		case "models.api_key":
+			configured := true
+			return &configured
+		case "models.delete_api_key":
+			configured := false
+			return &configured
+		}
+	}
+	return nil
 }
 
 func (s *Service) persistModelSecret(provider, apiKey string) error {

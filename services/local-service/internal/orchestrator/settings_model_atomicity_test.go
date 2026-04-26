@@ -122,3 +122,62 @@ func TestRollbackModelSecretMutationsRestoresPreviousState(t *testing.T) {
 		t.Fatalf("expected previous secret to be restored, got %+v", stored)
 	}
 }
+
+func TestSettingsUpdateKeepsCommittedModelChangeWhenReadonlySecretProbeFails(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "settings committed response fallback")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	result, err := service.SettingsUpdate(map[string]any{
+		"models": map[string]any{
+			"provider": "anthropic",
+			"base_url": "https://example.invalid/v1/messages",
+			"model":    "claude-3-7-sonnet",
+			"api_key":  "new-secret",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected initial settings update to succeed, got %v", err)
+	}
+	if result["apply_mode"] != "next_task_effective" {
+		t.Fatalf("expected model update apply mode, got %+v", result)
+	}
+
+	stored, err := service.storage.SecretStore().GetSecret(context.Background(), "model", model.OpenAIResponsesProvider+"_api_key")
+	if err != nil || stored.Value != "new-secret" {
+		t.Fatalf("expected committed secret before outage simulation, got stored=%+v err=%v", stored, err)
+	}
+	committedRuntime := service.currentModel().RuntimeConfig()
+
+	replaceSecretStore(t, service.storage, storage.UnavailableSecretStore{})
+	result, err = service.SettingsUpdate(map[string]any{
+		"models": map[string]any{
+			"provider": "anthropic",
+			"base_url": "https://example.invalid/v1/messages/v2",
+			"model":    "claude-3-7-sonnet-latest",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected committed save to degrade response instead of failing, got %v", err)
+	}
+	models := result["effective_settings"].(map[string]any)["models"].(map[string]any)
+	if models["provider"] != "anthropic" || models["base_url"] != "https://example.invalid/v1/messages/v2" || models["model"] != "claude-3-7-sonnet-latest" {
+		t.Fatalf("expected committed model settings in response, got %+v", models)
+	}
+	if models["provider_api_key_configured"] != false {
+		t.Fatalf("expected degraded readonly probe to use safe default metadata, got %+v", models)
+	}
+	stronghold := models["stronghold"].(map[string]any)
+	if stronghold["backend"] == "" {
+		t.Fatalf("expected stronghold descriptor fallback metadata, got %+v", stronghold)
+	}
+	runtimeSettings := service.runEngine.Settings()
+	modelsSnapshot := modelSettingsSection(runtimeSettings)
+	credentialsSnapshot := modelCredentialSettings(runtimeSettings)
+	if modelsSnapshot["provider"] != "anthropic" || credentialsSnapshot["base_url"] != "https://example.invalid/v1/messages/v2" || credentialsSnapshot["model"] != "claude-3-7-sonnet-latest" {
+		t.Fatalf("expected committed settings snapshot to remain updated after degraded response path, got models=%+v credentials=%+v", modelsSnapshot, credentialsSnapshot)
+	}
+	if service.currentModel().RuntimeConfig() == committedRuntime {
+		t.Fatalf("expected committed runtime model swap to persist, got %+v", service.currentModel().RuntimeConfig())
+	}
+}
