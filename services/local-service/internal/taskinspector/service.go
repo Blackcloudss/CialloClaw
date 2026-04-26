@@ -1,4 +1,4 @@
-// 该文件负责任务巡检模块的最小运行态聚合逻辑。
+// Package taskinspector aggregates the minimum runtime state for task inspection.
 package taskinspector
 
 import (
@@ -11,6 +11,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
 )
 
 const defaultStaleInterval = 15 * time.Minute
@@ -22,13 +23,13 @@ const (
 	notepadBucketUpcoming      = "upcoming"
 )
 
-// Service 负责根据 workspace、notepad 和 runtime task 状态生成巡检结果。
+// Service builds inspection results from workspace, notepad, and runtime task state.
 type Service struct {
 	fileSystem platform.FileSystemAdapter
 	now        func() time.Time
 }
 
-// RunInput 描述一次巡检执行所需的运行态输入。
+// RunInput carries runtime state required by one inspection pass.
 type RunInput struct {
 	Reason          string
 	TargetSources   []string
@@ -38,7 +39,7 @@ type RunInput struct {
 	NotepadItems    []map[string]any
 }
 
-// RunResult 描述一次巡检执行输出的协议兼容结果。
+// RunResult carries the protocol-compatible result of one inspection pass.
 type RunResult struct {
 	InspectionID string
 	Summary      map[string]any
@@ -47,7 +48,7 @@ type RunResult struct {
 	SourceSynced bool
 }
 
-// NewService 创建并返回 task inspector 服务。
+// NewService creates a task inspector service.
 func NewService(fileSystem platform.FileSystemAdapter) *Service {
 	return &Service{
 		fileSystem: fileSystem,
@@ -55,7 +56,7 @@ func NewService(fileSystem platform.FileSystemAdapter) *Service {
 	}
 }
 
-// Run 执行一次最小真实巡检。
+// Run executes one minimum real inspection.
 func (s *Service) Run(input RunInput) RunResult {
 	sources := resolveSources(input.TargetSources, input.Config)
 	sourceSynced := len(sources) > 0 && s.fileSystem != nil
@@ -109,13 +110,16 @@ func (s *Service) inspectSources(sources []string) (int, []map[string]any) {
 				return nil
 			}
 			seenFiles[currentPath] = struct{}{}
-			parsedFiles++
-
 			content, err := fs.ReadFile(s.fileSystem, currentPath)
 			if err != nil {
 				return nil
 			}
-			identifiedItems = append(identifiedItems, parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), string(content), s.now())...)
+			decoded, err := textdecode.Decode(content)
+			if err != nil {
+				return nil
+			}
+			parsedFiles++
+			identifiedItems = append(identifiedItems, parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), decoded.Text, s.now())...)
 			return nil
 		})
 	}

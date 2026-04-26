@@ -9,6 +9,8 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 )
 
 func TestServiceRunAggregatesWorkspaceNotepadAndRuntimeState(t *testing.T) {
@@ -127,6 +129,36 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 	later := result.NotepadItems[1]
 	if later["bucket"] != notepadBucketLater {
 		t.Fatalf("expected explicit bucket metadata to win, got %+v", later)
+	}
+}
+
+func TestServiceRunDecodesLegacyMarkdownSources(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content, _, err := transform.Bytes(simplifiedchinese.GB18030.NewEncoder(), []byte("- [ ] 修复巡检乱码\n"))
+	if err != nil {
+		t.Fatalf("GB18030 encode failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "legacy.md"), content, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+
+	if result.Summary["parsed_files"] != 1 || len(result.NotepadItems) != 1 {
+		t.Fatalf("expected legacy markdown source to be parsed, got summary=%+v items=%+v", result.Summary, result.NotepadItems)
+	}
+	if result.NotepadItems[0]["title"] != "修复巡检乱码" {
+		t.Fatalf("expected decoded notepad title, got %+v", result.NotepadItems[0])
 	}
 }
 
