@@ -68,6 +68,10 @@ const DESKTOP_ONBOARDING_STATUS_KEY = "cialloclaw.desktop.onboarding.status";
 const DESKTOP_ONBOARDING_SESSION_KEY = "cialloclaw.desktop.onboarding.session";
 const DESKTOP_ONBOARDING_PRESENTATION_KEY = "cialloclaw.desktop.onboarding.presentation";
 const DESKTOP_ONBOARDING_READY_TIMEOUT_MS = 10_000;
+const DESKTOP_ONBOARDING_FALLBACK_FRAME = {
+  height: 860,
+  width: 1280,
+};
 
 const DESKTOP_ONBOARDING_WINDOW_LABELS = [
   shellBallWindowLabels.ball,
@@ -82,10 +86,17 @@ async function buildDefaultWelcomePresentation(windowLabel: DesktopOnboardingPre
   const currentWindow = getCurrentWindow();
   const outerPosition = await currentWindow.outerPosition();
   const outerSize = await currentWindow.outerSize();
-  const monitor = await monitorFromPoint(outerPosition.x, outerPosition.y);
+  const scaleFactor = await currentWindow.scaleFactor();
+  const monitor = await monitorFromPoint(
+    Math.round(outerPosition.x + outerSize.width / 2),
+    Math.round(outerPosition.y + outerSize.height / 2),
+  );
 
-  const monitorPosition = monitor?.position.toLogical(monitor.scaleFactor) ?? outerPosition.toLogical(await currentWindow.scaleFactor());
-  const monitorSize = monitor?.size.toLogical(monitor.scaleFactor) ?? outerSize.toLogical(await currentWindow.scaleFactor());
+  const monitorPosition = monitor?.position.toLogical(monitor.scaleFactor) ?? outerPosition.toLogical(scaleFactor);
+  const monitorSize = monitor?.size.toLogical(monitor.scaleFactor) ?? {
+    width: Math.max(outerSize.toLogical(scaleFactor).width, DESKTOP_ONBOARDING_FALLBACK_FRAME.width),
+    height: Math.max(outerSize.toLogical(scaleFactor).height, DESKTOP_ONBOARDING_FALLBACK_FRAME.height),
+  };
 
   return {
     highlights: [] as DesktopOnboardingPresentationRect[],

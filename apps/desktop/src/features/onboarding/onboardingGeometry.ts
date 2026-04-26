@@ -17,7 +17,11 @@ export type DesktopOnboardingHighlight = {
 export async function resolveDesktopOnboardingMonitorFrame() {
   const currentWindow = getCurrentWindow();
   const outerPosition = await currentWindow.outerPosition();
-  const monitor = await monitorFromPoint(outerPosition.x, outerPosition.y);
+  const outerSize = await currentWindow.outerSize();
+  const monitor = await monitorFromPoint(
+    Math.round(outerPosition.x + outerSize.width / 2),
+    Math.round(outerPosition.y + outerSize.height / 2),
+  );
 
   if (monitor === null) {
     return null;
