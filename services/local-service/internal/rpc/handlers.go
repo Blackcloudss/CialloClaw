@@ -45,6 +45,7 @@ func (s *Server) registerHandlers() {
 		"agent.security.respond":               s.handleAgentSecurityRespond,
 		"agent.settings.get":                   s.handleAgentSettingsGet,
 		"agent.settings.update":                s.handleAgentSettingsUpdate,
+		"agent.settings.model.validate":        s.handleAgentSettingsModelValidate,
 		"agent.plugin.runtime.list":            s.handleAgentPluginRuntimeList,
 		"agent.plugin.list":                    s.handleAgentPluginList,
 		"agent.plugin.detail.get":              s.handleAgentPluginDetailGet,
@@ -239,6 +240,12 @@ func (s *Server) handleAgentSettingsGet(params map[string]any) (any, *rpcError) 
 // handleAgentSettingsUpdate handles agent.settings.update.
 func (s *Server) handleAgentSettingsUpdate(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.SettingsUpdate(params)
+	return wrapOrchestratorResult(data, err)
+}
+
+// handleAgentSettingsModelValidate handles agent.settings.model.validate.
+func (s *Server) handleAgentSettingsModelValidate(params map[string]any) (any, *rpcError) {
+	data, err := s.orchestrator.SettingsModelValidate(params)
 	return wrapOrchestratorResult(data, err)
 }
 

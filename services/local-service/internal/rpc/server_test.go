@@ -1382,6 +1382,7 @@ func TestHandlerWrappersCoverRecommendationInspectorDashboardAndSecurityMethods(
 		{name: "security.respond", invoke: func() (any, *rpcError) {
 			return server.handleAgentSecurityRespond(map[string]any{"task_id": "missing", "decision": "approve"})
 		}},
+		{name: "settings.model.validate", invoke: func() (any, *rpcError) { return server.handleAgentSettingsModelValidate(map[string]any{}) }},
 	}
 	for _, call := range handlerCalls {
 		data, rpcErr := call.invoke()
@@ -1481,6 +1482,30 @@ func TestDispatchReturnsSettingsUpdate(t *testing.T) {
 	}
 	if success.Result.Data.(map[string]any)["apply_mode"] != "next_task_effective" || success.Result.Data.(map[string]any)["need_restart"] != false {
 		t.Fatalf("expected model settings update to be next_task_effective, got %+v", success.Result.Data)
+	}
+}
+
+func TestDispatchReturnsSettingsModelValidate(t *testing.T) {
+	server := newTestServer()
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-settings-model-validate"`),
+		Method:  "agent.settings.model.validate",
+		Params: mustMarshal(t, map[string]any{
+			"models": map[string]any{
+				"provider": "openai",
+				"base_url": "https://api.example.com/v1",
+				"model":    "gpt-4.1-mini",
+			},
+		}),
+	})
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	if data["ok"] != false || data["status"] != "missing_api_key" {
+		t.Fatalf("expected structured validation failure result, got %+v", data)
 	}
 }
 

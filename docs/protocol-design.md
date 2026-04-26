@@ -3707,8 +3707,36 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.effective_settings.models.base_url`              | 生效后的模型服务基地址 |
 | `data.effective_settings.models.model`                 | 生效后的模型名 |
 | `data.apply_mode`                                      | 配置生效方式，取值来自 `apply_mode` |
-| `data.need_restart`                                    | 当前更新是否需要重启客户端 |
-| `meta.server_time`                                     | 服务端响应时间 |
+
+---
+
+### 8.4.3 `agent.settings.model.validate`
+
+- **请求方式**：JSON-RPC 2.0
+- **接口调用时机**：控制面板点击“测试连接”时，以及模型设置保存前的只读预校验阶段
+- **系统处理**：使用当前草稿中的 `models` 路由字段与已保存密钥（或本次请求临时提供的 `models.api_key`）构建一次只读探测，检查文本生成与工具调用是否可用
+- **入参**：可选模型草稿字段；未提供的字段沿用当前运行时有效配置
+- **出参**：结构化校验结果、失败原因、规范化后的 provider 与文本/工具调用就绪状态
+
+补充约束：
+
+- 本接口是只读探测，不会修改正式设置快照、Stronghold 密钥或当前任务状态。
+- `models.api_key` 若在本次请求中提供，仅用于本次校验，不会回显明文。
+- 返回 `ok = true` 时表示当前模型配置已通过文本生成与工具调用校验；返回 `ok = false` 时，控制面板应阻止本次保存并直接展示校验失败原因。
+
+### agent.settings.model.validate 出参关键字段
+
+| 字段 | 中文说明 |
+| --- | --- |
+| `data.ok` | 当前模型配置是否通过校验 |
+| `data.status` | 结构化校验状态，例如缺少 API Key、鉴权失败、接口不存在、工具调用不可用 |
+| `data.message` | 面向用户的校验说明文案 |
+| `data.provider` | 前端提交或当前设置中展示的 provider 文本 |
+| `data.canonical_provider` | 后端规范化后实际走的 provider 路由 |
+| `data.base_url` | 本次校验使用的模型基地址 |
+| `data.model` | 本次校验使用的模型名 |
+| `data.text_generation_ready` | 文本生成探测是否成功 |
+| `data.tool_calling_ready` | 工具调用探测是否成功 |
 
 ### agent.settings.update 出参示例
 

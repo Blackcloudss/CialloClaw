@@ -202,6 +202,19 @@
   margin: 0;
 }
 
+.control-panel-shell__model-actions {
+  justify-items: end;
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 1.15rem;
+  width: 100%;
+}
+
+.control-panel-shell__model-feedback {
+  max-width: 36rem;
+  text-align: right;
+}
+
 .control-panel-shell__title-row {
   align-items: center;
   display: inline-flex;

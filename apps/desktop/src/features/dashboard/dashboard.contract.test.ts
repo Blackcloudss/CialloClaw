@@ -329,6 +329,7 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
         options?: {
           saveInspector?: boolean;
           saveSettings?: boolean;
+          validateModel?: boolean;
           timeoutMs?: number;
         },
       ) => Promise<{
@@ -339,6 +340,11 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
         savedSettings?: boolean;
         updatedKeys: string[];
         warnings: string[];
+        modelValidation?: {
+          ok: boolean;
+          status: string;
+          message: string;
+        } | null;
         effectiveSettings: {
           general: {
             voice_type: string;
@@ -371,6 +377,22 @@ function loadControlPanelServiceModule(rpcMethods?: DashboardContractRpcMethodOv
             model: string;
           };
         };
+      }>;
+      validateControlPanelModel: (
+        data: unknown,
+        options?: {
+          timeoutMs?: number;
+        },
+      ) => Promise<{
+        ok: boolean;
+        status: string;
+        message: string;
+        provider: string;
+        canonical_provider: string;
+        base_url: string;
+        model: string;
+        text_generation_ready: boolean;
+        tool_calling_ready: boolean;
       }>;
     };
   }, rpcMethods);
@@ -543,6 +565,7 @@ type DashboardContractRpcMethodOverrides = {
   listNotepad?: (params: AgentNotepadListParams) => Promise<AgentNotepadListResult>;
   listTasks?: (params: AgentTaskListParams) => Promise<AgentTaskListResult>;
   runTaskInspector?: (params: unknown) => Promise<unknown>;
+  validateSettingsModel?: (params: unknown) => Promise<unknown>;
   updateTaskInspectorConfig?: (params: unknown) => Promise<unknown>;
   updateNotepad?: (params: AgentNotepadUpdateParams) => Promise<AgentNotepadUpdateResult>;
 };
@@ -673,6 +696,19 @@ function withDesktopAliasRuntime<T>(
           (() => Promise.reject(new Error("updateTaskInspectorConfig should not run in dashboard contract tests"))),
         getSettingsDetailed: rpcMethods?.getSettingsDetailed ?? (() => Promise.reject(new Error("getSettingsDetailed should not run in dashboard contract tests"))),
         updateSettings: rpcMethods?.updateSettings ?? (() => Promise.reject(new Error("updateSettings should not run in dashboard contract tests"))),
+        validateSettingsModel:
+          rpcMethods?.validateSettingsModel ??
+          (() => Promise.resolve({
+            ok: true,
+            status: "valid",
+            message: "当前模型配置校验通过，可执行文本生成与工具调用。",
+            provider: "openai",
+            canonical_provider: "openai_responses",
+            base_url: "https://api.openai.com/v1",
+            model: "gpt-4.1-mini",
+            text_generation_ready: true,
+            tool_calling_ready: true,
+          })),
       };
     }
 
@@ -2190,6 +2226,183 @@ test("control-panel save keeps arbitrary provider aliases on the supported OpenA
     );
 
     assert.deepEqual(result.warnings, []);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control-panel save blocks invalid model routes before persisting settings", async () => {
+  const strongholdStatus = {
+    backend: "stronghold",
+    available: true,
+    fallback: false,
+    initialized: true,
+    formal_store: true,
+  };
+  const remoteSettings = {
+    general: {
+      language: "zh-CN",
+      auto_launch: true,
+      theme_mode: "follow_system",
+      voice_notification_enabled: true,
+      voice_type: "default_female",
+      download: {
+        workspace_path: "D:/CialloClawWorkspace",
+        ask_before_save_each_file: true,
+      },
+    },
+    floating_ball: {
+      auto_snap: true,
+      idle_translucent: true,
+      position_mode: "draggable",
+      size: "medium",
+    },
+    memory: {
+      enabled: true,
+      lifecycle: "30d",
+      work_summary_interval: { unit: "day", value: 7 },
+      profile_refresh_interval: { unit: "week", value: 2 },
+    },
+    models: {
+      provider: "openai",
+      credentials: {
+        budget_auto_downgrade: true,
+        provider_api_key_configured: false,
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
+        stronghold: strongholdStatus,
+      },
+    },
+  };
+  const inspectorConfig = {
+    task_sources: ["D:/workspace/todos"],
+    inspection_interval: { unit: "minute", value: 15 },
+    inspect_on_file_change: true,
+    inspect_on_startup: true,
+    remind_before_deadline: true,
+    remind_when_stale: false,
+  };
+  let updateSettingsCalled = false;
+  const { loadControlPanelData, saveControlPanelData, validateControlPanelModel } = loadControlPanelServiceModule({
+    getSecuritySummary: async () => ({
+      summary: {
+        security_status: "normal",
+        pending_authorizations: 0,
+        latest_restore_point: null,
+        token_cost_summary: {
+          current_task_tokens: 0,
+          current_task_cost: 0,
+          today_tokens: 0,
+          today_cost: 0,
+          single_task_limit: 50000,
+          daily_limit: 300000,
+          budget_auto_downgrade: true,
+        },
+      },
+    }),
+    getSettings: async () => ({ settings: remoteSettings }),
+    getTaskInspectorConfig: async () => inspectorConfig,
+    updateSettings: async (params) => {
+      updateSettingsCalled = true;
+      const request = params as { models: { provider: string; base_url: string; model: string; api_key?: string } };
+      assert.equal(request.models.provider, "broken-provider");
+      assert.equal(request.models.base_url, "https://broken.example/v1");
+      assert.equal(request.models.model, "bad-model");
+      assert.equal(request.models.api_key, "bad-secret");
+
+      return {
+        apply_mode: "next_task_effective",
+        need_restart: false,
+        updated_keys: ["models.provider", "models.base_url", "models.model", "models.api_key"],
+        effective_settings: {
+          models: {
+            provider: request.models.provider,
+            budget_auto_downgrade: true,
+            provider_api_key_configured: true,
+            base_url: request.models.base_url,
+            model: request.models.model,
+            stronghold: strongholdStatus,
+          },
+        },
+      };
+    },
+    validateSettingsModel: async () => ({
+      ok: false,
+      status: "auth_failed",
+      message: "模型配置校验失败：鉴权失败，请检查 API Key 或访问权限。",
+      provider: "broken-provider",
+      canonical_provider: "openai_responses",
+      base_url: "https://broken.example/v1",
+      model: "bad-model",
+      text_generation_ready: false,
+      tool_calling_ready: false,
+    }),
+    updateTaskInspectorConfig: async () => ({ effective_config: inspectorConfig }),
+  });
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, { window: { localStorage } });
+
+  try {
+    const initialData = await loadControlPanelData();
+    await assert.rejects(
+      saveControlPanelData(
+        {
+          ...initialData,
+          providerApiKeyInput: "bad-secret",
+          settings: {
+            ...initialData.settings,
+            models: {
+              ...initialData.settings.models,
+              provider: "broken-provider",
+              base_url: "https://broken.example/v1",
+              model: "bad-model",
+            },
+          },
+        },
+        { saveInspector: false, saveSettings: true, validateModel: true },
+      ),
+      /当前设置未保存。/,
+    );
+    assert.equal(updateSettingsCalled, false);
+
+    const validation = await validateControlPanelModel(
+      {
+        ...initialData,
+        providerApiKeyInput: "bad-secret",
+        settings: {
+          ...initialData.settings,
+          models: {
+            ...initialData.settings.models,
+            provider: "broken-provider",
+            base_url: "https://broken.example/v1",
+            model: "bad-model",
+          },
+        },
+      },
+    );
+    assert.equal(validation.ok, false);
+    assert.equal(validation.status, "auth_failed");
+
+    const controlPanelSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+    assert.match(controlPanelSource, /测试连接/);
+    assert.match(controlPanelSource, /handleValidateModel/);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
