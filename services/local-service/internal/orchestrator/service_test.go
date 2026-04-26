@@ -41,6 +41,16 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+type taskInspectorFailingSettingsStore struct{}
+
+func (taskInspectorFailingSettingsStore) SaveSettingsSnapshot(context.Context, map[string]any) error {
+	return errors.New("settings snapshot write failed")
+}
+
+func (taskInspectorFailingSettingsStore) LoadSettingsSnapshot(context.Context) (map[string]any, error) {
+	return nil, nil
+}
+
 type stubModelClient struct {
 	output       string
 	generateText func(request model.GenerateTextRequest) (model.GenerateTextResponse, error)
@@ -1907,6 +1917,83 @@ func TestTaskInspectorRunReturnsExplicitErrorForMissingSource(t *testing.T) {
 	_, err := service.TaskInspectorRun(map[string]any{"target_sources": []any{"workspace/missing"}})
 	if !errors.Is(err, taskinspector.ErrInspectionSourceNotFound) {
 		t.Fatalf("expected missing source error, got %v", err)
+	}
+}
+
+func TestTaskInspectorConfigUpdatePropagatesSettingsStoreErrors(t *testing.T) {
+	service := newTestService()
+	if err := service.runEngine.WithSettingsStore(taskInspectorFailingSettingsStore{}); err != nil {
+		t.Fatalf("WithSettingsStore returned error: %v", err)
+	}
+
+	_, err := service.TaskInspectorConfigUpdate(map[string]any{"task_sources": []any{"workspace/review"}})
+	if err == nil || !strings.Contains(err.Error(), "settings snapshot write failed") {
+		t.Fatalf("expected TaskInspectorConfigUpdate to surface settings store failure, got %v", err)
+	}
+}
+
+func TestTaskInspectorSettingsHelpersCoverDefaultsAndCompatibilityInputs(t *testing.T) {
+	config := inspectorConfigFromSettings(nil)
+	if config["inspect_on_file_change"] != true || config["inspect_on_startup"] != true {
+		t.Fatalf("expected task inspector defaults to stay enabled, got %+v", config)
+	}
+	if config["remind_before_deadline"] != true || config["remind_when_stale"] != false {
+		t.Fatalf("expected reminder defaults to match settings contract, got %+v", config)
+	}
+
+	patch := taskAutomationSettingsPatchFromInspectorConfig(map[string]any{
+		"task_sources":           []string{"workspace/review", "", "workspace/review"},
+		"inspection_interval":    map[string]any{"unit": "day", "value": 1},
+		"inspect_on_file_change": false,
+	})
+	taskAutomation := patch["task_automation"].(map[string]any)
+	if !reflect.DeepEqual(taskAutomation["task_sources"], []string{"workspace/review", "workspace/review"}) {
+		t.Fatalf("expected helper to preserve explicit compatibility sources, got %+v", taskAutomation)
+	}
+	if taskAutomation["inspect_on_file_change"] != false {
+		t.Fatalf("expected bool toggles to survive compatibility patch, got %+v", taskAutomation)
+	}
+
+	if emptyPatch := taskAutomationSettingsPatchFromInspectorConfig(map[string]any{"task_sources": "invalid"}); len(emptyPatch) != 0 {
+		t.Fatalf("expected invalid task_sources payload to produce empty patch, got %+v", emptyPatch)
+	}
+
+	stringValues, ok := optionalStringSliceValue([]string{"workspace/a", " ", "workspace/b"})
+	if !ok || !reflect.DeepEqual(stringValues, []string{"workspace/a", "workspace/b"}) {
+		t.Fatalf("expected []string compatibility inputs to be preserved, got ok=%v values=%+v", ok, stringValues)
+	}
+	anyValues, ok := optionalStringSliceValue([]any{"workspace/a", 3, "workspace/b"})
+	if !ok || !reflect.DeepEqual(anyValues, []string{"workspace/a", "workspace/b"}) {
+		t.Fatalf("expected []any compatibility inputs to keep string sources only, got ok=%v values=%+v", ok, anyValues)
+	}
+	if values, ok := optionalStringSliceValue("invalid"); ok || values != nil {
+		t.Fatalf("expected invalid task source payload to be rejected, got ok=%v values=%+v", ok, values)
+	}
+}
+
+func TestPreviewNeedsRestartCoversWorkspaceAndNoopCases(t *testing.T) {
+	currentSettings := map[string]any{
+		"general": map[string]any{
+			"language": "zh-CN",
+			"download": map[string]any{
+				"workspace_path": "workspace",
+			},
+		},
+	}
+	if previewNeedsRestart(currentSettings, map[string]any{}) {
+		t.Fatal("expected empty settings patch to avoid restart")
+	}
+	if previewNeedsRestart(currentSettings, map[string]any{"general": map[string]any{"language": "zh-CN"}}) {
+		t.Fatal("expected unchanged language to avoid restart")
+	}
+	if previewNeedsRestart(currentSettings, map[string]any{"general": map[string]any{"download": map[string]any{"workspace_path": "workspace"}}}) {
+		t.Fatal("expected unchanged workspace_path to avoid restart")
+	}
+	if !previewNeedsRestart(currentSettings, map[string]any{"general": map[string]any{"download": map[string]any{"workspace_path": "workspace-next"}}}) {
+		t.Fatal("expected changed workspace_path to require restart")
+	}
+	if !previewNeedsRestart(currentSettings, map[string]any{"general": map[string]any{"language": "en-US"}}) {
+		t.Fatal("expected changed language to require restart")
 	}
 }
 

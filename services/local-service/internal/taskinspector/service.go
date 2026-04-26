@@ -88,8 +88,6 @@ func (s *Service) Run(input RunInput) (RunResult, error) {
 	resolvedNotepadItems := cloneMapSlice(input.NotepadItems)
 	if sourceSynced {
 		resolvedNotepadItems = cloneMapSlice(parsedNotepadItems)
-	} else if len(parsedNotepadItems) > 0 {
-		resolvedNotepadItems = parsedNotepadItems
 	}
 	fileItems := countOpenNotepadItems(parsedNotepadItems)
 	dueToday, overdue := countDueBuckets(resolvedNotepadItems, s.now())
