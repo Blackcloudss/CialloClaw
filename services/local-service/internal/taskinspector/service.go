@@ -1,11 +1,14 @@
-// 该文件负责任务巡检模块的最小运行态聚合逻辑。
+// Package taskinspector aggregates the minimal runtime state used by task
+// inspection flows.
 package taskinspector
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io/fs"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -47,7 +50,22 @@ type RunResult struct {
 	SourceSynced bool
 }
 
-// NewService 创建并返回 task inspector 服务。
+var (
+	// ErrInspectionFileSystemUnavailable reports that inspection sources were
+	// provided but no workspace-bound filesystem is available to read them.
+	ErrInspectionFileSystemUnavailable = errors.New("task inspection file system unavailable")
+	// ErrInspectionSourceOutsideWorkspace reports that one configured source tries
+	// to escape the current workspace boundary.
+	ErrInspectionSourceOutsideWorkspace = errors.New("task inspection source outside workspace")
+	// ErrInspectionSourceNotFound reports that the configured source path does not
+	// exist under the current runtime workspace root.
+	ErrInspectionSourceNotFound = errors.New("task inspection source not found")
+	// ErrInspectionSourceUnreadable reports that the source exists but runtime
+	// traversal or file reads failed.
+	ErrInspectionSourceUnreadable = errors.New("task inspection source unreadable")
+)
+
+// NewService constructs the task-inspector service.
 func NewService(fileSystem platform.FileSystemAdapter) *Service {
 	return &Service{
 		fileSystem: fileSystem,
@@ -55,11 +73,18 @@ func NewService(fileSystem platform.FileSystemAdapter) *Service {
 	}
 }
 
-// Run 执行一次最小真实巡检。
-func (s *Service) Run(input RunInput) RunResult {
+// Run executes one inspection pass and fails explicitly when configured sources
+// cannot be read from the current runtime workspace.
+func (s *Service) Run(input RunInput) (RunResult, error) {
 	sources := resolveSources(input.TargetSources, input.Config)
+	if len(sources) > 0 && s.fileSystem == nil {
+		return RunResult{}, ErrInspectionFileSystemUnavailable
+	}
 	sourceSynced := len(sources) > 0 && s.fileSystem != nil
-	parsedFiles, parsedNotepadItems := s.inspectSources(sources)
+	parsedFiles, parsedNotepadItems, err := s.inspectSources(sources)
+	if err != nil {
+		return RunResult{}, err
+	}
 	resolvedNotepadItems := cloneMapSlice(input.NotepadItems)
 	if sourceSynced {
 		resolvedNotepadItems = cloneMapSlice(parsedNotepadItems)
@@ -83,12 +108,12 @@ func (s *Service) Run(input RunInput) RunResult {
 		Suggestions:  buildSuggestions(resolvedNotepadItems, input.UnfinishedTasks, sources, parsedFiles, dueToday, overdue, staleCount, fileItems),
 		NotepadItems: cloneMapSlice(resolvedNotepadItems),
 		SourceSynced: sourceSynced,
-	}
+	}, nil
 }
 
-func (s *Service) inspectSources(sources []string) (int, []map[string]any) {
+func (s *Service) inspectSources(sources []string) (int, []map[string]any, error) {
 	if s.fileSystem == nil || len(sources) == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 
 	parsedFiles := 0
@@ -96,13 +121,22 @@ func (s *Service) inspectSources(sources []string) (int, []map[string]any) {
 	seenFiles := map[string]struct{}{}
 
 	for _, source := range sources {
-		root := sourceToFSPath(source)
-		if root == "" {
-			continue
+		root, err := sourceToFSPath(s.fileSystem, source)
+		if err != nil {
+			return 0, nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(source))
+		}
+		if _, err := fs.Stat(s.fileSystem, root); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return 0, nil, fmt.Errorf("%w: %s", ErrInspectionSourceNotFound, strings.TrimSpace(source))
+			}
+			return 0, nil, fmt.Errorf("%w: %s: %v", ErrInspectionSourceUnreadable, strings.TrimSpace(source), err)
 		}
 
-		_ = fs.WalkDir(s.fileSystem, root, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+		if err := fs.WalkDir(s.fileSystem, root, func(currentPath string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil || entry == nil || entry.IsDir() {
+				if walkErr != nil {
+					return walkErr
+				}
 				return nil
 			}
 			if _, seen := seenFiles[currentPath]; seen {
@@ -113,14 +147,16 @@ func (s *Service) inspectSources(sources []string) (int, []map[string]any) {
 
 			content, err := fs.ReadFile(s.fileSystem, currentPath)
 			if err != nil {
-				return nil
+				return err
 			}
 			identifiedItems = append(identifiedItems, parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), string(content), s.now())...)
 			return nil
-		})
+		}); err != nil {
+			return 0, nil, fmt.Errorf("%w: %s: %v", ErrInspectionSourceUnreadable, strings.TrimSpace(source), err)
+		}
 	}
 
-	return parsedFiles, identifiedItems
+	return parsedFiles, identifiedItems, nil
 }
 
 func resolveSources(targetSources []string, config map[string]any) []string {
@@ -166,25 +202,59 @@ func dedupeNonEmptyStrings(values []string) []string {
 	return result
 }
 
-func sourceToFSPath(source string) string {
+// sourceToFSPath accepts both workspace-virtual paths and legacy absolute paths
+// that still point inside the current workspace root.
+func sourceToFSPath(fileSystem platform.FileSystemAdapter, source string) (string, error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
-		return ""
+		return "", nil
+	}
+	trimmedVirtual := strings.TrimPrefix(source, "/")
+	switch trimmedVirtual {
+	case "", "workspace", ".":
+		return ".", nil
+	}
+	if strings.HasPrefix(trimmedVirtual, "workspace/") {
+		normalized := path.Clean(strings.TrimPrefix(trimmedVirtual, "workspace/"))
+		if normalized == "." {
+			return ".", nil
+		}
+		if strings.HasPrefix(normalized, "../") || normalized == ".." {
+			return "", ErrInspectionSourceOutsideWorkspace
+		}
+		return normalized, nil
 	}
 
-	source = strings.TrimPrefix(source, "workspace/")
-	if source == "workspace" || source == "." || source == "/" {
-		return "."
+	if filepath.IsAbs(source) {
+		if fileSystem == nil {
+			return filepath.ToSlash(filepath.Clean(source)), nil
+		}
+		safePath, err := fileSystem.EnsureWithinWorkspace(source)
+		if err != nil {
+			return "", ErrInspectionSourceOutsideWorkspace
+		}
+		workspaceRoot, err := fileSystem.EnsureWithinWorkspace(".")
+		if err != nil {
+			return "", ErrInspectionSourceOutsideWorkspace
+		}
+		relPath, err := fileSystem.Rel(workspaceRoot, safePath)
+		if err != nil {
+			return "", ErrInspectionSourceOutsideWorkspace
+		}
+		if filepath.Clean(relPath) == "." {
+			return ".", nil
+		}
+		return filepath.ToSlash(filepath.Clean(relPath)), nil
 	}
 
 	normalized := path.Clean(strings.TrimPrefix(source, "/"))
 	if normalized == "." {
-		return "."
+		return ".", nil
 	}
 	if strings.HasPrefix(normalized, "../") || normalized == ".." {
-		return ""
+		return "", ErrInspectionSourceOutsideWorkspace
 	}
-	return normalized
+	return normalized, nil
 }
 
 func countChecklistItems(content string) int {

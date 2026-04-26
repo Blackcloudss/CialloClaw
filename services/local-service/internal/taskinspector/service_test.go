@@ -1,6 +1,7 @@
 package taskinspector
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +32,7 @@ func TestServiceRunAggregatesWorkspaceNotepadAndRuntimeState(t *testing.T) {
 	service := NewService(fileSystem)
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
 
-	result := service.Run(RunInput{
+	result, err := service.Run(RunInput{
 		Config: map[string]any{
 			"task_sources":           []string{"workspace/todos"},
 			"inspection_interval":    map[string]any{"unit": "minute", "value": 15},
@@ -53,6 +54,9 @@ func TestServiceRunAggregatesWorkspaceNotepadAndRuntimeState(t *testing.T) {
 			{"item_id": "todo_004", "title": "done item", "status": "completed"},
 		},
 	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
 
 	summary := result.Summary
 	if summary["parsed_files"] != 2 {
@@ -106,7 +110,10 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 
 	service := NewService(fileSystem)
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
-	result := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
 	if len(result.NotepadItems) != 2 {
 		t.Fatalf("expected parsed notes from markdown, got %+v", result.NotepadItems)
 	}
@@ -138,11 +145,13 @@ func TestTaskInspectorHelperFunctions(t *testing.T) {
 	if len(resolved) != 2 || resolved[0] != "workspace/todos" {
 		t.Fatalf("expected resolveSources to dedupe non-empty values, got %+v", resolved)
 	}
-	if sourceToFSPath("/workspace/notes") != "workspace/notes" {
+	fsPath, err := sourceToFSPath(nil, "/workspace/notes")
+	if err != nil || fsPath != "notes" {
 		t.Fatalf("expected sourceToFSPath to normalize workspace prefix")
 	}
-	if sourceToFSPath("../../etc") != "" {
-		t.Fatalf("expected sourceToFSPath to reject outside-workspace paths")
+	_, err = sourceToFSPath(nil, "../../etc")
+	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+		t.Fatalf("expected sourceToFSPath to reject outside-workspace paths, got %v", err)
 	}
 	tags := splitTagList("urgent, weekly, notes")
 	if len(tags) != 3 || tags[1] != "weekly" {
@@ -164,21 +173,56 @@ func TestServiceRunHonorsTargetSourcesAndHandlesMissingFiles(t *testing.T) {
 	service := NewService(nil)
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC) }
 
-	result := service.Run(RunInput{
+	_, err := service.Run(RunInput{
 		TargetSources: []string{"workspace/missing"},
 		Config: map[string]any{
 			"task_sources":        []string{"workspace/todos"},
 			"inspection_interval": map[string]any{"unit": "hour", "value": 1},
 		},
 	})
-
-	if result.Summary["parsed_files"] != 0 {
-		t.Fatalf("expected no parsed files without file system, got %+v", result.Summary)
+	if !errors.Is(err, ErrInspectionFileSystemUnavailable) {
+		t.Fatalf("expected missing filesystem error, got %v", err)
 	}
-	if len(result.Suggestions) == 0 || result.Suggestions[0] == "" {
-		t.Fatalf("expected fallback suggestion, got %+v", result.Suggestions)
-	}
-	if sourceToFSPath("workspace/missing") != "missing" {
+	fsPath, err := sourceToFSPath(nil, "workspace/missing")
+	if err != nil || fsPath != "missing" {
 		t.Fatalf("expected target source to use workspace-relative fs path")
+	}
+}
+
+func TestServiceRunReturnsExplicitErrorForMissingSource(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	service := NewService(platform.NewLocalFileSystemAdapter(pathPolicy))
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC) }
+
+	_, err = service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/missing"}}})
+	if !errors.Is(err, ErrInspectionSourceNotFound) {
+		t.Fatalf("expected source not found error, got %v", err)
+	}
+}
+
+func TestSourceToFSPathAcceptsWorkspaceAbsolutePaths(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	absoluteSource := filepath.Join(workspaceRoot, "todos")
+
+	fsPath, err := sourceToFSPath(fileSystem, absoluteSource)
+	if err != nil {
+		t.Fatalf("expected absolute workspace source to be accepted, got %v", err)
+	}
+	if fsPath != "todos" {
+		t.Fatalf("expected absolute workspace source to stay addressable, got %q", fsPath)
+	}
+
+	_, err = sourceToFSPath(fileSystem, filepath.Join(t.TempDir(), "outside"))
+	if !errors.Is(err, ErrInspectionSourceOutsideWorkspace) {
+		t.Fatalf("expected outside absolute source to be rejected, got %v", err)
 	}
 }

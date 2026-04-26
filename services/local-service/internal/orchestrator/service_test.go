@@ -1853,6 +1853,63 @@ func TestTaskInspectorRunClearsStaleSourceBackedNotesWhenFilesEmpty(t *testing.T
 	}
 }
 
+func TestTaskInspectorConfigUsesTaskAutomationSettingsSource(t *testing.T) {
+	service := newTestService()
+
+	updated, err := service.TaskInspectorConfigUpdate(map[string]any{
+		"task_sources":           []any{"workspace/review", "workspace/backlog"},
+		"inspection_interval":    map[string]any{"unit": "hour", "value": 2},
+		"inspect_on_file_change": false,
+		"inspect_on_startup":     false,
+		"remind_before_deadline": false,
+		"remind_when_stale":      true,
+	})
+	if err != nil {
+		t.Fatalf("TaskInspectorConfigUpdate returned error: %v", err)
+	}
+	effectiveConfig := updated["effective_config"].(map[string]any)
+	if !reflect.DeepEqual(effectiveConfig["task_sources"], []string{"workspace/review", "workspace/backlog"}) {
+		t.Fatalf("expected effective_config task_sources to come from task_automation, got %+v", effectiveConfig)
+	}
+
+	settings := normalizeSettingsSnapshot(service.runEngine.Settings())
+	taskAutomation := settings["task_automation"].(map[string]any)
+	if !reflect.DeepEqual(taskAutomation["task_sources"], []string{"workspace/review", "workspace/backlog"}) {
+		t.Fatalf("expected task_automation settings to be updated, got %+v", taskAutomation)
+	}
+	if taskAutomation["inspect_on_file_change"] != false || taskAutomation["inspect_on_startup"] != false {
+		t.Fatalf("expected inspector toggles to persist into task_automation, got %+v", taskAutomation)
+	}
+
+	config, err := service.TaskInspectorConfigGet()
+	if err != nil {
+		t.Fatalf("TaskInspectorConfigGet returned error: %v", err)
+	}
+	if !reflect.DeepEqual(config, effectiveConfig) {
+		t.Fatalf("expected inspector config get to mirror effective config, got config=%+v effective=%+v", config, effectiveConfig)
+	}
+	if !reflect.DeepEqual(service.runEngine.InspectorConfig()["task_sources"], []string{"workspace/todos"}) {
+		t.Fatalf("expected legacy in-memory inspector config to stop being the authoritative source, got %+v", service.runEngine.InspectorConfig())
+	}
+
+	cleared, err := service.TaskInspectorConfigUpdate(map[string]any{"task_sources": []any{}})
+	if err != nil {
+		t.Fatalf("TaskInspectorConfigUpdate clear returned error: %v", err)
+	}
+	if taskSources := cleared["effective_config"].(map[string]any)["task_sources"].([]string); len(taskSources) != 0 {
+		t.Fatalf("expected explicit empty task_sources to clear settings-backed sources, got %+v", cleared)
+	}
+}
+
+func TestTaskInspectorRunReturnsExplicitErrorForMissingSource(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "inspector missing source")
+
+	_, err := service.TaskInspectorRun(map[string]any{"target_sources": []any{"workspace/missing"}})
+	if !errors.Is(err, taskinspector.ErrInspectionSourceNotFound) {
+		t.Fatalf("expected missing source error, got %v", err)
+	}
+}
+
 func TestServiceNotepadListReturnsRuntimeItemsByBucket(t *testing.T) {
 	service := newTestService()
 	now := time.Now().UTC()
@@ -11264,6 +11321,30 @@ func TestSettingsUpdateUnrelatedScopeIgnoresSecretStoreOutage(t *testing.T) {
 	}
 	if _, exists := effectiveSettings["models"]; exists {
 		t.Fatalf("expected unrelated settings update to avoid attaching model metadata, got %+v", effectiveSettings)
+	}
+}
+
+func TestSettingsUpdateMarksWorkspacePathAsRestartRequired(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.SettingsUpdate(map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{
+				"workspace_path": "workspace-next",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("settings update failed: %v", err)
+	}
+	if result["apply_mode"] != "restart_required" || result["need_restart"] != true {
+		t.Fatalf("expected workspace_path update to require restart, got %+v", result)
+	}
+	effectiveSettings := result["effective_settings"].(map[string]any)
+	general := effectiveSettings["general"].(map[string]any)
+	download := general["download"].(map[string]any)
+	if download["workspace_path"] != "workspace-next" {
+		t.Fatalf("expected committed workspace_path in effective settings, got %+v", effectiveSettings)
 	}
 }
 
