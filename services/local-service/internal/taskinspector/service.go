@@ -14,6 +14,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
 )
 
 const defaultStaleInterval = 15 * time.Minute
@@ -25,13 +26,13 @@ const (
 	notepadBucketUpcoming      = "upcoming"
 )
 
-// Service 负责根据 workspace、notepad 和 runtime task 状态生成巡检结果。
+// Service builds inspection results from workspace, notepad, and runtime task state.
 type Service struct {
 	fileSystem platform.FileSystemAdapter
 	now        func() time.Time
 }
 
-// RunInput 描述一次巡检执行所需的运行态输入。
+// RunInput carries runtime state required by one inspection pass.
 type RunInput struct {
 	Reason          string
 	TargetSources   []string
@@ -41,7 +42,7 @@ type RunInput struct {
 	NotepadItems    []map[string]any
 }
 
-// RunResult 描述一次巡检执行输出的协议兼容结果。
+// RunResult carries the protocol-compatible result of one inspection pass.
 type RunResult struct {
 	InspectionID string
 	Summary      map[string]any
@@ -65,7 +66,7 @@ var (
 	ErrInspectionSourceUnreadable = errors.New("task inspection source unreadable")
 )
 
-// NewService constructs the task-inspector service.
+// NewService creates a task inspector service.
 func NewService(fileSystem platform.FileSystemAdapter) *Service {
 	return &Service{
 		fileSystem: fileSystem,
@@ -141,13 +142,26 @@ func (s *Service) inspectSources(sources []string) (int, []map[string]any, error
 				return nil
 			}
 			seenFiles[currentPath] = struct{}{}
+			if shouldSkipTaskSourceAttachment(currentPath) {
+				return nil
+			}
+			if !isSupportedTextTaskSourceFile(currentPath) {
+				return nil
+			}
 			parsedFiles++
 
 			content, err := fs.ReadFile(s.fileSystem, currentPath)
 			if err != nil {
 				return err
 			}
-			identifiedItems = append(identifiedItems, parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), string(content), s.now())...)
+			decoded, err := textdecode.Decode(content)
+			if err != nil {
+				if shouldSkipUnreadableTaskSourceFile(currentPath) {
+					return nil
+				}
+				return fmt.Errorf("decode task source file %s: %w", currentPath, err)
+			}
+			identifiedItems = append(identifiedItems, parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), decoded.Text, s.now())...)
 			return nil
 		}); err != nil {
 			return 0, nil, fmt.Errorf("%w: %s: %v", ErrInspectionSourceUnreadable, strings.TrimSpace(source), err)
@@ -155,6 +169,33 @@ func (s *Service) inspectSources(sources []string) (int, []map[string]any, error
 	}
 
 	return parsedFiles, identifiedItems, nil
+}
+
+func shouldSkipTaskSourceAttachment(currentPath string) bool {
+	switch strings.ToLower(path.Ext(currentPath)) {
+	case ".7z", ".avi", ".bin", ".bmp", ".class", ".dll", ".doc", ".docx", ".dylib", ".exe", ".gif", ".gz", ".ico", ".jar", ".jpeg", ".jpg", ".mov", ".mp3", ".mp4", ".pdf", ".png", ".ppt", ".pptx", ".rar", ".so", ".tar", ".wav", ".webp", ".xls", ".xlsx", ".zip":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldSkipUnreadableTaskSourceFile(currentPath string) bool {
+	switch strings.ToLower(path.Ext(currentPath)) {
+	case "", ".markdown", ".md", ".text", ".txt":
+		return false
+	default:
+		return true
+	}
+}
+
+func isSupportedTextTaskSourceFile(currentPath string) bool {
+	switch strings.ToLower(path.Ext(currentPath)) {
+	case "", ".markdown", ".md", ".text", ".txt":
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveSources(targetSources []string, config map[string]any) []string {
