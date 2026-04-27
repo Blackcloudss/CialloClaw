@@ -29,7 +29,7 @@ import {
   runNoteSourceInspection,
   saveNoteSource,
 } from "./noteSource.service";
-import { buildSourceNoteFallbackItems, convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
+import { buildSourceNoteFallbackItems, convertNoteToTask, loadNoteBucket, partitionNoteItemsByBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
 import {
   buildSourceNoteEditorDraftFromNote,
   createEmptySourceNoteEditorDraft,
@@ -345,8 +345,8 @@ export function NotePage() {
 
   const rpcUpcomingItems = sortNotesByUrgency(upcomingQuery.data?.items ?? []);
   const rpcLaterItems = sortNotesByUrgency(laterQuery.data?.items ?? []);
-  const recurringItems = sortNotesByUrgency(recurringQuery.data?.items ?? []);
-  const closedItems = sortClosedNotes(closedQuery.data?.items ?? []);
+  const rpcRecurringItems = sortNotesByUrgency(recurringQuery.data?.items ?? []);
+  const rpcClosedItems = sortClosedNotes(closedQuery.data?.items ?? []);
   const sourceNotesData = sourceNotesQuery.data?.notes;
   const sourceNoteIndexData = sourceNoteIndexQuery.data?.notes;
   const sourceRootsData = sourceNotesQuery.data?.sourceRoots;
@@ -363,7 +363,7 @@ export function NotePage() {
   const representedSourceNoteBlocks = useMemo(() => {
     const representedBlocks = new Set<string>();
 
-    [...rpcUpcomingItems, ...rpcLaterItems, ...recurringItems, ...closedItems].forEach((item) => {
+    [...rpcUpcomingItems, ...rpcLaterItems, ...rpcRecurringItems, ...rpcClosedItems].forEach((item) => {
       const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
       if (!matchedPath) {
         return;
@@ -379,7 +379,7 @@ export function NotePage() {
     });
 
     return representedBlocks;
-  }, [closedItems, recurringItems, rpcLaterItems, rpcUpcomingItems, sourceNotesByPath, sourceNotesByTitle]);
+  }, [rpcClosedItems, rpcLaterItems, rpcRecurringItems, rpcUpcomingItems, sourceNotesByPath, sourceNotesByTitle]);
   const sourceNoteFallbackItems = useMemo(
     () =>
       sourceNotes
@@ -401,8 +401,11 @@ export function NotePage() {
         }),
     [representedSourceNoteBlocks, sourceNotes],
   );
-  const upcomingItems = rpcUpcomingItems;
-  const laterItems = useMemo(() => [...sourceNoteFallbackItems, ...rpcLaterItems], [rpcLaterItems, sourceNoteFallbackItems]);
+  const sourceNoteFallbackBuckets = useMemo(() => partitionNoteItemsByBucket(sourceNoteFallbackItems), [sourceNoteFallbackItems]);
+  const upcomingItems = useMemo(() => sortNotesByUrgency([...sourceNoteFallbackBuckets.upcoming, ...rpcUpcomingItems]), [rpcUpcomingItems, sourceNoteFallbackBuckets]);
+  const laterItems = useMemo(() => sortNotesByUrgency([...sourceNoteFallbackBuckets.later, ...rpcLaterItems]), [rpcLaterItems, sourceNoteFallbackBuckets]);
+  const recurringItems = useMemo(() => sortNotesByUrgency([...sourceNoteFallbackBuckets.recurring_rule, ...rpcRecurringItems]), [rpcRecurringItems, sourceNoteFallbackBuckets]);
+  const closedItems = useMemo(() => sortClosedNotes([...sourceNoteFallbackBuckets.closed, ...rpcClosedItems]), [rpcClosedItems, sourceNoteFallbackBuckets]);
   const canvasItemIdSet = useMemo(() => new Set(canvasCards.map((entry) => entry.itemId)), [canvasCards]);
   const visibleUpcomingItems = useMemo(() => upcomingItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, upcomingItems]);
   const visibleLaterItems = useMemo(() => laterItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, laterItems]);

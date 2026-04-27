@@ -151,6 +151,17 @@ function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLo
           title: string;
         };
       }>;
+      partitionNoteItemsByBucket: (items: Array<{
+        item: {
+          bucket: "upcoming" | "later" | "recurring_rule" | "closed";
+          title: string;
+        };
+      }>) => Record<"upcoming" | "later" | "recurring_rule" | "closed", Array<{
+        item: {
+          bucket: "upcoming" | "later" | "recurring_rule" | "closed";
+          title: string;
+        };
+      }>>;
       isAllowedNoteOpenUrl: (url: string) => boolean;
       resolveNoteResourceOpenExecutionPlan: (resource: {
         id: string;
@@ -1573,6 +1584,25 @@ test("source note fallback mirrors natural scheduling hints before inspector syn
   assert.equal(items[2]?.item.title, "后天检查巡检结果");
   assert.equal(items[2]?.item.bucket, "upcoming");
   assert.ok(items[2]?.item.due_at);
+});
+
+test("source note fallback partitions local cards by inferred bucket", () => {
+  const { buildSourceNoteFallbackItems, partitionNoteItemsByBucket } = loadNotePageServiceModule();
+  const note = {
+    content: "# 明天整理发布说明\n\n## 以后复盘窗口策略\n\n## 每周一同步巡检报告\n\n- [x] 已归档旧提醒\n",
+    fileName: "notes.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/notes.md",
+    sourceRoot: "D:/workspace",
+    title: "notes",
+  };
+
+  const grouped = partitionNoteItemsByBucket(buildSourceNoteFallbackItems(note));
+
+  assert.deepEqual(grouped.upcoming.map((item) => item.item.title), ["明天整理发布说明"]);
+  assert.deepEqual(grouped.later.map((item) => item.item.title), ["以后复盘窗口策略"]);
+  assert.deepEqual(grouped.recurring_rule.map((item) => item.item.title), ["每周一同步巡检报告"]);
+  assert.deepEqual(grouped.closed.map((item) => item.item.title), ["已归档旧提醒"]);
 });
 
 test("source note fallback treats headed metadata-shaped lines as natural notes", () => {
@@ -4080,6 +4110,17 @@ test("note page consumes note query helpers instead of inlining note bucket cont
   assert.doesNotMatch(notePageSource, /\["dashboard", "notes", "bucket", dataMode/);
   assert.match(noteServiceSource, /isAllowedNoteOpenUrl/);
   assert.match(noteServiceSource, /mode === "open_url"/);
+});
+
+test("note page partitions source note fallbacks before merging bucket lists", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /partitionNoteItemsByBucket/);
+  assert.match(notePageSource, /sourceNoteFallbackBuckets\.upcoming/);
+  assert.match(notePageSource, /sourceNoteFallbackBuckets\.later/);
+  assert.match(notePageSource, /sourceNoteFallbackBuckets\.recurring_rule/);
+  assert.match(notePageSource, /sourceNoteFallbackBuckets\.closed/);
+  assert.doesNotMatch(notePageSource, /const laterItems = useMemo\(\(\) => \[\.\.\.sourceNoteFallbackItems, \.\.\.rpcLaterItems\]/);
 });
 
 test("task fallback copy no longer claims backend output actions are missing", () => {

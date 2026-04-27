@@ -358,6 +358,28 @@ function mapItems(items: TodoItem[]): NoteListItem[] {
   }));
 }
 
+/**
+ * Groups renderer-local note cards by their formal bucket so source-note
+ * fallbacks render in the same columns as synced inspector results.
+ *
+ * @param items Note cards prepared for the dashboard.
+ * @returns Note cards partitioned by notepad bucket.
+ */
+export function partitionNoteItemsByBucket(items: NoteListItem[]): Record<TodoBucket, NoteListItem[]> {
+  return items.reduce<Record<TodoBucket, NoteListItem[]>>(
+    (groups, item) => {
+      groups[item.item.bucket].push(item);
+      return groups;
+    },
+    {
+      closed: [],
+      later: [],
+      recurring_rule: [],
+      upcoming: [],
+    },
+  );
+}
+
 function parseSourceChecklistLine(line: string) {
   const trimmed = line.trim();
   const match = /^[-*]\s+\[( |x|X)\]\s+(.+)$/.exec(trimmed);
