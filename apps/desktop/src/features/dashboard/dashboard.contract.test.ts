@@ -205,6 +205,55 @@ function loadSourceNoteEditorModule() {
         sourceLine: number | null;
         title: string;
       }>;
+      buildSourceNoteEditorDraftFromNote: (note: {
+        content: string;
+        fileName: string;
+        modifiedAtMs: number | null;
+        path: string;
+        sourceRoot: string;
+        title: string;
+      }, item: {
+        item: {
+          agent_suggestion?: string | null;
+          bucket: "upcoming" | "later" | "recurring_rule" | "closed";
+          due_at?: string | null;
+          effective_scope?: string | null;
+          next_occurrence_at?: string | null;
+          note_text?: string | null;
+          prerequisite?: string | null;
+          recent_instance_status?: string | null;
+          repeat_rule?: string | null;
+          status: string;
+          title: string;
+        };
+        experience: {
+          endedAt: string | null;
+        };
+        sourceNote?: {
+          localOnly: boolean;
+          path: string;
+          sourceLine?: number | null;
+          title?: string | null;
+        } | null;
+      }) => {
+        agentSuggestion: string;
+        bucket: "upcoming" | "later" | "recurring_rule" | "closed";
+        checked: boolean;
+        createdAt: string;
+        dueAt: string;
+        effectiveScope: string;
+        endedAt: string;
+        extraMetadata: Array<{ key: string; value: string }>;
+        nextOccurrenceAt: string;
+        noteText: string;
+        prerequisite: string;
+        recentInstanceStatus: string;
+        repeatRule: string;
+        sourceLine: number | null;
+        sourcePath: string | null;
+        title: string;
+        updatedAt: string;
+      };
       upsertSourceNoteEditorBlock: (note: {
         content: string;
         fileName: string;
@@ -1398,6 +1447,42 @@ test("source note editor persists selected bucket before source path exists", ()
     title: "Follow up",
     updatedAt: "",
   }, new Date("2026-04-10T09:30:00.000Z"));
+
+  assert.match(serialized.blockContent, /^bucket: later$/m);
+});
+
+test("source note editor keeps synced natural note bucket ahead of path defaults", () => {
+  const { buildSourceNoteEditorDraftFromNote, serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
+  const note = {
+    content: "# Someday review\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const draft = buildSourceNoteEditorDraftFromNote(note, {
+    item: {
+      bucket: "later",
+      note_text: "",
+      status: "pending",
+      title: "Someday review",
+    },
+    experience: {
+      endedAt: null,
+    },
+    sourceNote: {
+      localOnly: false,
+      path: note.path,
+      sourceLine: 1,
+      title: "Someday review",
+    },
+  });
+
+  assert.equal(draft.bucket, "later");
+
+  const serialized = serializeSourceNoteEditorDraft(draft, new Date("2026-04-10T09:30:00.000Z"));
 
   assert.match(serialized.blockContent, /^bucket: later$/m);
 });

@@ -208,7 +208,7 @@ function buildDraftFromParsedBlock(block: SourceNoteEditorBlock, fallbackItem?: 
 
   return {
     agentSuggestion: block.agentSuggestion || fallbackDraft?.agentSuggestion || "",
-    bucket: block.bucket || fallbackDraft?.bucket || "later",
+    bucket: block.bucketIsExplicit ? block.bucket : (fallbackDraft?.bucket ?? block.bucket),
     checked: block.checked,
     createdAt: block.createdAt || fallbackDraft?.createdAt || "",
     dueAt: block.dueAt || fallbackDraft?.dueAt || "",
@@ -304,6 +304,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
   let current:
     | (SourceNoteEditorDraft & {
         bodyLines: string[];
+        bucketIsExplicit: boolean;
         endLine: number;
         noteMetadataText: string;
       })
@@ -319,6 +320,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
     blocks.push({
       agentSuggestion: current.agentSuggestion,
       bucket: current.bucket,
+      bucketIsExplicit: current.bucketIsExplicit,
       checked: current.checked,
       createdAt: current.createdAt,
       dueAt: current.dueAt,
@@ -343,6 +345,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
     if (naturalContent && naturalStartLine !== null) {
       blocks.push({
         ...createEmptySourceNoteEditorDraft(note.path),
+        bucketIsExplicit: false,
         endLine,
         noteText: naturalContent.noteText,
         sourceLine: naturalStartLine,
@@ -361,6 +364,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
       current = {
         ...createEmptySourceNoteEditorDraft(note.path),
         bodyLines: [],
+        bucketIsExplicit: false,
         checked: checklist.checked,
         endLine: index + 1,
         noteMetadataText: "",
@@ -409,6 +413,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
       case "bucket":
         if (metadata.value === "upcoming" || metadata.value === "later" || metadata.value === "recurring_rule" || metadata.value === "closed") {
           current.bucket = metadata.value;
+          current.bucketIsExplicit = true;
         }
         return;
       case "created_at":
@@ -432,6 +437,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
       case "repeat":
         current.repeatRule = metadata.value;
         current.bucket = "recurring_rule";
+        current.bucketIsExplicit = true;
         return;
       case "scope":
         current.effectiveScope = metadata.value;

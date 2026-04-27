@@ -92,6 +92,8 @@ export type SourceNoteEditorDraft = {
 };
 
 export type SourceNoteEditorBlock = SourceNoteEditorDraft & {
+  /** Marks bucket values that came from explicit markdown metadata rather than source-path defaults. */
+  bucketIsExplicit: boolean;
   endLine: number;
 };
 
