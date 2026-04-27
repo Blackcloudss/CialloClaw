@@ -66,19 +66,19 @@ export function SourceNoteStudio({
   const saveDisabled = !canEdit || isSaving || !hasMeaningfulContent || (!isDirty && !isCreating);
   const editorTitle = isCreating ? "新建便签" : draft.title.trim() || editingItem?.item.title || "编辑当前便签";
   const editorMeta = isCreating
-    ? (fileLabel ? `保存时会追加到 ${fileLabel}` : "保存时会追加到主 markdown 便签文件")
-    : (fileLabel ? `当前正在编辑 ${fileLabel} 里的这张便签` : "当前正在编辑这张便签的 markdown 块");
+    ? (fileLabel ? `保存时会追加到 ${fileLabel}` : "保存时会追加到主便签来源")
+    : (fileLabel ? `当前正在编辑 ${fileLabel} 里的这张便签` : "当前正在编辑这张便签");
 
   return (
     <section className="note-source-studio">
       <div className="note-source-studio__header">
         <div className="note-source-studio__heading">
-          <p className="note-preview-page__eyebrow">Markdown Notes</p>
+          <p className="note-preview-page__eyebrow">Notes</p>
           <div className="note-source-studio__title-row">
             <NotebookText className="note-source-studio__title-icon" />
             <div>
               <h2>单张便签编辑</h2>
-              <p>这里不再展开整份源文件，只编辑当前这张便签对应的 markdown 块。保存后会把元数据和正文一起写回主便签文件，并立即触发一次巡检。</p>
+              <p>优先直接写便签内容；时间、重复和下一步建议都是可选补充。保存后系统会同步任务来源，并立即触发一次巡检。</p>
             </div>
           </div>
         </div>
@@ -139,7 +139,7 @@ export function SourceNoteStudio({
             </label>
 
             <label className="note-source-studio__field">
-              <span>分组</span>
+              <span>安排类型</span>
               <select
                 className="note-source-studio__select"
                 disabled={!canEdit}
@@ -202,12 +202,12 @@ export function SourceNoteStudio({
             </label>
 
             <label className="note-source-studio__field note-source-studio__field--wide">
-              <span>Agent 建议</span>
+              <span>下一步建议</span>
               <input
                 className="note-source-studio__input"
                 disabled={!canEdit}
                 onChange={(event) => onChange({ ...draft, agentSuggestion: event.target.value })}
-                placeholder="这一条建议会写回 markdown 元数据"
+                placeholder="可以留空，巡检后由系统补齐建议"
                 type="text"
                 value={draft.agentSuggestion}
               />
@@ -216,7 +216,7 @@ export function SourceNoteStudio({
 
           <div className="note-source-studio__meta-strip">
             <div className="note-source-studio__meta-pill">
-              <span>写入分组</span>
+              <span>系统识别</span>
               <strong>{bucketLabels[draft.repeatRule.trim() !== "" ? "recurring_rule" : draft.bucket]}</strong>
             </div>
             <div className="note-source-studio__meta-pill">

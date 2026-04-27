@@ -351,7 +351,10 @@ fn collect_existing_markdown_files(roots: &[PathBuf]) -> Result<Vec<PathBuf>, St
             continue;
         }
         if !root.is_dir() {
-            return Err(format!("task source is not a directory: {}", root.display()));
+            return Err(format!(
+                "task source is not a directory: {}",
+                root.display()
+            ));
         }
 
         collect_markdown_files(root, &mut result)?;
@@ -511,7 +514,7 @@ fn normalize_new_source_note_block(content: &str) -> String {
     let normalized = content.replace("\r\n", "\n");
     let trimmed = normalized.trim();
     if trimmed.is_empty() {
-        return "- [ ] New note\nbucket: later\nnote: Add details here".to_string();
+        return "- [ ] New note\n\nAdd details here".to_string();
     }
 
     if normalized
@@ -545,16 +548,17 @@ fn normalize_new_source_note_block(content: &str) -> String {
         .to_string();
 
     if rest.is_empty() {
-        format!("- [ ] {title}\nbucket: later")
+        format!("- [ ] {title}")
     } else {
-        format!("- [ ] {title}\nbucket: later\nnote: {rest}")
+        format!("- [ ] {title}\n\n{rest}")
     }
 }
 
 fn append_source_note_block(existing_content: &str, new_block_content: &str) -> String {
     let normalized_existing = existing_content.replace("\r\n", "\n");
     let trimmed_existing = normalized_existing.trim_end_matches('\n');
-    let normalized_block = normalize_markdown_content(&normalize_new_source_note_block(new_block_content));
+    let normalized_block =
+        normalize_markdown_content(&normalize_new_source_note_block(new_block_content));
     let trimmed_block = normalized_block.trim_end_matches('\n');
 
     if trimmed_existing.trim().is_empty() {
@@ -589,7 +593,10 @@ fn match_source_root<'a>(target: &Path, roots: &'a [PathBuf]) -> Result<&'a Path
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_source_note_target, resolve_source_root, sources_require_workspace_root};
+    use super::{
+        normalize_new_source_note_block, resolve_source_note_target, resolve_source_root,
+        sources_require_workspace_root,
+    };
     use crate::local_path::LocalPathRoots;
     use std::env;
     use std::fs;
@@ -660,6 +667,15 @@ mod tests {
         .expect_err("reject non-markdown file inside configured root");
 
         assert!(error.contains("not a markdown file"));
+    }
+
+    #[test]
+    fn normalize_new_source_note_block_keeps_plain_notes_natural() {
+        let block = normalize_new_source_note_block("整理发布说明\n补充影响范围");
+
+        assert_eq!(block, "- [ ] 整理发布说明\n\n补充影响范围");
+        assert!(!block.contains("bucket:"));
+        assert!(!block.contains("note:"));
     }
 
     fn unique_temp_path(name: &str) -> PathBuf {

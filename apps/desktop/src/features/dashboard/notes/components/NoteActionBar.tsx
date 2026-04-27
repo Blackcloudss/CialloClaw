@@ -26,8 +26,8 @@ const actionIcons: Record<NoteDetailAction, ComponentType<{ className?: string }
 function getActions(item: NoteListItem) {
   if (item.sourceNote?.localOnly) {
     return [
-      { action: "edit" as const, label: "编辑源便签", tooltip: "继续编辑任务来源目录里的 markdown 便签。" },
-      { action: "open-resource" as const, label: "打开源文件", tooltip: "直接打开这张源便签对应的 markdown 文件。" },
+      { action: "edit" as const, label: "编辑源便签", tooltip: "继续编辑任务来源目录里的便签内容。" },
+      { action: "open-resource" as const, label: "打开源文件", tooltip: "直接打开这张源便签对应的来源文件。" },
     ];
   }
 

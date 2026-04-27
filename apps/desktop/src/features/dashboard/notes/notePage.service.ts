@@ -15,6 +15,25 @@ import { getMockNoteBuckets, getMockNoteExperience, runMockConvertNoteToTask, ru
 import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome, SourceNoteDocument } from "./notePage.types";
 
 const NOTEPAD_RPC_TIMEOUT_MS = 2_500;
+const SOURCE_NOTE_RESERVED_METADATA_KEYS = new Set([
+  "agent",
+  "bucket",
+  "created_at",
+  "due",
+  "ended_at",
+  "next",
+  "note",
+  "prerequisite",
+  "recent_instance_status",
+  "reminder",
+  "repeat",
+  "resource",
+  "scope",
+  "status",
+  "suggest",
+  "tags",
+  "updated_at",
+]);
 
 export type NotePageDataMode = "rpc" | "mock";
 
@@ -372,6 +391,23 @@ function parseSourceChecklistLine(line: string) {
   };
 }
 
+function normalizeSourceNaturalNoteLine(line: string) {
+  const withoutHeading = line.trim().replace(/^#+\s*/, "");
+  return withoutHeading.replace(/^[-*+]\s+/, "").trim();
+}
+
+function splitSourceNaturalNoteContent(lines: string[]) {
+  const normalized = lines.map(normalizeSourceNaturalNoteLine).filter(Boolean);
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  return {
+    noteText: normalized.slice(1).join("\n"),
+    title: normalized[0],
+  };
+}
+
 function splitSourceMetadataLine(line: string) {
   const separatorIndex = line.indexOf(":");
   if (separatorIndex <= 0 || separatorIndex >= line.length - 1) {
@@ -427,7 +463,7 @@ function inferFallbackStatus(dueAt: string | null, checked: boolean): TodoItem["
 
 function buildSourceNoteResource(itemId: string, path: string) {
   return {
-    label: "源 markdown",
+    label: "源文件",
     open_action: "open_file" as const,
     open_payload: {
       path,
@@ -436,7 +472,7 @@ function buildSourceNoteResource(itemId: string, path: string) {
     },
     path,
     resource_id: `${itemId}_source`,
-    resource_type: "Markdown 文件",
+    resource_type: "来源文件",
   };
 }
 
@@ -468,17 +504,17 @@ export function buildSourceNoteFallbackItem(note: SourceNoteDocument): NoteListI
       noteText: previewText || "这张源便签还没有提炼出正式事项，当前先作为本地便签卡片显示。",
       noteType: "reminder",
       plannedAt: null,
-      prerequisite: "当前还没有正式巡检结果，这张卡片直接来自任务来源目录中的 markdown 文件。",
+      prerequisite: "当前还没有正式巡检结果，这张卡片直接来自任务来源目录中的便签文件。",
       previewStatus: "待巡检",
       recentInstanceStatus: null,
       relatedResources: [
         {
           id: `${itemId}_source`,
-          label: "源 markdown",
+          label: "源文件",
           openAction: "open_file",
           path: note.path,
           taskId: null,
-          type: "Markdown 文件",
+          type: "来源文件",
           url: null,
         },
       ],
@@ -497,7 +533,7 @@ export function buildSourceNoteFallbackItem(note: SourceNoteDocument): NoteListI
       note_text: previewText || note.content.trim() || "新建源便签",
       related_resources: [
         {
-          label: "源 markdown",
+          label: "源文件",
           open_action: "open_file",
           open_payload: {
             path: note.path,
@@ -506,7 +542,7 @@ export function buildSourceNoteFallbackItem(note: SourceNoteDocument): NoteListI
           },
           path: note.path,
           resource_id: `${itemId}_source`,
-          resource_type: "Markdown 文件",
+          resource_type: "来源文件",
         },
       ],
       status: "normal",
@@ -540,6 +576,8 @@ export function buildSourceNoteFallbackItem(note: SourceNoteDocument): NoteListI
 export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteListItem[] {
   const lines = note.content.replace(/\r\n/g, "\n").split("\n");
   const items: NoteListItem[] = [];
+  let naturalLines: string[] = [];
+  let naturalStartLine: number | null = null;
   let current:
     | {
         agentSuggestion: string | null;
@@ -568,7 +606,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     const bucket = normalizeFallbackBucket(current.bucket, current.checked);
     const dueAt = current.nextOccurrenceAt ?? current.dueAt;
     const item = {
-      agent_suggestion: current.agentSuggestion ?? "等待巡检把这个 markdown 便签块同步成正式事项。",
+      agent_suggestion: current.agentSuggestion ?? "等待巡检把这张便签同步成正式事项。",
       bucket,
       due_at: dueAt,
       effective_scope: current.effectiveScope ?? note.sourceRoot,
@@ -602,10 +640,34 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
 
     current = null;
   };
+  const flushNatural = () => {
+    const naturalContent = splitSourceNaturalNoteContent(naturalLines);
+    if (naturalContent && naturalStartLine !== null) {
+      current = {
+        agentSuggestion: null,
+        bodyLines: naturalContent.noteText ? [naturalContent.noteText] : [],
+        bucket: "later",
+        checked: false,
+        dueAt: null,
+        effectiveScope: null,
+        nextOccurrenceAt: null,
+        noteText: naturalContent.noteText || null,
+        prerequisite: null,
+        recentInstanceStatus: null,
+        repeatRule: null,
+        sourceLine: naturalStartLine,
+        title: naturalContent.title,
+      };
+      flushCurrent();
+    }
+    naturalLines = [];
+    naturalStartLine = null;
+  };
 
   lines.forEach((line, index) => {
     const checklist = parseSourceChecklistLine(line);
     if (checklist) {
+      flushNatural();
       flushCurrent();
       current = {
         agentSuggestion: null,
@@ -626,6 +688,23 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     }
 
     if (!current) {
+      if (line.trim().startsWith("#")) {
+        flushNatural();
+        return;
+      }
+      const naturalLine = normalizeSourceNaturalNoteLine(line);
+      if (naturalLine === "") {
+        flushNatural();
+        return;
+      }
+      const metadata = splitSourceMetadataLine(naturalLine);
+      if (metadata && SOURCE_NOTE_RESERVED_METADATA_KEYS.has(metadata.key)) {
+        return;
+      }
+      if (naturalStartLine === null) {
+        naturalStartLine = index + 1;
+      }
+      naturalLines.push(naturalLine);
       return;
     }
 
@@ -676,6 +755,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
   });
 
   flushCurrent();
+  flushNatural();
   return items.length > 0 ? items : [buildSourceNoteFallbackItem(note)];
 }
 

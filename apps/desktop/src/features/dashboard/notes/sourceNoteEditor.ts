@@ -37,6 +37,23 @@ function parseChecklistLine(line: string) {
   };
 }
 
+function normalizeNaturalNoteLine(line: string) {
+  const withoutHeading = line.trim().replace(/^#+\s*/, "");
+  return withoutHeading.replace(/^[-*+]\s+/, "").trim();
+}
+
+function splitNaturalNoteContent(lines: string[]) {
+  const normalized = lines.map(normalizeNaturalNoteLine).filter(Boolean);
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  return {
+    noteText: normalized.slice(1).join("\n"),
+    title: normalized[0],
+  };
+}
+
 function splitMetadataLine(line: string) {
   const separatorIndex = line.indexOf(":");
   if (separatorIndex <= 0 || separatorIndex >= line.length - 1) {
@@ -253,6 +270,8 @@ export function buildSourceNoteEditorDraftFromItem(
 export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNoteEditorBlock[] {
   const normalizedLines = normalizeLineEndings(note.content).split("\n");
   const blocks: SourceNoteEditorBlock[] = [];
+  let naturalLines: string[] = [];
+  let naturalStartLine: number | null = null;
   let current:
     | (SourceNoteEditorDraft & {
         bodyLines: string[];
@@ -290,10 +309,26 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
     });
     current = null;
   };
+  const flushNatural = (endLine: number) => {
+    const naturalContent = splitNaturalNoteContent(naturalLines);
+    if (naturalContent && naturalStartLine !== null) {
+      blocks.push({
+        ...createEmptySourceNoteEditorDraft(note.path),
+        bucket: "later",
+        endLine,
+        noteText: naturalContent.noteText,
+        sourceLine: naturalStartLine,
+        title: naturalContent.title,
+      });
+    }
+    naturalLines = [];
+    naturalStartLine = null;
+  };
 
   normalizedLines.forEach((line, index) => {
     const checklist = parseChecklistLine(line);
     if (checklist) {
+      flushNatural(index);
       flushCurrent();
       current = {
         ...createEmptySourceNoteEditorDraft(note.path),
@@ -308,6 +343,26 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
     }
 
     if (!current) {
+      if (line.trim() === "") {
+        flushNatural(index);
+        return;
+      }
+      if (line.trim().startsWith("#")) {
+        flushNatural(index);
+        return;
+      }
+      const metadata = splitMetadataLine(line.trim());
+      if (metadata && SOURCE_NOTE_RESERVED_METADATA_KEYS.has(metadata.key)) {
+        return;
+      }
+      const naturalLine = normalizeNaturalNoteLine(line);
+      if (naturalLine === "") {
+        return;
+      }
+      if (naturalStartLine === null) {
+        naturalStartLine = index + 1;
+      }
+      naturalLines.push(naturalLine);
       return;
     }
 
@@ -375,6 +430,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
   });
 
   flushCurrent();
+  flushNatural(normalizedLines.length);
   return blocks;
 }
 
@@ -451,8 +507,9 @@ export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now
     title: derivedContent.title,
     updatedAt: normalizedNow,
   } satisfies SourceNoteEditorDraft);
+  const shouldPersistBucket = normalizedDraft.bucket !== "later" || normalizedDraft.repeatRule !== "";
   const metadataLines = [
-    `bucket: ${normalizedDraft.bucket}`,
+    shouldPersistBucket ? `bucket: ${normalizedDraft.bucket}` : null,
     normalizedDraft.dueAt ? `due: ${normalizedDraft.dueAt}` : null,
     normalizedDraft.nextOccurrenceAt ? `next: ${normalizedDraft.nextOccurrenceAt}` : null,
     normalizedDraft.repeatRule ? `repeat: ${normalizedDraft.repeatRule}` : null,

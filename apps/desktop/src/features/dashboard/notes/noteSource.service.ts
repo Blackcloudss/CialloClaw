@@ -105,7 +105,7 @@ function shouldPreferCachedTaskSources(remoteTaskSources: string[], cachedTaskSo
 }
 
 /**
- * Reports whether the renderer can use the desktop markdown-note bridge.
+ * Reports whether the renderer can use the desktop source-note bridge.
  */
 export function areDesktopSourceNotesAvailable() {
   return canUseDesktopSourceNotes();
@@ -143,61 +143,61 @@ export async function loadNoteSourceConfig(): Promise<AgentTaskInspectorConfigGe
 }
 
 /**
- * Loads the latest markdown note snapshot from the configured task-source roots.
+ * Loads the latest source-note snapshot from the configured task-source roots.
  *
  * @param taskSources Current task-source directory list.
  */
 export async function loadNoteSourceSnapshot(taskSources: string[]): Promise<SourceNoteSnapshot> {
   if (!canUseDesktopSourceNotes()) {
-    throw new Error("当前运行环境不支持桌面端 markdown 便签桥接。");
+    throw new Error("当前运行环境不支持桌面端便签来源桥接。");
   }
 
   return mapSourceNoteSnapshot(
-    await withTimeout(loadDesktopSourceNotes(taskSources), "markdown 便签加载"),
+    await withTimeout(loadDesktopSourceNotes(taskSources), "便签来源加载"),
   );
 }
 
 /**
  * Loads lightweight source-note metadata so the notes page can poll for
- * external file changes without rereading every markdown file body.
+ * external file changes without rereading every source-note file body.
  *
  * @param taskSources Current task-source directory list.
  */
 export async function loadNoteSourceIndex(taskSources: string[]): Promise<SourceNoteIndexSnapshot> {
   if (!canUseDesktopSourceNotes()) {
-    throw new Error("当前运行环境不支持桌面端 markdown 便签桥接。");
+    throw new Error("当前运行环境不支持桌面端便签来源桥接。");
   }
 
   return mapSourceNoteIndexSnapshot(
-    await withTimeout(loadDesktopSourceNoteIndex(taskSources), "markdown 便签索引加载"),
+    await withTimeout(loadDesktopSourceNoteIndex(taskSources), "便签来源索引加载"),
   );
 }
 
 /**
- * Appends a markdown note block into the primary task-source note file.
+ * Appends a note block into the primary task-source note file.
  *
  * @param taskSources Current task-source directory list.
- * @param content Markdown content that should seed the appended note block.
+ * @param content Content that should seed the appended note block.
  */
 export async function createNoteSource(
   taskSources: string[],
   content: string,
 ): Promise<SourceNoteDocument> {
   if (!canUseDesktopSourceNotes()) {
-    throw new Error("当前运行环境不支持桌面端 markdown 便签桥接。");
+    throw new Error("当前运行环境不支持桌面端便签来源桥接。");
   }
 
   return mapSourceNoteDocument(
-    await withTimeout(createDesktopSourceNote(taskSources, content), "markdown 便签创建"),
+    await withTimeout(createDesktopSourceNote(taskSources, content), "便签创建"),
   );
 }
 
 /**
- * Saves markdown content back into the selected task-source note file.
+ * Saves content back into the selected task-source note file.
  *
  * @param taskSources Current task-source directory list.
- * @param path Existing markdown note file path.
- * @param content Markdown content from the editor.
+ * @param path Existing note file path.
+ * @param content Content from the editor.
  */
 export async function saveNoteSource(
   taskSources: string[],
@@ -205,11 +205,11 @@ export async function saveNoteSource(
   content: string,
 ): Promise<SourceNoteDocument> {
   if (!canUseDesktopSourceNotes()) {
-    throw new Error("当前运行环境不支持桌面端 markdown 便签桥接。");
+    throw new Error("当前运行环境不支持桌面端便签来源桥接。");
   }
 
   return mapSourceNoteDocument(
-    await withTimeout(saveDesktopSourceNote(taskSources, path, content), "markdown 便签保存"),
+    await withTimeout(saveDesktopSourceNote(taskSources, path, content), "便签保存"),
   );
 }
 

@@ -173,6 +173,52 @@ function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLo
   }, undefined, desktopLocalPath);
 }
 
+function loadSourceNoteEditorModule() {
+  return withDesktopAliasRuntime((requireFn) =>
+    requireFn(resolve(desktopRoot, "src/features/dashboard/notes/sourceNoteEditor.ts")) as {
+      parseSourceNoteEditorBlocks: (note: {
+        content: string;
+        fileName: string;
+        modifiedAtMs: number | null;
+        path: string;
+        sourceRoot: string;
+        title: string;
+      }) => Array<{
+        bucket: string;
+        noteText: string;
+        sourceLine: number | null;
+        title: string;
+      }>;
+      upsertSourceNoteEditorBlock: (note: {
+        content: string;
+        fileName: string;
+        modifiedAtMs: number | null;
+        path: string;
+        sourceRoot: string;
+        title: string;
+      }, draft: {
+        agentSuggestion: string;
+        bucket: "upcoming" | "later" | "recurring_rule" | "closed";
+        checked: boolean;
+        createdAt: string;
+        dueAt: string;
+        effectiveScope: string;
+        endedAt: string;
+        extraMetadata: Array<{ key: string; value: string }>;
+        nextOccurrenceAt: string;
+        noteText: string;
+        prerequisite: string;
+        recentInstanceStatus: string;
+        repeatRule: string;
+        sourceLine: number | null;
+        sourcePath: string | null;
+        title: string;
+        updatedAt: string;
+      }) => { content: string; sourceLine: number };
+    },
+  );
+}
+
 function loadTaskOutputServiceModule(desktopLocalPath?: DashboardContractDesktopLocalPathOverrides) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskOutput.service.js");
@@ -1193,6 +1239,48 @@ test("note page query helpers expose stable prefixes, bucket order, and refresh-
     invalidatePrefixes: [["dashboard", "notes", "bucket"]],
     refetchOnMount: false,
   });
+});
+
+test("source note editor accepts natural note text before compatibility metadata", () => {
+  const { parseSourceNoteEditorBlocks, upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
+  const note = {
+    content: "明天整理发布说明\n补充影响范围和回滚说明\n",
+    fileName: "notes.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/notes.md",
+    sourceRoot: "D:/workspace",
+    title: "notes",
+  };
+
+  const blocks = parseSourceNoteEditorBlocks(note);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.title, "明天整理发布说明");
+  assert.equal(blocks[0]?.noteText, "补充影响范围和回滚说明");
+  assert.equal(blocks[0]?.bucket, "later");
+
+  const updated = upsertSourceNoteEditorBlock(note, {
+    agentSuggestion: "",
+    bucket: "later",
+    checked: false,
+    createdAt: "",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "",
+    extraMetadata: [],
+    nextOccurrenceAt: "",
+    noteText: "补充影响范围和回滚说明",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "",
+    sourceLine: blocks[0]?.sourceLine ?? null,
+    sourcePath: note.path,
+    title: "明天整理发布说明",
+    updatedAt: "",
+  });
+
+  assert.match(updated.content, /^- \[ \] 明天整理发布说明/m);
+  assert.doesNotMatch(updated.content, /bucket:/);
+  assert.doesNotMatch(updated.content, /note:/);
 });
 
 test("task page no longer exposes edit guidance and uses 安全总览 without anchors", () => {

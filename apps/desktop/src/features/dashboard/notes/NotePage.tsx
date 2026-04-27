@@ -466,11 +466,11 @@ export function NotePage() {
   );
   const sourceNoteAvailabilityMessage = useMemo(() => {
     if (dataMode !== "rpc") {
-      return "Mock 模式下不会读写真实 markdown 便签。";
+      return "Mock 模式下不会读写真实任务来源。";
     }
 
     if (!desktopSourceNotesAvailable) {
-      return "当前运行环境不支持桌面端 markdown 便签桥接。";
+      return "当前运行环境不支持桌面端便签来源桥接。";
     }
 
     if (sourceConfigQuery.error) {
@@ -659,8 +659,8 @@ export function NotePage() {
       primarySourceNote?.path
         ? `新便签会追加到 ${primarySourceNote.path}`
         : resolvedSourceRoots[0]
-          ? `新便签会追加到 ${resolvedSourceRoots[0]} 下的主 markdown 便签文件`
-          : "新便签会追加到第一个任务来源目录下的主 markdown 便签文件。",
+          ? `新便签会追加到 ${resolvedSourceRoots[0]} 下的主便签来源`
+          : "新便签会追加到第一个任务来源目录下的主便签来源。",
     );
   }
 
@@ -685,7 +685,7 @@ export function NotePage() {
       setSourceEditorItemId(item.item.item_id);
       setSelectedSourceNotePath(matchedNote.path);
       applySourceNoteDraft(buildSourceNoteEditorDraftFromNote(matchedNote, item), matchedNote.content);
-      setSourceNoteSyncMessage("正在编辑当前便签的 markdown 元数据。");
+      setSourceNoteSyncMessage("正在编辑当前便签内容，保存后会自动同步巡检。");
       setDetailOpen(false);
       setSourceStudioOpen(true);
       if (sourceNoteAvailabilityMessage) {
@@ -695,7 +695,7 @@ export function NotePage() {
     }
 
     openCreateSourceNoteStudio();
-    showFeedback(sourceNoteAvailabilityMessage ?? "还没有主 markdown 便签文件，先为你打开空白便签。");
+    showFeedback(sourceNoteAvailabilityMessage ?? "还没有主便签来源，先为你打开空白便签。");
   }
 
   async function handleSaveSourceNote() {
@@ -760,7 +760,7 @@ export function NotePage() {
         await triggerAutoTaskExecutionForSourceNote(savedNote, createdSourceNoteIdentity);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "markdown 便签保存失败。";
+      const message = error instanceof Error ? error.message : "便签保存失败。";
       setSourceNoteSyncMessage(message);
       showFeedback(message);
     } finally {
@@ -899,13 +899,6 @@ export function NotePage() {
       return;
     }
 
-    /* Legacy placeholder kept commented out after edit now opens source notes.
-    const placeholderMessage =
-      false
-        ? sourceNoteAvailabilityMessage ?? "请在上方 markdown 便签区编辑源文件。"
-        : "跳过本次真实动作，后续再接入。";
-    showFeedback(placeholderMessage);
-    */
     showFeedback("跳过本次真实动作，后续再接入。");
   }
 
@@ -1024,7 +1017,7 @@ export function NotePage() {
       return;
     }
 
-    setSourceNoteSyncMessage("检测到任务来源 markdown 发生变化，正在同步巡检结果。");
+    setSourceNoteSyncMessage("检测到任务来源发生变化，正在同步巡检结果。");
     void (async () => {
       try {
         await sourceNotesRefetchRef.current();
@@ -1076,8 +1069,8 @@ export function NotePage() {
     { label: "重复事项", error: recurringQuery.error },
     { label: "已结束", error: closedQuery.error },
     { label: "任务来源配置", error: sourceConfigQuery.error },
-    { label: "markdown 便签", error: sourceNotesQuery.error },
-    { label: "markdown 便签索引", error: sourceNoteIndexQuery.error },
+    { label: "便签来源", error: sourceNotesQuery.error },
+    { label: "便签来源索引", error: sourceNoteIndexQuery.error },
   ].filter((item) => item.error);
 
   const pageNotice =
