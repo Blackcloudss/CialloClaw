@@ -187,7 +187,10 @@ function getDefaultBucketForSourcePath(
     return "closed";
   }
 
-  const normalized = sourcePath?.toLowerCase() ?? "";
+  const normalized = sourcePath?.trim().toLowerCase() ?? "";
+  if (normalized === "") {
+    return "later";
+  }
   if (recurring || normalized.includes("recurring") || normalized.includes("weekly") || normalized.includes("repeat")) {
     return "recurring_rule";
   }
@@ -197,7 +200,7 @@ function getDefaultBucketForSourcePath(
   if (normalized.includes("inbox") || normalized.includes("upcoming") || normalized.includes("today") || normalized.includes("urgent")) {
     return "upcoming";
   }
-  return "later";
+  return "upcoming";
 }
 
 function buildDraftFromParsedBlock(block: SourceNoteEditorBlock, fallbackItem?: NoteListItem | null): SourceNoteEditorDraft {
@@ -234,7 +237,7 @@ function buildDraftFromParsedBlock(block: SourceNoteEditorBlock, fallbackItem?: 
 export function createEmptySourceNoteEditorDraft(sourcePath: string | null = null): SourceNoteEditorDraft {
   return {
     agentSuggestion: "",
-    bucket: "later",
+    bucket: getDefaultBucketForSourcePath(sourcePath, false, false),
     checked: false,
     createdAt: "",
     dueAt: "",
@@ -340,7 +343,6 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
     if (naturalContent && naturalStartLine !== null) {
       blocks.push({
         ...createEmptySourceNoteEditorDraft(note.path),
-        bucket: "later",
         endLine,
         noteText: naturalContent.noteText,
         sourceLine: naturalStartLine,

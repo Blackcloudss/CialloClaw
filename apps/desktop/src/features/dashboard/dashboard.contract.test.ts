@@ -1272,11 +1272,11 @@ test("source note editor accepts natural note text before compatibility metadata
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0]?.title, "明天整理发布说明");
   assert.equal(blocks[0]?.noteText, "补充影响范围和回滚说明");
-  assert.equal(blocks[0]?.bucket, "later");
+  assert.equal(blocks[0]?.bucket, "upcoming");
 
   const updated = upsertSourceNoteEditorBlock(note, {
     agentSuggestion: "",
-    bucket: "later",
+    bucket: blocks[0]?.bucket ?? "upcoming",
     checked: false,
     createdAt: "",
     dueAt: "",
@@ -1297,6 +1297,45 @@ test("source note editor accepts natural note text before compatibility metadata
   assert.match(updated.content, /^- \[ \] 明天整理发布说明/m);
   assert.doesNotMatch(updated.content, /bucket:/);
   assert.doesNotMatch(updated.content, /note:/);
+});
+
+test("source note editor derives natural note buckets from source paths", () => {
+  const { parseSourceNoteEditorBlocks, upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
+  const note = {
+    content: "# Follow up\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const blocks = parseSourceNoteEditorBlocks(note);
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.bucket, "upcoming");
+
+  const updated = upsertSourceNoteEditorBlock(note, {
+    agentSuggestion: "",
+    bucket: blocks[0]?.bucket ?? "upcoming",
+    checked: false,
+    createdAt: "",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "",
+    extraMetadata: [],
+    nextOccurrenceAt: "",
+    noteText: "",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "",
+    sourceLine: blocks[0]?.sourceLine ?? null,
+    sourcePath: note.path,
+    title: "Follow up",
+    updatedAt: "",
+  });
+
+  assert.doesNotMatch(updated.content, /^bucket:/m);
 });
 
 test("source note editor keeps adjacent heading notes separate", () => {
@@ -1366,6 +1405,42 @@ test("source note fallback treats headed metadata-shaped lines as natural notes"
   assert.ok(items[0]?.item.due_at);
   assert.equal(items[1]?.item.title, "bucket: later");
   assert.equal(items[1]?.item.bucket, "later");
+});
+
+test("source note fallback derives generic source checklist items as upcoming", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "- [ ] Review report\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.title, "Review report");
+  assert.equal(items[0]?.item.bucket, "upcoming");
+});
+
+test("source note fallback derives generic natural source items as upcoming", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "# Follow up\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.title, "Follow up");
+  assert.equal(items[0]?.item.bucket, "upcoming");
 });
 
 test("source note editor preserves explicit later bucket outside later source roots", () => {

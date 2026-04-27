@@ -427,6 +427,27 @@ function splitSourceMetadataLine(line: string) {
   return { key, value };
 }
 
+function getDefaultBucketForSourcePath(sourcePath: string | null, checked: boolean, recurring: boolean): TodoBucket {
+  if (checked) {
+    return "closed";
+  }
+
+  const normalized = sourcePath?.trim().toLowerCase() ?? "";
+  if (normalized === "") {
+    return "later";
+  }
+  if (recurring || normalized.includes("recurring") || normalized.includes("weekly") || normalized.includes("repeat")) {
+    return "recurring_rule";
+  }
+  if (normalized.includes("later") || normalized.includes("backlog")) {
+    return "later";
+  }
+  if (normalized.includes("inbox") || normalized.includes("upcoming") || normalized.includes("today") || normalized.includes("urgent")) {
+    return "upcoming";
+  }
+  return "upcoming";
+}
+
 type SourceNaturalFallbackFields = {
   bucket: TodoBucket;
   dueAt: string | null;
@@ -438,6 +459,10 @@ function hasSourceNaturalRepeatHint(lowerText: string) {
   return ["every ", "daily", "weekly", "monthly", "repeat", "recurring", "每天", "每日", "每周", "每月", "工作日", "定期", "重复"].some((hint) =>
     lowerText.includes(hint),
   );
+}
+
+function hasSourceNaturalLaterHint(lowerText: string) {
+  return ["later", "someday", "backlog", "以后", "稍后", "有空", "之后"].some((hint) => lowerText.includes(hint));
 }
 
 function formatSourceNaturalDateTime(now: Date, years: number, months: number, days: number) {
@@ -470,7 +495,7 @@ function inferSourceNaturalDueTime(lowerText: string, now: Date) {
 
 // Renderer fallback cards are local state, but they must infer the same natural
 // scheduling hints as the backend inspector to avoid visible pre-sync drift.
-function inferSourceNaturalFallbackFields(text: string, now = new Date()): SourceNaturalFallbackFields {
+function inferSourceNaturalFallbackFields(text: string, sourcePath: string | null, now = new Date()): SourceNaturalFallbackFields {
   const lowerText = text.toLowerCase();
   const dueAt = inferSourceNaturalDueTime(lowerText, now);
   const repeatRule = hasSourceNaturalRepeatHint(lowerText) ? text.trim() : null;
@@ -494,19 +519,19 @@ function inferSourceNaturalFallbackFields(text: string, now = new Date()): Sourc
   }
 
   return {
-    bucket: "later",
+    bucket: hasSourceNaturalLaterHint(lowerText) ? "later" : getDefaultBucketForSourcePath(sourcePath, false, false),
     dueAt: null,
     nextOccurrenceAt: null,
     repeatRule: null,
   };
 }
 
-function normalizeFallbackBucket(value: string | null, checked: boolean) {
+function normalizeFallbackBucket(value: string | null, checked: boolean, sourcePath: string | null) {
   if (value === "upcoming" || value === "later" || value === "recurring_rule" || value === "closed") {
     return value;
   }
 
-  return checked ? "closed" : "later";
+  return getDefaultBucketForSourcePath(sourcePath, checked, false);
 }
 
 function inferFallbackStatus(dueAt: string | null, checked: boolean): TodoItem["status"] {
@@ -681,7 +706,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
 
     const itemId = createSourceNoteFallbackId(`${note.path}:${current.sourceLine}:${current.title}`);
     const noteText = current.noteText ?? (current.bodyLines.join("\n").trim() || current.title);
-    const bucket = normalizeFallbackBucket(current.bucket, current.checked);
+    const bucket = normalizeFallbackBucket(current.bucket, current.checked, note.path);
     const dueAt = current.nextOccurrenceAt ?? current.dueAt;
     const item = {
       agent_suggestion: current.agentSuggestion ?? "等待巡检把这张便签同步成正式事项。",
@@ -721,7 +746,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
   const flushNatural = () => {
     const naturalContent = splitSourceNaturalNoteContent(naturalLines);
     if (naturalContent && naturalStartLine !== null) {
-      const inferred = inferSourceNaturalFallbackFields(naturalLines.join("\n"));
+      const inferred = inferSourceNaturalFallbackFields(naturalLines.join("\n"), note.path);
       current = {
         agentSuggestion: null,
         bodyLines: naturalContent.noteText ? [naturalContent.noteText] : [],

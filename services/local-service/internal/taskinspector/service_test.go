@@ -132,6 +132,32 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 	}
 }
 
+func TestServiceRunDefaultsGenericSourceChecklistToUpcoming(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "tasks.md"), []byte("- [ ] review report\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+
+	if len(result.NotepadItems) != 1 {
+		t.Fatalf("expected parsed checklist item, got %+v", result.NotepadItems)
+	}
+	if result.NotepadItems[0]["bucket"] != notepadBucketUpcoming {
+		t.Fatalf("expected generic source checklist to default to upcoming, got %+v", result.NotepadItems[0])
+	}
+}
+
 func TestServiceRunParsesNaturalMarkdownNotesWithoutMetadata(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)

@@ -598,7 +598,7 @@ func bucketFromSourcePath(sourcePath string, closed bool, recurring bool) string
 	if strings.Contains(normalized, "inbox") || strings.Contains(normalized, "upcoming") || strings.Contains(normalized, "today") || strings.Contains(normalized, "urgent") {
 		return notepadBucketUpcoming
 	}
-	return notepadBucketLater
+	return notepadBucketUpcoming
 }
 
 func statusFromChecklist(checked bool) string {
