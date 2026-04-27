@@ -65,7 +65,7 @@ func decodeUTF8(data []byte) (Result, error) {
 		return Result{}, ErrUnsupportedEncoding
 	}
 	text := string(data)
-	if !isSafeDecodedText(text) {
+	if !hasSafeControls(text) {
 		return Result{}, ErrUnsupportedEncoding
 	}
 	return Result{Text: text, Encoding: EncodingUTF8}, nil
@@ -119,6 +119,10 @@ func isSafeDecodedText(text string) bool {
 	if strings.ContainsRune(text, utf8.RuneError) {
 		return false
 	}
+	return hasSafeControls(text)
+}
+
+func hasSafeControls(text string) bool {
 	for _, value := range text {
 		switch value {
 		case '\n', '\r', '\t':

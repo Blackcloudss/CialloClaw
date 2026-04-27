@@ -58,6 +58,16 @@ func TestDecodeSupportsGB18030WithoutChineseSignal(t *testing.T) {
 	}
 }
 
+func TestDecodeAllowsLiteralRuneErrorInUTF8(t *testing.T) {
+	result, err := Decode([]byte("keep \uFFFD as authored"))
+	if err != nil {
+		t.Fatalf("Decode UTF-8 with literal U+FFFD returned error: %v", err)
+	}
+	if result.Text != "keep \uFFFD as authored" || result.Encoding != EncodingUTF8 {
+		t.Fatalf("unexpected UTF-8 literal U+FFFD result: %+v", result)
+	}
+}
+
 func TestDecodeSupportsUTF16BOM(t *testing.T) {
 	data := utf16LEWithBOM("修复乱码")
 	result, err := Decode(data)
@@ -78,7 +88,6 @@ func TestDecodeRejectsUnsafeText(t *testing.T) {
 	for _, data := range [][]byte{
 		[]byte("a\x00b"),
 		[]byte("a\x01b"),
-		[]byte("a\uFFFDb"),
 	} {
 		_, err = Decode(data)
 		if !errors.Is(err, ErrUnsupportedEncoding) {
