@@ -396,6 +396,10 @@ function normalizeSourceNaturalNoteLine(line: string) {
   return withoutHeading.replace(/^[-*+]\s+/, "").trim();
 }
 
+function isSourceNaturalHeadingLine(line: string) {
+  return line.trim().startsWith("#") && normalizeSourceNaturalNoteLine(line) !== "";
+}
+
 function splitSourceNaturalNoteContent(lines: string[]) {
   const normalized = lines.map(normalizeSourceNaturalNoteLine).filter(Boolean);
   if (normalized.length === 0) {
@@ -763,6 +767,9 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     }
 
     if (!current) {
+      if (isSourceNaturalHeadingLine(line) && naturalLines.length > 0) {
+        flushNatural();
+      }
       const naturalLine = normalizeSourceNaturalNoteLine(line);
       if (naturalLine === "") {
         flushNatural();

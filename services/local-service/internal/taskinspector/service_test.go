@@ -147,6 +147,7 @@ func TestServiceRunParsesNaturalMarkdownNotesWithoutMetadata(t *testing.T) {
 		"补充影响范围和回滚说明",
 		"",
 		"## 每周一同步巡检报告",
+		"### 后天检查巡检结果",
 		"",
 		"以后研究插件市场入口",
 	}, "\n")
@@ -158,7 +159,7 @@ func TestServiceRunParsesNaturalMarkdownNotesWithoutMetadata(t *testing.T) {
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
 	result := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
 
-	if len(result.NotepadItems) != 3 {
+	if len(result.NotepadItems) != 4 {
 		t.Fatalf("expected natural notes to become items, got %+v", result.NotepadItems)
 	}
 	first := result.NotepadItems[0]
@@ -172,7 +173,11 @@ func TestServiceRunParsesNaturalMarkdownNotesWithoutMetadata(t *testing.T) {
 	if recurring["bucket"] != notepadBucketRecurringRule || recurring["type"] != "recurring" {
 		t.Fatalf("expected natural repeat hint to infer recurring rule, got %+v", recurring)
 	}
-	later := result.NotepadItems[2]
+	third := result.NotepadItems[2]
+	if third["title"] != "后天检查巡检结果" || third["bucket"] != notepadBucketUpcoming || third["due_at"] == nil {
+		t.Fatalf("expected adjacent heading to start a separate upcoming note, got %+v", third)
+	}
+	later := result.NotepadItems[3]
 	if later["bucket"] != notepadBucketLater {
 		t.Fatalf("expected natural later hint to infer later bucket, got %+v", later)
 	}

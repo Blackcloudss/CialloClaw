@@ -1299,10 +1299,32 @@ test("source note editor accepts natural note text before compatibility metadata
   assert.doesNotMatch(updated.content, /note:/);
 });
 
+test("source note editor keeps adjacent heading notes separate", () => {
+  const { parseSourceNoteEditorBlocks } = loadSourceNoteEditorModule();
+  const note = {
+    content: "# First note\n## Second note\n",
+    fileName: "notes.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/notes.md",
+    sourceRoot: "D:/workspace",
+    title: "notes",
+  };
+
+  const blocks = parseSourceNoteEditorBlocks(note);
+
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0]?.title, "First note");
+  assert.equal(blocks[0]?.noteText, "");
+  assert.equal(blocks[0]?.sourceLine, 1);
+  assert.equal(blocks[1]?.title, "Second note");
+  assert.equal(blocks[1]?.noteText, "");
+  assert.equal(blocks[1]?.sourceLine, 2);
+});
+
 test("source note fallback mirrors natural scheduling hints before inspector sync", () => {
   const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
   const note = {
-    content: "# 明天整理发布说明\n补充影响范围和回滚说明\n\n## 每周一同步巡检报告\n",
+    content: "# 明天整理发布说明\n补充影响范围和回滚说明\n\n## 每周一同步巡检报告\n### 后天检查巡检结果\n",
     fileName: "notes.md",
     modifiedAtMs: null,
     path: "D:/workspace/notes.md",
@@ -1312,7 +1334,7 @@ test("source note fallback mirrors natural scheduling hints before inspector syn
 
   const items = buildSourceNoteFallbackItems(note);
 
-  assert.equal(items.length, 2);
+  assert.equal(items.length, 3);
   assert.equal(items[0]?.item.title, "明天整理发布说明");
   assert.equal(items[0]?.item.bucket, "upcoming");
   assert.ok(items[0]?.item.due_at);
@@ -1320,6 +1342,9 @@ test("source note fallback mirrors natural scheduling hints before inspector syn
   assert.equal(items[1]?.item.title, "每周一同步巡检报告");
   assert.equal(items[1]?.item.bucket, "recurring_rule");
   assert.equal(items[1]?.item.repeat_rule, "每周一同步巡检报告");
+  assert.equal(items[2]?.item.title, "后天检查巡检结果");
+  assert.equal(items[2]?.item.bucket, "upcoming");
+  assert.ok(items[2]?.item.due_at);
 });
 
 test("task page no longer exposes edit guidance and uses 安全总览 without anchors", () => {

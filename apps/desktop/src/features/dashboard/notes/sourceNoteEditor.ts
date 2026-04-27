@@ -42,6 +42,10 @@ function normalizeNaturalNoteLine(line: string) {
   return withoutHeading.replace(/^[-*+]\s+/, "").trim();
 }
 
+function isNaturalHeadingLine(line: string) {
+  return line.trim().startsWith("#") && normalizeNaturalNoteLine(line) !== "";
+}
+
 function splitNaturalNoteContent(lines: string[]) {
   const normalized = lines.map(normalizeNaturalNoteLine).filter(Boolean);
   if (normalized.length === 0) {
@@ -346,6 +350,9 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
       if (line.trim() === "") {
         flushNatural(index);
         return;
+      }
+      if (isNaturalHeadingLine(line) && naturalLines.length > 0) {
+        flushNatural(index);
       }
       const metadata = splitMetadataLine(line.trim());
       if (metadata && SOURCE_NOTE_RESERVED_METADATA_KEYS.has(metadata.key)) {

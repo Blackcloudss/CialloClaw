@@ -307,6 +307,9 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 				flushNatural()
 				continue
 			}
+			if isNaturalNotepadHeadingLine(trimmed) && len(naturalLines) > 0 {
+				flushNatural()
+			}
 			if metadataKey, _, ok := splitMetadataLine(trimmed); ok && isKnownNotepadMetadataKey(metadataKey) {
 				continue
 			}
@@ -440,6 +443,10 @@ func normalizeNaturalNotepadLine(line string) string {
 		}
 	}
 	return trimmed
+}
+
+func isNaturalNotepadHeadingLine(line string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), "#") && normalizeNaturalNotepadLine(line) != ""
 }
 
 func splitNaturalNoteContent(lines []string) (string, string) {
