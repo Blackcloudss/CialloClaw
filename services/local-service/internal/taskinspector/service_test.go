@@ -181,7 +181,10 @@ func TestServiceRunDefaultsGenericSourceChecklistToUpcoming(t *testing.T) {
 
 	service := NewService(fileSystem)
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
-	result := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
 
 	if len(result.NotepadItems) != 1 {
 		t.Fatalf("expected parsed checklist item, got %+v", result.NotepadItems)
@@ -212,7 +215,10 @@ func TestServiceRunPreservesMetadataShapedNaturalNotes(t *testing.T) {
 
 	service := NewService(fileSystem)
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
-	result := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
 
 	if len(result.NotepadItems) != 1 {
 		t.Fatalf("expected metadata-shaped natural note to be preserved, got %+v", result.NotepadItems)
@@ -242,7 +248,8 @@ func TestServiceRunPreservesNaturalParagraphsAndListMarkers(t *testing.T) {
 		"",
 		"second paragraph",
 		"- item A",
-		"- item B",
+		"- [ ] verify changelog",
+		"- [ ] update docs",
 	}, "\n")
 	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "release.md"), []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
@@ -250,7 +257,10 @@ func TestServiceRunPreservesNaturalParagraphsAndListMarkers(t *testing.T) {
 
 	service := NewService(fileSystem)
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
-	result := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
 
 	if len(result.NotepadItems) != 1 {
 		t.Fatalf("expected one multi-paragraph natural note, got %+v", result.NotepadItems)
@@ -259,7 +269,7 @@ func TestServiceRunPreservesNaturalParagraphsAndListMarkers(t *testing.T) {
 	if item["title"] != "Release prep" {
 		t.Fatalf("expected heading to remain the note title, got %+v", item)
 	}
-	expectedNoteText := "first paragraph\n\nsecond paragraph\n- item A\n- item B"
+	expectedNoteText := "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs"
 	if item["note_text"] != expectedNoteText {
 		t.Fatalf("expected paragraph breaks and list markers to remain, got %+v", item)
 	}
@@ -290,7 +300,10 @@ func TestServiceRunParsesNaturalMarkdownNotesWithoutMetadata(t *testing.T) {
 
 	service := NewService(fileSystem)
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
-	result := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
 
 	if len(result.NotepadItems) != 4 {
 		t.Fatalf("expected natural notes to become items, got %+v", result.NotepadItems)

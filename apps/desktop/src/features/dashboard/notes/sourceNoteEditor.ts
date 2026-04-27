@@ -381,7 +381,9 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
 
   normalizedLines.forEach((line, index) => {
     const checklist = parseChecklistLine(line);
-    if (checklist) {
+    // Once a natural block has started, markdown checklist lines belong to the
+    // handwritten note body instead of starting separate structured blocks.
+    if (checklist && (current || !hasNaturalNoteContent(naturalLines))) {
       flushNatural(index);
       flushCurrent();
       current = {

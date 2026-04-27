@@ -1439,7 +1439,7 @@ test("source note editor keeps metadata-shaped natural lines visible", () => {
 test("source note editor keeps natural paragraph breaks and list markers", () => {
   const { parseSourceNoteEditorBlocks, upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
   const note = {
-    content: "# Release prep\nfirst paragraph\n\nsecond paragraph\n- item A\n- item B\n",
+    content: "# Release prep\nfirst paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\n",
     fileName: "tasks.md",
     modifiedAtMs: null,
     path: "D:/workspace/todos/tasks.md",
@@ -1451,7 +1451,7 @@ test("source note editor keeps natural paragraph breaks and list markers", () =>
 
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0]?.title, "Release prep");
-  assert.equal(blocks[0]?.noteText, "first paragraph\n\nsecond paragraph\n- item A\n- item B");
+  assert.equal(blocks[0]?.noteText, "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs");
 
   const updated = upsertSourceNoteEditorBlock(note, {
     agentSuggestion: "",
@@ -1473,7 +1473,7 @@ test("source note editor keeps natural paragraph breaks and list markers", () =>
     updatedAt: "",
   });
 
-  assert.equal(updated.content, "- [ ] Release prep\n\nfirst paragraph\n\nsecond paragraph\n- item A\n- item B\n");
+  assert.equal(updated.content, "- [ ] Release prep\n\nfirst paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\n");
 });
 
 test("source note editor persists selected bucket before source path exists", () => {
@@ -1589,15 +1589,23 @@ test("source note fallback mirrors natural scheduling hints before inspector syn
 test("source note fallback partitions local cards by inferred bucket", () => {
   const { buildSourceNoteFallbackItems, partitionNoteItemsByBucket } = loadNotePageServiceModule();
   const note = {
-    content: "# 明天整理发布说明\n\n## 以后复盘窗口策略\n\n## 每周一同步巡检报告\n\n- [x] 已归档旧提醒\n",
+    content: "# 明天整理发布说明\n\n## 以后复盘窗口策略\n\n## 每周一同步巡检报告\n",
     fileName: "notes.md",
     modifiedAtMs: null,
     path: "D:/workspace/notes.md",
     sourceRoot: "D:/workspace",
     title: "notes",
   };
+  const closedNote = {
+    content: "- [x] 已归档旧提醒\n",
+    fileName: "closed.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/closed.md",
+    sourceRoot: "D:/workspace",
+    title: "closed",
+  };
 
-  const grouped = partitionNoteItemsByBucket(buildSourceNoteFallbackItems(note));
+  const grouped = partitionNoteItemsByBucket([...buildSourceNoteFallbackItems(note), ...buildSourceNoteFallbackItems(closedNote)]);
 
   assert.deepEqual(grouped.upcoming.map((item) => item.item.title), ["明天整理发布说明"]);
   assert.deepEqual(grouped.later.map((item) => item.item.title), ["以后复盘窗口策略"]);
@@ -1667,7 +1675,7 @@ test("source note fallback keeps metadata-shaped natural lines visible", () => {
 test("source note fallback keeps natural paragraph breaks and list markers", () => {
   const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
   const note = {
-    content: "# Release prep\nfirst paragraph\n\nsecond paragraph\n- item A\n- item B\n",
+    content: "# Release prep\nfirst paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\n",
     fileName: "tasks.md",
     modifiedAtMs: null,
     path: "D:/workspace/todos/tasks.md",
@@ -1679,7 +1687,7 @@ test("source note fallback keeps natural paragraph breaks and list markers", () 
 
   assert.equal(items.length, 1);
   assert.equal(items[0]?.item.title, "Release prep");
-  assert.equal(items[0]?.item.note_text, "first paragraph\n\nsecond paragraph\n- item A\n- item B");
+  assert.equal(items[0]?.item.note_text, "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs");
 });
 
 test("source note fallback derives generic natural source items as upcoming", () => {

@@ -795,7 +795,9 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
 
   lines.forEach((line, index) => {
     const checklist = parseSourceChecklistLine(line);
-    if (checklist) {
+    // Natural fallback cards must keep markdown checkboxes inside the note
+    // body, matching the backend inspector and source editor parsers.
+    if (checklist && (current || !hasSourceNaturalNoteContent(naturalLines))) {
       flushNatural();
       flushCurrent();
       current = {
