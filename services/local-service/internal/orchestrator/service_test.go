@@ -1841,7 +1841,7 @@ func TestTaskInspectorRunClearsStaleSourceBackedNotesWhenFilesEmpty(t *testing.T
 	if err := os.MkdirAll(todosDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll returned error: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(todosDir, "empty.md"), []byte("# no checklist items here\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(todosDir, "empty.md"), []byte("\n\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 	if _, err := service.TaskInspectorRun(map[string]any{"target_sources": []any{"workspace/todos"}}); err != nil {
@@ -1850,6 +1850,27 @@ func TestTaskInspectorRunClearsStaleSourceBackedNotesWhenFilesEmpty(t *testing.T
 	items, total := service.runEngine.NotepadItems("", 10, 0)
 	if total != 0 || len(items) != 0 {
 		t.Fatalf("expected source-backed sync to clear stale runtime notes when source is empty, total=%d len=%d items=%+v", total, len(items), items)
+	}
+}
+
+func TestTaskInspectorRunSyncsNaturalHeadingSourceBackedNotes(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "inspector heading")
+	todosDir := filepath.Join(workspaceRoot, "todos")
+	if err := os.MkdirAll(todosDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(todosDir, "heading.md"), []byte("# no checklist items here\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if _, err := service.TaskInspectorRun(map[string]any{"target_sources": []any{"workspace/todos"}}); err != nil {
+		t.Fatalf("TaskInspectorRun returned error: %v", err)
+	}
+	items, total := service.runEngine.NotepadItems("", 10, 0)
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("expected heading natural source note to sync into runtime, total=%d len=%d items=%+v", total, len(items), items)
+	}
+	if items[0]["title"] != "no checklist items here" {
+		t.Fatalf("expected heading text to become natural note title, got %+v", items[0])
 	}
 }
 

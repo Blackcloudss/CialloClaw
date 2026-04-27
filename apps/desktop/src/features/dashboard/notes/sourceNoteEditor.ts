@@ -178,6 +178,28 @@ function toIsoTimestamp(value: Date) {
   return value.toISOString();
 }
 
+function getDefaultBucketForSourcePath(
+  sourcePath: string | null,
+  checked: boolean,
+  recurring: boolean,
+): SourceNoteEditorDraft["bucket"] {
+  if (checked) {
+    return "closed";
+  }
+
+  const normalized = sourcePath?.toLowerCase() ?? "";
+  if (recurring || normalized.includes("recurring") || normalized.includes("weekly") || normalized.includes("repeat")) {
+    return "recurring_rule";
+  }
+  if (normalized.includes("later") || normalized.includes("backlog")) {
+    return "later";
+  }
+  if (normalized.includes("inbox") || normalized.includes("upcoming") || normalized.includes("today") || normalized.includes("urgent")) {
+    return "upcoming";
+  }
+  return "later";
+}
+
 function buildDraftFromParsedBlock(block: SourceNoteEditorBlock, fallbackItem?: NoteListItem | null): SourceNoteEditorDraft {
   const fallbackDraft = fallbackItem ? buildSourceNoteEditorDraftFromItem(fallbackItem, block.sourcePath) : null;
 
@@ -510,7 +532,8 @@ export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now
     title: derivedContent.title,
     updatedAt: normalizedNow,
   } satisfies SourceNoteEditorDraft);
-  const shouldPersistBucket = normalizedDraft.bucket !== "later" || normalizedDraft.repeatRule !== "";
+  const sourceDefaultBucket = getDefaultBucketForSourcePath(normalizedDraft.sourcePath, normalizedDraft.checked, normalizedDraft.repeatRule !== "");
+  const shouldPersistBucket = normalizedDraft.bucket !== sourceDefaultBucket || normalizedDraft.repeatRule !== "";
   const metadataLines = [
     shouldPersistBucket ? `bucket: ${normalizedDraft.bucket}` : null,
     normalizedDraft.dueAt ? `due: ${normalizedDraft.dueAt}` : null,

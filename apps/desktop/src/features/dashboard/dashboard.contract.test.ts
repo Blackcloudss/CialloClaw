@@ -1347,6 +1347,61 @@ test("source note fallback mirrors natural scheduling hints before inspector syn
   assert.ok(items[2]?.item.due_at);
 });
 
+test("source note fallback treats headed metadata-shaped lines as natural notes", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "# due: tomorrow\n# bucket: later\n",
+    fileName: "notes.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/notes.md",
+    sourceRoot: "D:/workspace",
+    title: "notes",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 2);
+  assert.equal(items[0]?.item.title, "due: tomorrow");
+  assert.equal(items[0]?.item.bucket, "upcoming");
+  assert.ok(items[0]?.item.due_at);
+  assert.equal(items[1]?.item.title, "bucket: later");
+  assert.equal(items[1]?.item.bucket, "later");
+});
+
+test("source note editor preserves explicit later bucket outside later source roots", () => {
+  const { upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
+  const note = {
+    content: "- [ ] Follow up\n",
+    fileName: "inbox.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/upcoming/inbox.md",
+    sourceRoot: "D:/workspace",
+    title: "inbox",
+  };
+
+  const updated = upsertSourceNoteEditorBlock(note, {
+    agentSuggestion: "",
+    bucket: "later",
+    checked: false,
+    createdAt: "",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "",
+    extraMetadata: [],
+    nextOccurrenceAt: "",
+    noteText: "",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "",
+    sourceLine: 1,
+    sourcePath: note.path,
+    title: "Follow up",
+    updatedAt: "",
+  });
+
+  assert.match(updated.content, /^bucket: later$/m);
+});
+
 test("task page no longer exposes edit guidance and uses 安全总览 without anchors", () => {
   const mapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mapper.ts"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");

@@ -767,16 +767,17 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     }
 
     if (!current) {
+      const trimmed = line.trim();
       if (isSourceNaturalHeadingLine(line) && naturalLines.length > 0) {
         flushNatural();
+      }
+      const metadata = splitSourceMetadataLine(trimmed);
+      if (metadata && SOURCE_NOTE_RESERVED_METADATA_KEYS.has(metadata.key)) {
+        return;
       }
       const naturalLine = normalizeSourceNaturalNoteLine(line);
       if (naturalLine === "") {
         flushNatural();
-        return;
-      }
-      const metadata = splitSourceMetadataLine(naturalLine);
-      if (metadata && SOURCE_NOTE_RESERVED_METADATA_KEYS.has(metadata.key)) {
         return;
       }
       if (naturalStartLine === null) {
