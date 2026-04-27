@@ -401,6 +401,17 @@ export async function startDesktopOnboarding(
 export async function startManualDesktopOnboardingReplay(
   preferredWindowLabel: DesktopOnboardingPresentation["windowLabel"] = "control-panel",
 ) {
+  const currentSession = loadDesktopOnboardingSession();
+
+  if (currentSession?.isOpen === true) {
+    const onboardingWindow = await getOnboardingWindow();
+    if (onboardingWindow !== null) {
+      await clearDesktopOnboardingViewState();
+    } else {
+      await clearDesktopOnboardingRuntimeState();
+    }
+  }
+
   return startDesktopOnboarding("manual", preferredWindowLabel);
 }
 
