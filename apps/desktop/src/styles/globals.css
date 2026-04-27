@@ -6,7 +6,7 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
   --font-sans: var(--cc-font-ui);
   --font-display: var(--cc-font-display);
   --font-mono: var(--cc-font-mono);
