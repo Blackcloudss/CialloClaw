@@ -519,8 +519,7 @@ fn normalize_new_source_note_block(content: &str) -> String {
 
     if normalized
         .lines()
-        .map(str::trim)
-        .any(|line| parse_checklist_title(line).is_some())
+        .any(is_top_level_checklist_line)
     {
         return trimmed.to_string();
     }
@@ -542,10 +541,8 @@ fn normalize_new_source_note_block(content: &str) -> String {
         .iter()
         .skip(first_non_empty_index + 1)
         .copied()
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string();
+        .collect::<Vec<_>>();
+    let rest = trim_boundary_blank_lines(&rest).join("\n");
 
     if rest.is_empty() {
         format!("- [ ] {title}")
@@ -577,6 +574,28 @@ fn parse_checklist_title(line: &str) -> Option<&str> {
         .or_else(|| line.strip_prefix("* [X] "))
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+fn is_top_level_checklist_line(line: &str) -> bool {
+    let trimmed_right = line.trim_end();
+    if trimmed_right.starts_with(' ') || trimmed_right.starts_with('\t') {
+        return false;
+    }
+    parse_checklist_title(trimmed_right).is_some()
+}
+
+fn trim_boundary_blank_lines<'a>(lines: &'a [&'a str]) -> Vec<&'a str> {
+    let mut start = 0;
+    while start < lines.len() && lines[start].trim().is_empty() {
+        start += 1;
+    }
+
+    let mut end = lines.len();
+    while end > start && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+
+    lines[start..end].to_vec()
 }
 
 fn match_source_root<'a>(target: &Path, roots: &'a [PathBuf]) -> Result<&'a PathBuf, String> {
@@ -676,6 +695,24 @@ mod tests {
         assert_eq!(block, "- [ ] 整理发布说明\n\n补充影响范围");
         assert!(!block.contains("bucket:"));
         assert!(!block.contains("note:"));
+    }
+
+    #[test]
+    fn normalize_new_source_note_block_preserves_indented_natural_body_lines() {
+        let block =
+            normalize_new_source_note_block("整理发布说明\n\n    const answer = 42;\n  - nested item\n");
+
+        assert_eq!(
+            block,
+            "- [ ] 整理发布说明\n\n    const answer = 42;\n  - nested item"
+        );
+    }
+
+    #[test]
+    fn normalize_new_source_note_block_does_not_treat_indented_checklists_as_top_level_blocks() {
+        let block = normalize_new_source_note_block("Release prep\n  - [ ] verify changelog\n");
+
+        assert_eq!(block, "- [ ] Release prep\n\n  - [ ] verify changelog");
     }
 
     fn unique_temp_path(name: &str) -> PathBuf {
