@@ -325,6 +325,45 @@ func TestServiceRunPreservesSerializedChecklistBodyMarkers(t *testing.T) {
 	}
 }
 
+func TestServiceRunPreservesChecklistMetadataAfterSpacer(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] Release prep",
+		"",
+		"due: 2026-04-18",
+		"bucket: later",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "release.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if len(result.NotepadItems) != 1 {
+		t.Fatalf("expected one checklist item with spacer metadata, got %+v", result.NotepadItems)
+	}
+	item := result.NotepadItems[0]
+	if item["title"] != "Release prep" || item["bucket"] != notepadBucketLater {
+		t.Fatalf("expected title and bucket metadata to be preserved, got %+v", item)
+	}
+	if item["due_at"] != "2026-04-18T09:30:00Z" || item["planned_at"] != "2026-04-18T09:30:00Z" {
+		t.Fatalf("expected due metadata to be preserved after spacer, got %+v", item)
+	}
+}
+
 func TestServiceRunParsesNaturalMarkdownNotesWithoutMetadata(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)

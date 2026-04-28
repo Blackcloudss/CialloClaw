@@ -212,6 +212,7 @@ function loadSourceNoteEditorModule() {
         title: string;
       }) => Array<{
         bucket: string;
+        dueAt: string;
         noteText: string;
         sourceLine: number | null;
         title: string;
@@ -1436,6 +1437,26 @@ test("source note editor keeps metadata-shaped natural lines visible", () => {
   assert.equal(blocks[0]?.bucket, "upcoming");
 });
 
+test("source note editor keeps checklist metadata after spacer lines", () => {
+  const { parseSourceNoteEditorBlocks } = loadSourceNoteEditorModule();
+  const note = {
+    content: "- [ ] Release prep\n\ndue: 2026-04-18\nbucket: later\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const blocks = parseSourceNoteEditorBlocks(note);
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.title, "Release prep");
+  assert.equal(blocks[0]?.dueAt, "2026-04-18");
+  assert.equal(blocks[0]?.bucket, "later");
+  assert.equal(blocks[0]?.noteText, "");
+});
+
 test("source note editor keeps natural paragraph breaks and list markers", () => {
   const { parseSourceNoteEditorBlocks, upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
   const note = {
@@ -1658,6 +1679,26 @@ test("source note fallback derives generic source checklist items as upcoming", 
   assert.equal(items.length, 1);
   assert.equal(items[0]?.item.title, "Review report");
   assert.equal(items[0]?.item.bucket, "upcoming");
+});
+
+test("source note fallback keeps checklist metadata after spacer lines", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "- [ ] Release prep\n\ndue: 2026-04-18\nbucket: later\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.title, "Release prep");
+  assert.equal(items[0]?.item.due_at, "2026-04-18");
+  assert.equal(items[0]?.item.bucket, "later");
+  assert.equal(items[0]?.item.note_text, "Release prep");
 });
 
 test("source note fallback keeps metadata-shaped natural lines visible", () => {

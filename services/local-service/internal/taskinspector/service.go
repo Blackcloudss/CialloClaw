@@ -397,6 +397,7 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 	noteLines := make([]string, 0)
 	naturalLines := make([]string, 0)
 	naturalStartLine := 0
+	pendingNoteSpacer := false
 	flushCurrent := func() {
 		if current == nil {
 			return
@@ -408,6 +409,7 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 		items = append(items, normalizeParsedNotepadItem(current, sourcePath, now))
 		current = nil
 		noteLines = noteLines[:0]
+		pendingNoteSpacer = false
 	}
 	flushNatural := func() {
 		if !hasNaturalNotepadContent(naturalLines) {
@@ -436,6 +438,7 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 				flushNatural()
 				flushCurrent()
 				current = buildSourceBackedNotepadItem(sourcePath, index+1, title, checked, now)
+				pendingNoteSpacer = false
 				continue
 			}
 		}
@@ -457,14 +460,22 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 			continue
 		}
 		if trimmed == "" {
-			noteLines = append(noteLines, "")
+			if len(noteLines) > 0 {
+				noteLines = append(noteLines, "")
+			} else {
+				// Source notes commonly keep one spacer before metadata. Keep it
+				// out of note_text unless a real body line follows.
+				pendingNoteSpacer = true
+			}
 			continue
 		}
-		if len(noteLines) == 0 {
+		if len(noteLines) == 0 && (!pendingNoteSpacer || !isIndentedMarkdownLine(line)) {
 			if handled := applyNotepadMetadataLine(current, trimmed, now); handled {
+				pendingNoteSpacer = false
 				continue
 			}
 		}
+		pendingNoteSpacer = false
 		noteLines = append(noteLines, trimmed)
 	}
 	flushCurrent()
@@ -499,6 +510,10 @@ func parseChecklistLine(line string) (bool, string, bool) {
 	default:
 		return false, "", false
 	}
+}
+
+func isIndentedMarkdownLine(line string) bool {
+	return strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")
 }
 
 func applyNotepadMetadataLine(item map[string]any, line string, now time.Time) bool {

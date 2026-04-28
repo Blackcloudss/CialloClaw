@@ -42,6 +42,10 @@ function parseChecklistLine(line: string) {
   };
 }
 
+function isIndentedSourceNoteLine(line: string) {
+  return /^\s/.test(line);
+}
+
 function normalizeNaturalNoteLine(line: string) {
   const trimmedRight = line.trimEnd();
   const trimmed = trimmedRight.trim();
@@ -352,6 +356,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
         noteMetadataText: string;
       })
     | null = null;
+  let currentPendingBodySpacer = false;
 
   const flushCurrent = () => {
     if (!current) {
@@ -382,6 +387,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
       updatedAt: current.updatedAt,
     });
     current = null;
+    currentPendingBodySpacer = false;
   };
   const flushNatural = (endLine: number) => {
     const naturalContent = splitNaturalNoteContent(naturalLines);
@@ -416,6 +422,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
         sourceLine: index + 1,
         title: checklist.title,
       };
+      currentPendingBodySpacer = false;
       return;
     }
 
@@ -439,16 +446,27 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
 
     current.endLine = index + 1;
     if (line.trim() === "") {
-      current.bodyLines.push("");
+      if (current.bodyLines.length > 0) {
+        current.bodyLines.push("");
+      } else {
+        // Spacer lines before unindented metadata are not body content; they
+        // keep existing source notes with visual separation parseable.
+        currentPendingBodySpacer = true;
+      }
       return;
     }
 
-    const metadata = current.bodyLines.length === 0 ? splitMetadataLine(line.trim()) : null;
+    const metadata =
+      current.bodyLines.length === 0 && (!currentPendingBodySpacer || !isIndentedSourceNoteLine(line))
+        ? splitMetadataLine(line.trim())
+        : null;
     if (!metadata) {
+      currentPendingBodySpacer = false;
       current.bodyLines.push(normalizeChecklistBodyLine(line));
       return;
     }
 
+    currentPendingBodySpacer = false;
     switch (metadata.key) {
       case "agent":
       case "suggest":

@@ -397,6 +397,10 @@ function parseSourceChecklistLine(line: string) {
   };
 }
 
+function isIndentedSourceLine(line: string) {
+  return /^\s/.test(line);
+}
+
 function normalizeSourceNaturalNoteLine(line: string) {
   const trimmedRight = line.trimEnd();
   const trimmed = trimmedRight.trim();
@@ -727,6 +731,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         title: string;
       }
     | null = null;
+  let currentPendingBodySpacer = false;
 
   const flushCurrent = () => {
     if (!current) {
@@ -771,6 +776,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     });
 
     current = null;
+    currentPendingBodySpacer = false;
   };
   const flushNatural = () => {
     const naturalContent = splitSourceNaturalNoteContent(naturalLines);
@@ -819,6 +825,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         sourceLine: index + 1,
         title: checklist.title,
       };
+      currentPendingBodySpacer = false;
       return;
     }
 
@@ -842,16 +849,27 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
 
     const trimmed = line.trim();
     if (trimmed === "") {
-      current.bodyLines.push("");
+      if (current.bodyLines.length > 0) {
+        current.bodyLines.push("");
+      } else {
+        // Checklist blocks may use one blank spacer before metadata; keep that
+        // spacer outside note_text until real body content starts.
+        currentPendingBodySpacer = true;
+      }
       return;
     }
 
-    const metadata = current.bodyLines.length === 0 ? splitSourceMetadataLine(trimmed) : null;
+    const metadata =
+      current.bodyLines.length === 0 && (!currentPendingBodySpacer || !isIndentedSourceLine(line))
+        ? splitSourceMetadataLine(trimmed)
+        : null;
     if (!metadata) {
+      currentPendingBodySpacer = false;
       current.bodyLines.push(trimmed);
       return;
     }
 
+    currentPendingBodySpacer = false;
     switch (metadata.key) {
       case "agent":
       case "suggest":
