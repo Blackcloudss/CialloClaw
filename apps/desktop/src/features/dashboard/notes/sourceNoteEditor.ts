@@ -78,8 +78,8 @@ function hasNaturalNoteContent(lines: string[]) {
   return lines.some((line) => line.trim() !== "");
 }
 
-// Blank lines inside natural notes are content; only outer blank boundaries are trimmed.
-function trimNaturalBlankLines(lines: string[]) {
+// Blank lines inside note bodies are content; only outer blank boundaries are trimmed.
+function trimBoundaryBlankLines(lines: string[]) {
   let start = 0;
   while (start < lines.length && lines[start]?.trim() === "") {
     start += 1;
@@ -94,13 +94,13 @@ function trimNaturalBlankLines(lines: string[]) {
 }
 
 function splitNaturalNoteContent(lines: string[]) {
-  const normalized = trimNaturalBlankLines(lines.map(normalizeNaturalNoteLine));
+  const normalized = trimBoundaryBlankLines(lines.map(normalizeNaturalNoteLine));
   if (normalized.length === 0) {
     return null;
   }
 
   return {
-    noteText: trimNaturalBlankLines(normalized.slice(1)).join("\n"),
+    noteText: trimBoundaryBlankLines(normalized.slice(1)).join("\n"),
     title: normalized[0]?.trim() ?? "",
   };
 }
@@ -263,7 +263,7 @@ function buildDraftFromParsedBlock(block: SourceNoteEditorBlock, fallbackItem?: 
     endedAt: block.endedAt || fallbackDraft?.endedAt || "",
     extraMetadata: [...block.extraMetadata],
     nextOccurrenceAt: block.nextOccurrenceAt || fallbackDraft?.nextOccurrenceAt || "",
-    noteText: block.noteText || fallbackDraft?.noteText || "",
+    noteText: block.noteText,
     prerequisite: block.prerequisite || fallbackDraft?.prerequisite || "",
     recentInstanceStatus: block.recentInstanceStatus || fallbackDraft?.recentInstanceStatus || "",
     repeatRule: block.repeatRule || fallbackDraft?.repeatRule || "",
@@ -364,8 +364,11 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
       return;
     }
 
-    const trimmedBody = current.bodyLines.join("\n").trim();
-    const noteText = [current.noteMetadataText, trimmedBody].filter(Boolean).join("\n\n").trim();
+    const bodyLines = trimBoundaryBlankLines(current.bodyLines);
+    const noteTextParts = [
+      current.noteMetadataText,
+      bodyLines.length > 0 ? bodyLines.join("\n") : "",
+    ].filter((part) => part !== "");
     blocks.push({
       agentSuggestion: current.agentSuggestion,
       bucket: current.bucket,
@@ -378,7 +381,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
       endedAt: current.endedAt,
       extraMetadata: current.extraMetadata,
       nextOccurrenceAt: current.nextOccurrenceAt,
-      noteText,
+      noteText: noteTextParts.join("\n\n"),
       prerequisite: current.prerequisite,
       recentInstanceStatus: current.recentInstanceStatus,
       repeatRule: current.repeatRule,

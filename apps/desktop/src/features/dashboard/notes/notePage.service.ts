@@ -429,8 +429,8 @@ function hasSourceNaturalNoteContent(lines: string[]) {
   return lines.some((line) => line.trim() !== "");
 }
 
-// Blank lines inside natural notes are content; only outer blank boundaries are trimmed.
-function trimSourceNaturalBlankLines(lines: string[]) {
+// Blank lines inside note bodies are content; only outer blank boundaries are trimmed.
+function trimSourceBoundaryBlankLines(lines: string[]) {
   let start = 0;
   while (start < lines.length && lines[start]?.trim() === "") {
     start += 1;
@@ -445,13 +445,13 @@ function trimSourceNaturalBlankLines(lines: string[]) {
 }
 
 function splitSourceNaturalNoteContent(lines: string[]) {
-  const normalized = trimSourceNaturalBlankLines(lines.map(normalizeSourceNaturalNoteLine));
+  const normalized = trimSourceBoundaryBlankLines(lines.map(normalizeSourceNaturalNoteLine));
   if (normalized.length === 0) {
     return null;
   }
 
   return {
-    noteText: trimSourceNaturalBlankLines(normalized.slice(1)).join("\n"),
+    noteText: trimSourceBoundaryBlankLines(normalized.slice(1)).join("\n"),
     title: normalized[0]?.trim() ?? "",
   };
 }
@@ -751,7 +751,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     }
 
     const itemId = createSourceNoteFallbackId(`${note.path}:${current.sourceLine}:${current.title}`);
-    const noteText = current.noteText ?? (current.bodyLines.join("\n").trim() || current.title);
+    const noteText = current.noteText ?? (trimSourceBoundaryBlankLines(current.bodyLines).join("\n") || current.title);
     const bucket = normalizeFallbackBucket(current.bucket, current.checked, note.path);
     const dueAt = current.nextOccurrenceAt ?? current.dueAt;
     const item = {

@@ -1599,6 +1599,39 @@ test("source note editor serializes managed timestamps for round-trip matching",
   assert.equal(createdBlock?.sourceLine, 4);
 });
 
+test("source note editor keeps heading-only natural notes empty when RPC note_text mirrors title", () => {
+  const { buildSourceNoteEditorDraftFromNote } = loadSourceNoteEditorModule();
+  const note = {
+    content: "# Follow up\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const draft = buildSourceNoteEditorDraftFromNote(note, {
+    item: {
+      bucket: "upcoming",
+      note_text: "Follow up",
+      status: "pending",
+      title: "Follow up",
+    },
+    experience: {
+      endedAt: null,
+    },
+    sourceNote: {
+      localOnly: false,
+      path: note.path,
+      sourceLine: 1,
+      title: "Follow up",
+    },
+  });
+
+  assert.equal(draft.title, "Follow up");
+  assert.equal(draft.noteText, "");
+});
+
 test("source note editor keeps synced natural note bucket ahead of path defaults", () => {
   const { buildSourceNoteEditorDraftFromNote, serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
   const note = {
@@ -1633,6 +1666,30 @@ test("source note editor keeps synced natural note bucket ahead of path defaults
   const serialized = serializeSourceNoteEditorDraft(draft, new Date("2026-04-10T09:30:00.000Z"));
 
   assert.match(serialized.blockContent, /^bucket: later$/m);
+});
+
+test("source note editor keeps indented first and last body lines during round-trip", () => {
+  const { parseSourceNoteEditorBlocks } = loadSourceNoteEditorModule();
+  const note = {
+    content: [
+      "- [ ] Release prep",
+      "",
+      "    const answer = 42;",
+      "  middle line",
+      "    return answer;",
+      "",
+    ].join("\n"),
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const blocks = parseSourceNoteEditorBlocks(note);
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.noteText, "  const answer = 42;\nmiddle line\n  return answer;");
 });
 
 test("source note editor keeps adjacent heading notes separate", () => {
@@ -1844,6 +1901,30 @@ test("source note fallback keeps editor-saved checklist body markers inside one 
   assert.equal(items[0]?.item.title, "Release prep");
   assert.equal(items[0]?.item.note_text, "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\n  code block\n  - nested item\ndue: keep visible");
   assert.equal(items[1]?.item.title, "Separate top-level");
+});
+
+test("source note fallback keeps indented first and last body lines", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: [
+      "- [ ] Release prep",
+      "",
+      "    const answer = 42;",
+      "  middle line",
+      "    return answer;",
+      "",
+    ].join("\n"),
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.note_text, "  const answer = 42;\nmiddle line\n  return answer;");
 });
 
 test("source note fallback derives generic natural source items as upcoming", () => {
