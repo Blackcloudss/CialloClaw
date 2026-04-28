@@ -1354,6 +1354,7 @@ flowchart TB
 #### 具体判断方式
 - **确定性规则**：空输入直接进入 `waiting_input`；显式 `intent` 优先。
 - **轻量建议**：`intent.Suggest()` 输出 `Suggestion`，包含 `IntentConfirmed / RequiresConfirm / TaskTitle / DirectDeliveryType` 等字段。
+- **确认策略**：`options.confirm_required` 只负责强制进入意图确认；附件等对象型入口若已经带有明确用户说明，应直接进入 Agent Loop / 治理 / 执行链路，裸对象或低置信度输入才停在确认或澄清。
 - **续接分类**：`maybeContinueExistingTask()` 先走确定性与启发式规则，不足时才调用模型做 coarse-grained continuation classification。
 - **执行阶段分工**：入口规划只决定“以什么意图、什么交付类型、是否要确认进入主链”；真正的 ReAct/Agent Loop 计划在执行阶段发生。
 

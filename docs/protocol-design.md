@@ -629,6 +629,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `context.behavior.last_action` | 最近行为信号，例如 `copy`    |
 | `context.behavior.dwell_millis` | 当前场景停留时长             |
 | `voice_meta`                 | 语音会话元信息                 |
+| `options.confirm_required`   | 是否强制先进入意图确认         |
 | `options.preferred_delivery` | 偏好的结果交付方式             |
 
 补充约束：
@@ -774,12 +775,16 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `context.behavior.dwell_millis` | 当前场景停留时长 |
 | `delivery.preferred`       | 优先交付方式 |
 | `delivery.fallback`        | 兜底交付方式 |
+| `options.confirm_required` | 是否强制先进入意图确认；不用于绕过风险授权 |
 
 补充约束：
 
 - 当输入文本和 `page_context / screen / behavior` 同时表明用户想“查看当前页面/屏幕”时，后端可直接推断为受控视觉型任务，并继续走既有 `task -> approval_request -> event -> artifact / delivery_result` 链路。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
 - `agent.task.start` 不接受显式 `intent` 入参；视觉型任务仍由后端根据 `input / context / delivery` 统一推断，不要求前端发明平行入口。
+- `options.confirm_required = true` 仅表示调用方要求先进入意图确认；`false` 或省略只表示不强制确认，不得跳过风险授权、审计、恢复点或必要澄清。
+- 当 `input.type = file` 且 `input.text` 已包含用户对附件的明确说明时，后端应直接进入 Agent Loop / 治理 / 执行链路，不应重复返回通用意图确认气泡。
+- 当 `input.type = file` 但缺少明确说明时，后端仍可进入意图确认或补充输入状态，避免对裸附件直接执行不明确任务。
 - 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象；若判断为同一任务的补充输入，则应续到原 task 而不是机械新开 task。
 - `task.session_id` 是正式协议字段，schema、类型层和 `task.updated` 通知都必须返回该字段；若当前任务没有关联隐藏协作 session，应返回 `null`，而不是省略字段。
 - 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
