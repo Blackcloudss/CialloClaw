@@ -398,18 +398,21 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 	naturalLines := make([]string, 0)
 	naturalStartLine := 0
 	naturalStartedWithHeading := false
+	noteMetadataText := ""
 	pendingNoteSpacer := false
 	flushCurrent := func() {
 		if current == nil {
 			return
 		}
 		trimmedNoteLines := trimNaturalNotepadBlankLines(noteLines)
-		if len(trimmedNoteLines) > 0 && stringValue(current, "note_text") == "" {
-			current["note_text"] = strings.Join(trimmedNoteLines, "\n")
+		bodyText := strings.Join(trimmedNoteLines, "\n")
+		if noteText := joinNotepadNoteText(noteMetadataText, bodyText); noteText != "" {
+			current["note_text"] = noteText
 		}
 		items = append(items, normalizeParsedNotepadItem(current, sourcePath, now))
 		current = nil
 		noteLines = noteLines[:0]
+		noteMetadataText = ""
 		pendingNoteSpacer = false
 	}
 	flushNatural := func() {
@@ -480,6 +483,11 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 			continue
 		}
 		if len(noteLines) == 0 && (!pendingNoteSpacer || !isIndentedMarkdownLine(line)) {
+			if key, value, ok := splitMetadataLine(trimmed); ok && key == "note" {
+				noteMetadataText = value
+				pendingNoteSpacer = false
+				continue
+			}
 			if handled := applyNotepadMetadataLine(current, trimmed, now); handled {
 				pendingNoteSpacer = false
 				continue
@@ -584,7 +592,7 @@ func applyNotepadMetadataLine(item map[string]any, line string, now time.Time) b
 	case "tags":
 		item["tags"] = splitTagList(value)
 	case "note":
-		item["note_text"] = value
+		return false
 	case "reminder":
 		item["reminder_strategy"] = value
 	case "updated_at":
@@ -595,6 +603,17 @@ func applyNotepadMetadataLine(item map[string]any, line string, now time.Time) b
 		return false
 	}
 	return true
+}
+
+func joinNotepadNoteText(metadataText string, bodyText string) string {
+	switch {
+	case metadataText == "":
+		return bodyText
+	case bodyText == "":
+		return metadataText
+	default:
+		return metadataText + "\n\n" + bodyText
+	}
 }
 
 func splitMetadataLine(line string) (string, string, bool) {

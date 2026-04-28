@@ -277,6 +277,41 @@ func TestServiceRunParsesManagedTimestampMetadataFromChecklistNotes(t *testing.T
 	}
 }
 
+func TestServiceRunCombinesNoteMetadataAndChecklistBody(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] Release prep",
+		"  note: collect rollout context",
+		"",
+		"  keep the rollback checklist nearby",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "notes.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 12, 9, 30, 0, 0, time.UTC) }
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if len(result.NotepadItems) != 1 {
+		t.Fatalf("expected one parsed note, got %+v", result.NotepadItems)
+	}
+	if result.NotepadItems[0]["note_text"] != "collect rollout context\n\nkeep the rollback checklist nearby" {
+		t.Fatalf("expected note metadata and body to stay combined, got %+v", result.NotepadItems[0])
+	}
+}
+
 func TestServiceRunPreservesNaturalParagraphsAndListMarkers(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)

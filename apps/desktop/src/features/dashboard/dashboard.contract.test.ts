@@ -1463,6 +1463,24 @@ test("source note editor keeps checklist metadata after spacer lines", () => {
   assert.equal(blocks[0]?.noteText, "");
 });
 
+test("source note editor keeps note metadata and checklist body together", () => {
+  const { parseSourceNoteEditorBlocks } = loadSourceNoteEditorModule();
+  const note = {
+    content: "- [ ] Release prep\nnote: collect rollout context\n\n  keep the rollback checklist nearby\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const blocks = parseSourceNoteEditorBlocks(note);
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.title, "Release prep");
+  assert.equal(blocks[0]?.noteText, "collect rollout context\n\nkeep the rollback checklist nearby");
+});
+
 test("source note editor keeps natural paragraph breaks and list markers", () => {
   const { parseSourceNoteEditorBlocks, upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
   const note = {
@@ -1884,6 +1902,24 @@ test("source note fallback keeps checklist metadata after spacer lines", () => {
   assert.equal(items[0]?.item.due_at, "2026-04-18");
   assert.equal(items[0]?.item.bucket, "later");
   assert.equal(items[0]?.item.note_text, "Release prep");
+});
+
+test("source note fallback keeps note metadata and checklist body together", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "- [ ] Release prep\nnote: collect rollout context\n\n  keep the rollback checklist nearby\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.title, "Release prep");
+  assert.equal(items[0]?.item.note_text, "collect rollout context\n\nkeep the rollback checklist nearby");
 });
 
 test("source note fallback keeps metadata-shaped natural lines visible", () => {

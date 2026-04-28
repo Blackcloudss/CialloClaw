@@ -444,6 +444,16 @@ function trimSourceBoundaryBlankLines(lines: string[]) {
   return lines.slice(start, end);
 }
 
+function joinSourceNoteText(metadataText: string | null, bodyText: string) {
+  if (!metadataText) {
+    return bodyText;
+  }
+  if (bodyText === "") {
+    return metadataText;
+  }
+  return `${metadataText}\n\n${bodyText}`;
+}
+
 function splitSourceNaturalNoteContent(lines: string[]) {
   const normalized = trimSourceBoundaryBlankLines(lines.map(normalizeSourceNaturalNoteLine));
   if (normalized.length === 0) {
@@ -734,7 +744,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         effectiveScope: string | null;
         endedAt: string | null;
         nextOccurrenceAt: string | null;
-        noteText: string | null;
+        noteMetadataText: string | null;
         prerequisite: string | null;
         recentInstanceStatus: string | null;
         repeatRule: string | null;
@@ -751,7 +761,8 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     }
 
     const itemId = createSourceNoteFallbackId(`${note.path}:${current.sourceLine}:${current.title}`);
-    const noteText = current.noteText ?? (trimSourceBoundaryBlankLines(current.bodyLines).join("\n") || current.title);
+    const bodyText = trimSourceBoundaryBlankLines(current.bodyLines).join("\n");
+    const noteText = joinSourceNoteText(current.noteMetadataText, bodyText) || current.title;
     const bucket = normalizeFallbackBucket(current.bucket, current.checked, note.path);
     const dueAt = current.nextOccurrenceAt ?? current.dueAt;
     const item = {
@@ -806,7 +817,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         effectiveScope: null,
         endedAt: null,
         nextOccurrenceAt: inferred.nextOccurrenceAt,
-        noteText: naturalContent.noteText || null,
+        noteMetadataText: null,
         prerequisite: null,
         recentInstanceStatus: null,
         repeatRule: inferred.repeatRule,
@@ -838,7 +849,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         effectiveScope: null,
         endedAt: null,
         nextOccurrenceAt: null,
-        noteText: null,
+        noteMetadataText: null,
         prerequisite: null,
         recentInstanceStatus: null,
         repeatRule: null,
@@ -919,7 +930,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         current.nextOccurrenceAt = metadata.value;
         return;
       case "note":
-        current.noteText = metadata.value;
+        current.noteMetadataText = metadata.value;
         return;
       case "prerequisite":
         current.prerequisite = metadata.value;
