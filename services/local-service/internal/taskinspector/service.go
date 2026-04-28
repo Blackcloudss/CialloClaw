@@ -550,10 +550,18 @@ func applyNotepadMetadataLine(item map[string]any, line string, now time.Time) b
 		}
 	case "bucket":
 		item["bucket"] = normalizeBucketValue(value, stringValue(item, "bucket"))
+	case "created_at":
+		if createdAt := normalizeMetadataTime(value, now); createdAt != "" {
+			item["created_at"] = createdAt
+		}
 	case "prerequisite":
 		item["prerequisite"] = value
 	case "suggest", "agent":
 		item["agent_suggestion"] = value
+	case "ended_at":
+		if endedAt := normalizeMetadataTime(value, now); endedAt != "" {
+			item["ended_at"] = endedAt
+		}
 	case "repeat":
 		item["repeat_rule_text"] = value
 		item["bucket"] = notepadBucketRecurringRule
@@ -579,6 +587,10 @@ func applyNotepadMetadataLine(item map[string]any, line string, now time.Time) b
 		item["note_text"] = value
 	case "reminder":
 		item["reminder_strategy"] = value
+	case "updated_at":
+		if updatedAt := normalizeMetadataTime(value, now); updatedAt != "" {
+			item["updated_at"] = updatedAt
+		}
 	default:
 		return false
 	}
@@ -804,7 +816,7 @@ func normalizeMetadataTime(value string, now time.Time) string {
 	if value == "" {
 		return ""
 	}
-	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04", "2006-01-02"} {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04", "2006-01-02"} {
 		if parsed, err := time.Parse(layout, value); err == nil {
 			if layout == "2006-01-02" {
 				parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), now.Hour(), now.Minute(), 0, 0, now.Location())

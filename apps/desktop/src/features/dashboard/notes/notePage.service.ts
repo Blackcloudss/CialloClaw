@@ -732,8 +732,10 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         bodyLines: string[];
         bucket: string | null;
         checked: boolean;
+        createdAt: string | null;
         dueAt: string | null;
         effectiveScope: string | null;
+        endedAt: string | null;
         nextOccurrenceAt: string | null;
         noteText: string | null;
         prerequisite: string | null;
@@ -741,6 +743,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         repeatRule: string | null;
         sourceLine: number;
         title: string;
+        updatedAt: string | null;
       }
     | null = null;
   let currentPendingBodySpacer = false;
@@ -757,9 +760,10 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     const item = {
       agent_suggestion: current.agentSuggestion ?? "等待巡检把这张便签同步成正式事项。",
       bucket,
+      created_at: current.createdAt,
       due_at: dueAt,
       effective_scope: current.effectiveScope ?? note.sourceRoot,
-      ended_at: current.checked ? dueAt : null,
+      ended_at: current.endedAt ?? (current.checked ? dueAt : null),
       item_id: itemId,
       linked_task_id: null,
       next_occurrence_at: current.nextOccurrenceAt,
@@ -774,6 +778,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
       status: inferFallbackStatus(dueAt, current.checked),
       title: current.title,
       type: bucket === "recurring_rule" ? "recurring" : "note",
+      updated_at: current.updatedAt,
     } as TodoItem;
 
     items.push({
@@ -799,8 +804,10 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         bodyLines: naturalContent.noteText ? [naturalContent.noteText] : [],
         bucket: inferred.bucket,
         checked: false,
+        createdAt: null,
         dueAt: inferred.dueAt,
         effectiveScope: null,
+        endedAt: null,
         nextOccurrenceAt: inferred.nextOccurrenceAt,
         noteText: naturalContent.noteText || null,
         prerequisite: null,
@@ -808,6 +815,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         repeatRule: inferred.repeatRule,
         sourceLine: naturalStartLine,
         title: naturalContent.title,
+        updatedAt: null,
       };
       flushCurrent();
     }
@@ -828,8 +836,10 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         bodyLines: [],
         bucket: null,
         checked: checklist.checked,
+        createdAt: null,
         dueAt: null,
         effectiveScope: null,
+        endedAt: null,
         nextOccurrenceAt: null,
         noteText: null,
         prerequisite: null,
@@ -837,6 +847,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         repeatRule: null,
         sourceLine: index + 1,
         title: checklist.title,
+        updatedAt: null,
       };
       currentPendingBodySpacer = false;
       return;
@@ -898,8 +909,14 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
       case "bucket":
         current.bucket = metadata.value;
         return;
+      case "created_at":
+        current.createdAt = metadata.value;
+        return;
       case "due":
         current.dueAt = metadata.value;
+        return;
+      case "ended_at":
+        current.endedAt = metadata.value;
         return;
       case "next":
         current.nextOccurrenceAt = metadata.value;
@@ -919,6 +936,9 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
         return;
       case "status":
         current.recentInstanceStatus = metadata.value;
+        return;
+      case "updated_at":
+        current.updatedAt = metadata.value;
         return;
       default:
         current.bodyLines.push(normalizeSourceChecklistBodyLine(line));

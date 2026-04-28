@@ -93,6 +93,10 @@ function trimBoundaryBlankLines(lines: string[]) {
   return lines.slice(start, end);
 }
 
+function normalizeEditorNoteText(value: string) {
+  return trimBoundaryBlankLines(normalizeLineEndings(value).split("\n")).join("\n");
+}
+
 function splitNaturalNoteContent(lines: string[]) {
   const normalized = trimBoundaryBlankLines(lines.map(normalizeNaturalNoteLine));
   if (normalized.length === 0) {
@@ -173,7 +177,7 @@ function deriveDraftTitleAndBody(draft: SourceNoteEditorDraft) {
   if (explicitTitle !== "") {
     return {
       checked: draft.checked,
-      noteText: normalizedNoteText.trim(),
+      noteText: normalizeEditorNoteText(normalizedNoteText),
       title: explicitTitle,
     };
   }
@@ -190,7 +194,7 @@ function deriveDraftTitleAndBody(draft: SourceNoteEditorDraft) {
 
   const firstContentLine = bodyLines[firstContentLineIndex].trim();
   const checklist = parseChecklistLine(firstContentLine);
-  const remainingLines = bodyLines.slice(firstContentLineIndex + 1).join("\n").trim();
+  const remainingLines = normalizeEditorNoteText(bodyLines.slice(firstContentLineIndex + 1).join("\n"));
 
   return {
     checked: checklist?.checked ?? draft.checked,
@@ -210,7 +214,7 @@ function createDraftSignaturePayload(draft: SourceNoteEditorDraft) {
     endedAt: draft.endedAt.trim(),
     extraMetadata: normalizeMetadataEntries(draft.extraMetadata),
     nextOccurrenceAt: draft.nextOccurrenceAt.trim(),
-    noteText: normalizeLineEndings(draft.noteText).trim(),
+    noteText: normalizeEditorNoteText(draft.noteText),
     prerequisite: draft.prerequisite.trim(),
     recentInstanceStatus: draft.recentInstanceStatus.trim(),
     repeatRule: draft.repeatRule.trim(),
@@ -326,7 +330,7 @@ export function buildSourceNoteEditorDraftFromItem(
     endedAt: formatTimestampForEditor(item.experience.endedAt),
     extraMetadata: [],
     nextOccurrenceAt: formatTimestampForEditor(item.item.next_occurrence_at),
-    noteText: item.item.note_text?.trim() ?? "",
+    noteText: normalizeEditorNoteText(item.item.note_text ?? ""),
     prerequisite: item.item.prerequisite?.trim() ?? "",
     recentInstanceStatus: item.item.recent_instance_status?.trim() ?? "",
     repeatRule: item.item.repeat_rule?.trim() ?? "",
@@ -643,6 +647,7 @@ export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now
     normalizedDraft: {
       ...draft,
       bucket: normalizedDraft.bucket,
+      checked: normalizedDraft.checked,
       createdAt: normalizedDraft.createdAt,
       dueAt: normalizedDraft.dueAt,
       endedAt: normalizedDraft.endedAt,

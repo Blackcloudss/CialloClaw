@@ -232,6 +232,51 @@ func TestServiceRunPreservesMetadataShapedNaturalNotes(t *testing.T) {
 	}
 }
 
+func TestServiceRunParsesManagedTimestampMetadataFromChecklistNotes(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [x] Release prep",
+		"  created_at: 2026-04-09T08:00:00.000Z",
+		"  updated_at: 2026-04-10T09:30:00.000Z",
+		"  ended_at: 2026-04-11T10:00:00.000Z",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "timestamps.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 12, 9, 30, 0, 0, time.UTC) }
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if len(result.NotepadItems) != 1 {
+		t.Fatalf("expected one parsed note, got %+v", result.NotepadItems)
+	}
+	item := result.NotepadItems[0]
+	if item["created_at"] != "2026-04-09T08:00:00Z" {
+		t.Fatalf("expected created_at metadata to be preserved, got %+v", item)
+	}
+	if item["updated_at"] != "2026-04-10T09:30:00Z" {
+		t.Fatalf("expected updated_at metadata to be preserved, got %+v", item)
+	}
+	if item["ended_at"] != "2026-04-11T10:00:00Z" {
+		t.Fatalf("expected ended_at metadata to be preserved, got %+v", item)
+	}
+	if item["note_text"] != "Release prep" {
+		t.Fatalf("expected managed timestamps to stay out of note_text, got %+v", item)
+	}
+}
+
 func TestServiceRunPreservesNaturalParagraphsAndListMarkers(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)

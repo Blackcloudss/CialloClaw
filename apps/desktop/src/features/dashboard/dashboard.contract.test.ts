@@ -1599,6 +1599,33 @@ test("source note editor serializes managed timestamps for round-trip matching",
   assert.equal(createdBlock?.sourceLine, 4);
 });
 
+test("source note editor returns the derived checked state in normalized drafts", () => {
+  const { serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
+
+  const serialized = serializeSourceNoteEditorDraft({
+    agentSuggestion: "",
+    bucket: "upcoming",
+    checked: false,
+    createdAt: "",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "",
+    extraMetadata: [],
+    nextOccurrenceAt: "",
+    noteText: "- [x] Ship release notes",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "",
+    sourceLine: null,
+    sourcePath: "D:/workspace/todos/tasks.md",
+    title: "",
+    updatedAt: "",
+  }, new Date("2026-04-10T09:30:00.000Z"));
+
+  assert.equal(serialized.normalizedDraft.checked, true);
+  assert.match(serialized.blockContent, /^- \[x\] Ship release notes$/m);
+});
+
 test("source note editor keeps heading-only natural notes empty when RPC note_text mirrors title", () => {
   const { buildSourceNoteEditorDraftFromNote } = loadSourceNoteEditorModule();
   const note = {
@@ -1690,6 +1717,33 @@ test("source note editor keeps indented first and last body lines during round-t
 
   assert.equal(blocks.length, 1);
   assert.equal(blocks[0]?.noteText, "  const answer = 42;\nmiddle line\n  return answer;");
+});
+
+test("source note editor preserves indented first and last body lines during serialization", () => {
+  const { serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
+
+  const serialized = serializeSourceNoteEditorDraft({
+    agentSuggestion: "",
+    bucket: "upcoming",
+    checked: false,
+    createdAt: "",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "",
+    extraMetadata: [],
+    nextOccurrenceAt: "",
+    noteText: "  const answer = 42;\nmiddle line\n  return answer;",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "",
+    sourceLine: null,
+    sourcePath: "D:/workspace/todos/tasks.md",
+    title: "Release prep",
+    updatedAt: "",
+  }, new Date("2026-04-10T09:30:00.000Z"));
+
+  assert.match(serialized.blockContent, /^(  const answer = 42;|    const answer = 42;)$/m);
+  assert.match(serialized.blockContent, /^(  return answer;|    return answer;)$/m);
 });
 
 test("source note editor keeps adjacent heading notes separate", () => {
@@ -1925,6 +1979,30 @@ test("source note fallback keeps indented first and last body lines", () => {
 
   assert.equal(items.length, 1);
   assert.equal(items[0]?.item.note_text, "  const answer = 42;\nmiddle line\n  return answer;");
+});
+
+test("source note fallback consumes managed timestamp metadata without rendering it as note text", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: [
+      "- [x] Release prep",
+      "created_at: 2026-04-09T08:00:00.000Z",
+      "updated_at: 2026-04-10T09:30:00.000Z",
+      "ended_at: 2026-04-11T10:00:00.000Z",
+      "",
+    ].join("\n"),
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.note_text, "Release prep");
+  assert.equal(items[0]?.item.ended_at, "2026-04-11T10:00:00.000Z");
 });
 
 test("source note fallback derives generic natural source items as upcoming", () => {
