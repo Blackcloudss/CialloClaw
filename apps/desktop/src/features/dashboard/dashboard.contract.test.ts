@@ -1505,6 +1505,26 @@ test("source note editor keeps natural paragraph breaks and list markers", () =>
   assert.equal(reparsed[0]?.noteText, "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs\ndue: keep visible");
 });
 
+test("source note editor splits heading-less natural paragraphs into separate blocks", () => {
+  const { parseSourceNoteEditorBlocks } = loadSourceNoteEditorModule();
+  const note = {
+    content: "Task A\n\nTask B\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const blocks = parseSourceNoteEditorBlocks(note);
+
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0]?.title, "Task A");
+  assert.equal(blocks[0]?.noteText, "");
+  assert.equal(blocks[1]?.title, "Task B");
+  assert.equal(blocks[1]?.noteText, "");
+});
+
 test("source note editor persists selected bucket before source path exists", () => {
   const { serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
 
@@ -1529,6 +1549,54 @@ test("source note editor persists selected bucket before source path exists", ()
   }, new Date("2026-04-10T09:30:00.000Z"));
 
   assert.match(serialized.blockContent, /^bucket: later$/m);
+});
+
+test("source note editor serializes managed timestamps for round-trip matching", () => {
+  const { parseSourceNoteEditorBlocks, serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
+
+  const serialized = serializeSourceNoteEditorDraft({
+    agentSuggestion: "",
+    bucket: "later",
+    checked: false,
+    createdAt: "2026-04-10T09:00:00.000Z",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "2026-04-11T09:00:00.000Z",
+    extraMetadata: [],
+    nextOccurrenceAt: "",
+    noteText: "",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "",
+    sourceLine: null,
+    sourcePath: null,
+    title: "Follow up",
+    updatedAt: "2026-04-10T09:05:00.000Z",
+  }, new Date("2026-04-10T09:30:00.000Z"));
+
+  assert.match(serialized.blockContent, /^created_at: 2026-04-10T09:00:00.000Z$/m);
+  assert.match(serialized.blockContent, /^updated_at: 2026-04-10T09:30:00.000Z$/m);
+  assert.match(serialized.blockContent, /^ended_at: 2026-04-11T09:00:00.000Z$/m);
+
+  const reparsed = parseSourceNoteEditorBlocks({
+    content: [
+      "- [ ] Follow up",
+      "updated_at: 2026-04-10T08:00:00.000Z",
+      "",
+      serialized.blockContent,
+      "",
+    ].join("\n"),
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  });
+  const createdBlock = reparsed
+    .filter((block) => block.title === "Follow up")
+    .find((block) => block.updatedAt === "2026-04-10T09:30:00.000Z");
+
+  assert.equal(createdBlock?.sourceLine, 4);
 });
 
 test("source note editor keeps synced natural note bucket ahead of path defaults", () => {
@@ -1737,6 +1805,26 @@ test("source note fallback keeps natural paragraph breaks and list markers", () 
   assert.equal(items.length, 1);
   assert.equal(items[0]?.item.title, "Release prep");
   assert.equal(items[0]?.item.note_text, "first paragraph\n\nsecond paragraph\n- item A\n- [ ] verify changelog\n- [ ] update docs");
+});
+
+test("source note fallback splits heading-less natural paragraphs into separate cards", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "Task A\n\nTask B\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 2);
+  assert.equal(items[0]?.item.title, "Task A");
+  assert.equal(items[0]?.item.note_text, "Task A");
+  assert.equal(items[1]?.item.title, "Task B");
+  assert.equal(items[1]?.item.note_text, "Task B");
 });
 
 test("source note fallback keeps editor-saved checklist body markers inside one card", () => {

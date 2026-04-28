@@ -420,6 +420,43 @@ func TestServiceRunParsesNaturalMarkdownNotesWithoutMetadata(t *testing.T) {
 	}
 }
 
+func TestServiceRunSplitsHeadinglessNaturalParagraphsIntoSeparateNotes(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"Task A",
+		"",
+		"Task B",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "paragraphs.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if len(result.NotepadItems) != 2 {
+		t.Fatalf("expected heading-less natural paragraphs to become separate notes, got %+v", result.NotepadItems)
+	}
+	if result.NotepadItems[0]["title"] != "Task A" || result.NotepadItems[0]["note_text"] != "Task A" {
+		t.Fatalf("expected first paragraph to stay isolated, got %+v", result.NotepadItems[0])
+	}
+	if result.NotepadItems[1]["title"] != "Task B" || result.NotepadItems[1]["note_text"] != "Task B" {
+		t.Fatalf("expected second paragraph to stay isolated, got %+v", result.NotepadItems[1])
+	}
+}
+
 func TestServiceRunDecodesLegacyMarkdownSources(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)

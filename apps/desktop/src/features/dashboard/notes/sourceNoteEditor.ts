@@ -348,6 +348,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
   const blocks: SourceNoteEditorBlock[] = [];
   let naturalLines: string[] = [];
   let naturalStartLine: number | null = null;
+  let naturalStartedWithHeading = false;
   let current:
     | (SourceNoteEditorDraft & {
         bodyLines: string[];
@@ -403,6 +404,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
     }
     naturalLines = [];
     naturalStartLine = null;
+    naturalStartedWithHeading = false;
   };
 
   normalizedLines.forEach((line, index) => {
@@ -433,12 +435,19 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
       const naturalLine = normalizeNaturalNoteLine(line);
       if (naturalLine.trim() === "") {
         if (hasNaturalNoteContent(naturalLines)) {
-          naturalLines.push("");
+          if (naturalStartedWithHeading) {
+            naturalLines.push("");
+          } else {
+            // Plain-text natural notes use blank lines as item separators so
+            // multiple paragraph notes do not collapse into one editor block.
+            flushNatural(index);
+          }
         }
         return;
       }
       if (naturalStartLine === null) {
         naturalStartLine = index + 1;
+        naturalStartedWithHeading = isNaturalHeadingLine(line);
       }
       naturalLines.push(naturalLine);
       return;
@@ -602,6 +611,9 @@ export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now
   const hasKnownSourcePath = normalizedDraft.sourcePath !== null && normalizedDraft.sourcePath.trim() !== "";
   const shouldPersistBucket = !hasKnownSourcePath || normalizedDraft.bucket !== sourceDefaultBucket || normalizedDraft.repeatRule !== "";
   const metadataLines = [
+    normalizedDraft.createdAt ? `created_at: ${normalizedDraft.createdAt}` : null,
+    normalizedDraft.updatedAt ? `updated_at: ${normalizedDraft.updatedAt}` : null,
+    normalizedDraft.endedAt ? `ended_at: ${normalizedDraft.endedAt}` : null,
     shouldPersistBucket ? `bucket: ${normalizedDraft.bucket}` : null,
     normalizedDraft.dueAt ? `due: ${normalizedDraft.dueAt}` : null,
     normalizedDraft.nextOccurrenceAt ? `next: ${normalizedDraft.nextOccurrenceAt}` : null,
@@ -630,6 +642,7 @@ export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now
       bucket: normalizedDraft.bucket,
       createdAt: normalizedDraft.createdAt,
       dueAt: normalizedDraft.dueAt,
+      endedAt: normalizedDraft.endedAt,
       extraMetadata: normalizedDraft.extraMetadata,
       nextOccurrenceAt: normalizedDraft.nextOccurrenceAt,
       noteText: normalizedDraft.noteText,

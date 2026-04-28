@@ -725,6 +725,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
   const items: NoteListItem[] = [];
   let naturalLines: string[] = [];
   let naturalStartLine: number | null = null;
+  let naturalStartedWithHeading = false;
   let current:
     | {
         agentSuggestion: string | null;
@@ -812,6 +813,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     }
     naturalLines = [];
     naturalStartLine = null;
+    naturalStartedWithHeading = false;
   };
 
   lines.forEach((line, index) => {
@@ -847,12 +849,19 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
       const naturalLine = normalizeSourceNaturalNoteLine(line);
       if (naturalLine.trim() === "") {
         if (hasSourceNaturalNoteContent(naturalLines)) {
-          naturalLines.push("");
+          if (naturalStartedWithHeading) {
+            naturalLines.push("");
+          } else {
+            // Renderer-local fallback cards must follow the same paragraph
+            // boundary rule as the backend inspector for plain-text notes.
+            flushNatural();
+          }
         }
         return;
       }
       if (naturalStartLine === null) {
         naturalStartLine = index + 1;
+        naturalStartedWithHeading = isSourceNaturalHeadingLine(line);
       }
       naturalLines.push(naturalLine);
       return;

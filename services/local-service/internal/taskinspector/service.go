@@ -397,6 +397,7 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 	noteLines := make([]string, 0)
 	naturalLines := make([]string, 0)
 	naturalStartLine := 0
+	naturalStartedWithHeading := false
 	pendingNoteSpacer := false
 	flushCurrent := func() {
 		if current == nil {
@@ -426,6 +427,7 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 		}
 		naturalLines = naturalLines[:0]
 		naturalStartLine = 0
+		naturalStartedWithHeading = false
 	}
 
 	for index, line := range lines {
@@ -449,12 +451,20 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 			naturalLine := normalizeNaturalNotepadLine(line)
 			if strings.TrimSpace(naturalLine) == "" {
 				if hasNaturalNotepadContent(naturalLines) {
-					naturalLines = append(naturalLines, "")
+					if naturalStartedWithHeading {
+						naturalLines = append(naturalLines, "")
+					} else {
+						// Heading-less natural notes treat paragraph breaks as
+						// item boundaries so plain-text source files can hold
+						// multiple notes without requiring markdown headings.
+						flushNatural()
+					}
 				}
 				continue
 			}
 			if !hasNaturalNotepadContent(naturalLines) {
 				naturalStartLine = index + 1
+				naturalStartedWithHeading = isNaturalNotepadHeadingLine(line)
 			}
 			naturalLines = append(naturalLines, naturalLine)
 			continue
