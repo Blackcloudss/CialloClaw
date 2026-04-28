@@ -517,10 +517,7 @@ fn normalize_new_source_note_block(content: &str) -> String {
         return "- [ ] New note\n\nAdd details here".to_string();
     }
 
-    if normalized
-        .lines()
-        .any(is_top_level_checklist_line)
-    {
+    if first_non_empty_line_is_top_level_checklist(&normalized) {
         return trimmed.to_string();
     }
 
@@ -542,7 +539,11 @@ fn normalize_new_source_note_block(content: &str) -> String {
         .skip(first_non_empty_index + 1)
         .copied()
         .collect::<Vec<_>>();
-    let rest = trim_boundary_blank_lines(&rest).join("\n");
+    let rest = trim_boundary_blank_lines(&rest)
+        .into_iter()
+        .map(serialize_checklist_body_line)
+        .collect::<Vec<_>>()
+        .join("\n");
 
     if rest.is_empty() {
         format!("- [ ] {title}")
@@ -582,6 +583,21 @@ fn is_top_level_checklist_line(line: &str) -> bool {
         return false;
     }
     parse_checklist_title(trimmed_right).is_some()
+}
+
+fn first_non_empty_line_is_top_level_checklist(content: &str) -> bool {
+    content
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .is_some_and(is_top_level_checklist_line)
+}
+
+fn serialize_checklist_body_line(line: &str) -> String {
+    if line.is_empty() {
+        String::new()
+    } else {
+        format!("  {line}")
+    }
 }
 
 fn trim_boundary_blank_lines<'a>(lines: &'a [&'a str]) -> Vec<&'a str> {
@@ -692,7 +708,7 @@ mod tests {
     fn normalize_new_source_note_block_keeps_plain_notes_natural() {
         let block = normalize_new_source_note_block("整理发布说明\n补充影响范围");
 
-        assert_eq!(block, "- [ ] 整理发布说明\n\n补充影响范围");
+        assert_eq!(block, "- [ ] 整理发布说明\n\n  补充影响范围");
         assert!(!block.contains("bucket:"));
         assert!(!block.contains("note:"));
     }
@@ -704,7 +720,7 @@ mod tests {
 
         assert_eq!(
             block,
-            "- [ ] 整理发布说明\n\n    const answer = 42;\n  - nested item"
+            "- [ ] 整理发布说明\n\n      const answer = 42;\n    - nested item"
         );
     }
 
@@ -712,7 +728,29 @@ mod tests {
     fn normalize_new_source_note_block_does_not_treat_indented_checklists_as_top_level_blocks() {
         let block = normalize_new_source_note_block("Release prep\n  - [ ] verify changelog\n");
 
-        assert_eq!(block, "- [ ] Release prep\n\n  - [ ] verify changelog");
+        assert_eq!(block, "- [ ] Release prep\n\n    - [ ] verify changelog");
+    }
+
+    #[test]
+    fn normalize_new_source_note_block_keeps_metadata_shaped_body_lines_as_body_content() {
+        let block =
+            normalize_new_source_note_block("Release prep\n\ndue: keep visible\nbucket: later\n");
+
+        assert_eq!(
+            block,
+            "- [ ] Release prep\n\n  due: keep visible\n  bucket: later"
+        );
+    }
+
+    #[test]
+    fn normalize_new_source_note_block_keeps_top_level_checklists_inside_natural_body() {
+        let block =
+            normalize_new_source_note_block("Release prep\n- [ ] verify changelog\n- [ ] update docs\n");
+
+        assert_eq!(
+            block,
+            "- [ ] Release prep\n\n  - [ ] verify changelog\n  - [ ] update docs"
+        );
     }
 
     fn unique_temp_path(name: &str) -> PathBuf {
