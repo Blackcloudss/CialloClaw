@@ -688,7 +688,9 @@ func applyNaturalNotepadHints(item map[string]any, text string, now time.Time) {
 	if hasNaturalRepeatHint(lower) {
 		item["bucket"] = notepadBucketRecurringRule
 		item["type"] = "recurring"
-		item["repeat_rule_text"] = strings.TrimSpace(text)
+		if repeatRuleText := extractNaturalRepeatRuleText(text); repeatRuleText != "" {
+			item["repeat_rule_text"] = repeatRuleText
+		}
 	}
 	if hasNaturalLaterHint(lower) && stringValue(item, "bucket") != notepadBucketRecurringRule {
 		item["bucket"] = notepadBucketLater
@@ -718,6 +720,19 @@ func hasNaturalLaterHint(lowerText string) bool {
 		}
 	}
 	return false
+}
+
+func extractNaturalRepeatRuleText(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		normalized := strings.TrimSpace(normalizeNaturalNotepadLine(line))
+		if normalized == "" {
+			continue
+		}
+		if hasNaturalRepeatHint(strings.ToLower(normalized)) {
+			return normalized
+		}
+	}
+	return ""
 }
 
 func inferNaturalDueTime(lowerText string, now time.Time) string {
