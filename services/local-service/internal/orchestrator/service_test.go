@@ -12664,6 +12664,70 @@ func TestServiceStartTaskConfirmRequiredFileDoesNotContinueProcessingTask(t *tes
 	}
 }
 
+func TestServiceSubmitInputConfirmRequiredTextContinuesPendingTask(t *testing.T) {
+	var modelCalled bool
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_confirm_required_text_follow_up",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"decision":"new_task","task_id":"","reason":"model should not decide plain confirmation routing"}`,
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_confirm_text_waiting",
+		Title:       "Waiting for clarification",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "Use the latest customer impact numbers.",
+			"input_mode": "text",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit confirm-required text follow-up failed: %v", err)
+	}
+	if modelCalled {
+		t.Fatal("expected confirm-required text follow-up to use deterministic pending continuation")
+	}
+	task := result["task"].(map[string]any)
+	if task["task_id"] != activeTask.TaskID {
+		t.Fatalf("expected text follow-up to remain on waiting task %s, got %+v", activeTask.TaskID, task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected continued text follow-up to stay behind confirmation, got %+v", task)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected continued text follow-up to defer delivery_result, got %+v", result["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(activeTask.TaskID)
+	if !ok {
+		t.Fatal("expected continued text task to remain in runtime")
+	}
+	if record.Snapshot.Text != "Use the latest customer impact numbers." {
+		t.Fatalf("expected continued task to keep text follow-up, got %+v", record.Snapshot)
+	}
+}
+
 func TestFresherTaskRecordKeepsRuntimeSnapshotWhenStorageProjectionIsNewer(t *testing.T) {
 	runtimeUpdatedAt := time.Date(2026, 4, 29, 7, 0, 0, 0, time.UTC)
 	runtimeTask := runengine.TaskRecord{

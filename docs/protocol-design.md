@@ -639,6 +639,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.task.start` 不接受显式 `intent` 入参；若客户端误传该字段，协议层应忽略，并继续由后端结合 `input / context` 统一推断，不需要新增平行入口。
 - 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象，而不是要求前端自行猜测生命周期。
 - 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
+- 若同一 `session` 内只有一个 `waiting_input / confirming_intent` 任务，普通文本补充可续接到该任务；`options.confirm_required = true` 只表示本次补充后仍需确认，不应把普通文本补充机械拆成新 task。
+- 文件、选区、错误等结构化补充证据若要续接旧 task，仍必须存在共享页面 / 窗口 / App 锚点、共享选区 / 报错 / 附件血缘，或其他能证明属于旧任务的 lineage。
 
 ### agent.input.submit 入参示例
 

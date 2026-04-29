@@ -151,7 +151,7 @@ func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapsh
 		return decision
 	}
 	if options.ConfirmRequired {
-		return taskContinuationDecision{Decision: "new_task", Reason: "confirmation gate requires a new task without structured pending-task evidence"}
+		return taskContinuationDecision{Decision: "new_task", Reason: "confirmation gate requires a new task without unambiguous pending-task evidence"}
 	}
 	if decision, ok := s.modelTaskContinuationDecision(snapshot, explicitIntent, continuationContext, options); ok {
 		return decision
@@ -300,7 +300,18 @@ func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapsh
 		}, true
 	}
 	if options.ConfirmRequired {
-		return confirmationRequiredContinuationDecision(candidate, evidence)
+		if evidence.StructuredSupplement {
+			return confirmationRequiredStructuredContinuationDecision(candidate, evidence)
+		}
+		// Confirmation gates execution, not ownership of a plain text follow-up
+		// for a task that is already waiting on the user.
+		if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName); ok {
+			return decision, true
+		}
+		return taskContinuationDecision{
+			Decision: "new_task",
+			Reason:   "confirmation-required input lacks pending-task continuation evidence",
+		}, true
 	}
 	if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName); ok {
 		return decision, true
@@ -392,7 +403,16 @@ func uniqueTaskSpecificContinuationDecision(snapshot contextsvc.TaskContextSnaps
 
 func taskSpecificContinuationDecision(candidate runengine.TaskRecord, evidence taskContinuationEvidence, continuationContext taskContinuationContext, explicitIntentName string, options taskContinuationOptions) (taskContinuationDecision, bool) {
 	if options.ConfirmRequired {
-		return confirmationRequiredContinuationDecision(candidate, evidence)
+		if evidence.StructuredSupplement {
+			return confirmationRequiredStructuredContinuationDecision(candidate, evidence)
+		}
+		if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName); ok {
+			return decision, true
+		}
+		return taskContinuationDecision{
+			Decision: "new_task",
+			Reason:   "confirmation-required input lacks pending-task continuation evidence",
+		}, true
 	}
 	if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName); ok {
 		return decision, ok
@@ -407,17 +427,11 @@ func taskSpecificContinuationDecision(candidate runengine.TaskRecord, evidence t
 	return taskContinuationDecision{}, false
 }
 
-func confirmationRequiredContinuationDecision(candidate runengine.TaskRecord, evidence taskContinuationEvidence) (taskContinuationDecision, bool) {
+func confirmationRequiredStructuredContinuationDecision(candidate runengine.TaskRecord, evidence taskContinuationEvidence) (taskContinuationDecision, bool) {
 	if candidate.Status != "waiting_input" && candidate.Status != "confirming_intent" {
 		return taskContinuationDecision{
 			Decision: "new_task",
 			Reason:   "confirmation-required input cannot attach to an active execution task",
-		}, true
-	}
-	if !evidence.StructuredSupplement {
-		return taskContinuationDecision{
-			Decision: "new_task",
-			Reason:   "confirmation-required input lacks structured follow-up evidence for the pending task",
 		}, true
 	}
 	if !hasTaskSpecificContinuationEvidence(evidence) {
