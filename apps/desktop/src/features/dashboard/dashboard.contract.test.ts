@@ -1565,6 +1565,24 @@ test("source note editor accepts top-level checklist rows with up to three leadi
   assert.equal(blocks[0]?.noteText, "  - [ ] nested body line");
 });
 
+test("source note editor keeps later top-level checklist rows with up to three leading spaces separate", () => {
+  const { parseSourceNoteEditorBlocks } = loadSourceNoteEditorModule();
+  const note = {
+    content: "- [ ] First task\n   - [ ] Second task\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const blocks = parseSourceNoteEditorBlocks(note);
+
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0]?.title, "First task");
+  assert.equal(blocks[1]?.title, "Second task");
+});
+
 test("source note editor splits top-level checklist items away from natural notes", () => {
   const { parseSourceNoteEditorBlocks, upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
   const note = {
@@ -2017,6 +2035,40 @@ test("source note fallback accepts top-level checklist rows with up to three lea
   assert.equal(items.length, 1);
   assert.equal(items[0]?.item.title, "Release prep");
   assert.equal(items[0]?.item.note_text, "  - [ ] nested body line");
+});
+
+test("source note fallback keeps later top-level checklist rows with up to three leading spaces separate", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "- [ ] First task\n   - [ ] Second task\n",
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 2);
+  assert.equal(items[0]?.item.title, "First task");
+  assert.equal(items[1]?.item.title, "Second task");
+});
+
+test("source note fallback ignores bare headings outside the primary notes file", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "# Project Overview\n",
+    fileName: "README.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/README.md",
+    sourceRoot: "D:/workspace",
+    title: "README",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 0);
 });
 
 test("source note fallback ignores scheduling hints that only appear in natural note body text", () => {

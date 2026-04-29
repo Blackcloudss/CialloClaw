@@ -401,6 +401,10 @@ function isIndentedSourceLine(line: string) {
   return /^\s/.test(line);
 }
 
+function isNestedSourceChecklistBodyLine(line: string) {
+  return /^\t/.test(line) || /^ {4,}/.test(line);
+}
+
 function normalizeSourceChecklistBodyLine(line: string) {
   const trimmedRight = line.trimEnd();
   if (trimmedRight.startsWith("  ")) {
@@ -464,6 +468,26 @@ function splitSourceNaturalNoteContent(lines: string[]) {
     noteText: trimSourceBoundaryBlankLines(normalized.slice(1)).join("\n"),
     title: normalized[0]?.trim() ?? "",
   };
+}
+
+function shouldMaterializeSourceNaturalFallback(note: SourceNoteDocument, lines: string[], startedWithHeading: boolean) {
+  const trimmedLines = trimSourceBoundaryBlankLines(lines);
+  if (trimmedLines.length === 0) {
+    return false;
+  }
+  if (!startedWithHeading) {
+    return true;
+  }
+  if (trimmedLines.slice(1).some((line) => line.trim() !== "")) {
+    return true;
+  }
+  if (note.fileName.trim().toLowerCase() === "notes.md") {
+    return true;
+  }
+
+  const hintScope = extractSourceNaturalHintScopeText(trimmedLines.join("\n"));
+  const lowerHint = hintScope.toLowerCase();
+  return hasSourceNaturalRepeatHint(lowerHint) || hasSourceNaturalLaterHint(lowerHint) || inferSourceNaturalDueTime(lowerHint, new Date()) !== null;
 }
 
 function splitSourceMetadataLine(line: string) {
@@ -900,7 +924,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
   };
   const flushNatural = () => {
     const naturalContent = splitSourceNaturalNoteContent(naturalLines);
-    if (naturalContent && naturalStartLine !== null) {
+    if (naturalContent && naturalStartLine !== null && shouldMaterializeSourceNaturalFallback(note, naturalLines, naturalStartedWithHeading)) {
       const inferred = inferSourceNaturalFallbackFields(naturalLines.join("\n"), note.path);
       current = {
         agentSuggestion: null,
@@ -928,7 +952,11 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
   };
 
   lines.forEach((line, index) => {
-    const checklist = current && isIndentedSourceLine(line) ? null : parseSourceChecklistLine(line);
+    const shouldTreatAsBodyChecklist =
+      current !== null
+      && isIndentedSourceLine(line)
+      && (current.bodyLines.length > 0 || current.noteMetadataText !== null);
+    const checklist = current && (isNestedSourceChecklistBodyLine(line) || shouldTreatAsBodyChecklist) ? null : parseSourceChecklistLine(line);
     // Only top-level checklist rows start fallback cards; indented rows stay in
     // the current card body to match editor serialization and backend parsing.
     if (checklist) {

@@ -1869,7 +1869,7 @@ func TestTaskInspectorRunSyncsNaturalHeadingSourceBackedNotes(t *testing.T) {
 	if err := os.MkdirAll(todosDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll returned error: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(todosDir, "heading.md"), []byte("# no checklist items here\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(todosDir, "notes.md"), []byte("# no checklist items here\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 	if _, err := service.TaskInspectorRun(map[string]any{"target_sources": []any{"workspace/todos"}}); err != nil {

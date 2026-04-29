@@ -607,6 +607,42 @@ func TestServiceRunAcceptsTopLevelChecklistWithThreeLeadingSpaces(t *testing.T) 
 	}
 }
 
+func TestServiceRunKeepsLaterTopLevelChecklistWithThreeLeadingSpacesSeparate(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] First task",
+		"   - [ ] Second task",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "tasks.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if len(result.NotepadItems) != 2 {
+		t.Fatalf("expected both top-level checklist rows to stay separate, got %+v", result.NotepadItems)
+	}
+	if result.NotepadItems[0]["title"] != "First task" {
+		t.Fatalf("expected first item title to stay intact, got %+v", result.NotepadItems[0])
+	}
+	if result.NotepadItems[1]["title"] != "Second task" {
+		t.Fatalf("expected second indented top-level item to stay separate, got %+v", result.NotepadItems[1])
+	}
+}
+
 func TestServiceRunParsesNaturalMarkdownNotesWithoutMetadata(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
@@ -658,6 +694,32 @@ func TestServiceRunParsesNaturalMarkdownNotesWithoutMetadata(t *testing.T) {
 	later := result.NotepadItems[3]
 	if later["bucket"] != notepadBucketLater {
 		t.Fatalf("expected natural later hint to infer later bucket, got %+v", later)
+	}
+}
+
+func TestServiceRunIgnoresBareHelperHeadingsOutsidePrimaryNotesFile(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "README.md"), []byte("# Project Overview\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if len(result.NotepadItems) != 0 {
+		t.Fatalf("expected helper markdown headings to stay out of synced notes, got %+v", result.NotepadItems)
 	}
 }
 

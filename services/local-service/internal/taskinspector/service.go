@@ -420,7 +420,7 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 			return
 		}
 		title, noteText := splitNaturalNoteContent(naturalLines)
-		if title != "" {
+		if title != "" && shouldMaterializeNaturalNotepadItem(sourcePath, naturalLines, naturalStartedWithHeading, now) {
 			item := buildSourceBackedNotepadItem(sourcePath, naturalStartLine, title, false, now)
 			if noteText != "" {
 				item["note_text"] = noteText
@@ -438,7 +438,11 @@ func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []
 		// Only top-level checklist rows create structured notepad items; indented
 		// rows belong to the current body so editor-saved notes round-trip.
 		checked, title, ok := false, "", false
-		if current == nil || !isIndentedMarkdownLine(line) {
+		allowChecklistLine := current == nil || !isNestedMarkdownChecklistBodyLine(line)
+		if current != nil && isIndentedMarkdownLine(line) && (len(noteLines) > 0 || noteMetadataText != "") {
+			allowChecklistLine = false
+		}
+		if allowChecklistLine {
 			checked, title, ok = parseChecklistLine(line)
 		}
 		if ok {
@@ -536,6 +540,10 @@ func parseChecklistLine(line string) (bool, string, bool) {
 
 func isIndentedMarkdownLine(line string) bool {
 	return strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")
+}
+
+func isNestedMarkdownChecklistBodyLine(line string) bool {
+	return strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "    ")
 }
 
 func normalizeNotepadChecklistBodyLine(line string) string {
@@ -670,6 +678,27 @@ func splitNaturalNoteContent(lines []string) (string, string) {
 	}
 	bodyLines := trimNaturalNotepadBlankLines(normalized[1:])
 	return title, strings.Join(bodyLines, "\n")
+}
+
+func shouldMaterializeNaturalNotepadItem(sourcePath string, lines []string, startedWithHeading bool, now time.Time) bool {
+	trimmedLines := trimNaturalNotepadBlankLines(lines)
+	if len(trimmedLines) == 0 {
+		return false
+	}
+	if !startedWithHeading {
+		return true
+	}
+	for _, line := range trimmedLines[1:] {
+		if strings.TrimSpace(line) != "" {
+			return true
+		}
+	}
+	if strings.EqualFold(path.Base(sourcePath), "notes.md") {
+		return true
+	}
+	hintScope := naturalNotepadHintScopeText(strings.Join(trimmedLines, "\n"))
+	lower := strings.ToLower(hintScope)
+	return hasNaturalRepeatHint(lower) || hasNaturalLaterHint(lower) || inferNaturalDueTime(lower, now) != ""
 }
 
 // trimNaturalNotepadBlankLines preserves paragraph gaps inside a natural note

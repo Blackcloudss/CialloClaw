@@ -578,10 +578,14 @@ fn parse_checklist_title(line: &str) -> Option<&str> {
 
 fn is_top_level_checklist_line(line: &str) -> bool {
     let trimmed_right = line.trim_end();
-    if trimmed_right.starts_with(' ') || trimmed_right.starts_with('\t') {
+    if trimmed_right.starts_with('\t') || trimmed_right.starts_with("    ") {
         return false;
     }
-    parse_checklist_title(trimmed_right).is_some()
+    let normalized = trimmed_right.trim_start_matches(' ');
+    if trimmed_right.len().saturating_sub(normalized.len()) > 3 {
+        return false;
+    }
+    parse_checklist_title(normalized).is_some()
 }
 
 fn trim_boundary_blank_lines<'a>(lines: &'a [&'a str]) -> Vec<&'a str> {
@@ -713,6 +717,13 @@ mod tests {
         let block = normalize_new_source_note_block("Release prep\n  - [ ] verify changelog\n");
 
         assert_eq!(block, "- [ ] Release prep\n\n  - [ ] verify changelog");
+    }
+
+    #[test]
+    fn normalize_new_source_note_block_preserves_top_level_checklists_with_three_leading_spaces() {
+        let block = normalize_new_source_note_block("   - [ ] Release prep\n");
+
+        assert_eq!(block, "- [ ] Release prep");
     }
 
     fn unique_temp_path(name: &str) -> PathBuf {

@@ -46,6 +46,10 @@ function isIndentedSourceNoteLine(line: string) {
   return /^\s/.test(line);
 }
 
+function isNestedSourceChecklistBodyLine(line: string) {
+  return /^\t/.test(line) || /^ {4,}/.test(line);
+}
+
 function normalizeNaturalNoteLine(line: string) {
   const trimmedRight = line.trimEnd();
   const trimmed = trimmedRight.trim();
@@ -453,7 +457,11 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
   };
 
   normalizedLines.forEach((line, index) => {
-    const checklist = current && isIndentedSourceNoteLine(line) ? null : parseChecklistLine(line);
+    const shouldTreatAsBodyChecklist =
+      current !== null
+      && isIndentedSourceNoteLine(line)
+      && (current.bodyLines.length > 0 || current.noteMetadataText !== "");
+    const checklist = current && (isNestedSourceChecklistBodyLine(line) || shouldTreatAsBodyChecklist) ? null : parseChecklistLine(line);
     // Only top-level checklist rows start structured blocks; indented rows are
     // body content written by the editor for round-trip-safe natural notes.
     if (checklist) {
