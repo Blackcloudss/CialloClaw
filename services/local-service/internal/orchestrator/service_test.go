@@ -12552,6 +12552,12 @@ func TestServiceStartTaskConfirmRequiredFileContinuesWaitingInputTask(t *testing
 		Status:      "waiting_input",
 		CurrentStep: "collect_input",
 		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
 	})
 	activeTaskID = activeTask.TaskID
 
@@ -12561,6 +12567,11 @@ func TestServiceStartTaskConfirmRequiredFileContinuesWaitingInputTask(t *testing
 		"input": map[string]any{
 			"type":  "file",
 			"files": []string{"logs/network.log"},
+			"page_context": map[string]any{
+				"app_name": "desktop",
+				"title":    "Quick Intake",
+				"url":      "local://shell-ball",
+			},
 		},
 		"options": map[string]any{
 			"confirm_required": true,
@@ -12588,6 +12599,9 @@ func TestServiceStartTaskConfirmRequiredFileContinuesWaitingInputTask(t *testing
 	}
 	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "logs/network.log" {
 		t.Fatalf("expected continued waiting-input task to retain file evidence, got %+v", record.Snapshot.Files)
+	}
+	if record.Snapshot.PageURL != "https://example.com/build" || record.Snapshot.AppName != "Chrome" {
+		t.Fatalf("expected shell-ball intake anchor not to replace original page context, got %+v", record.Snapshot)
 	}
 }
 

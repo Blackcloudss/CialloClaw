@@ -265,6 +265,43 @@ func TestClassifyTaskContinuationRejectsWaitingTaskWhenAnchorsConflict(t *testin
 	}
 }
 
+func TestClassifyTaskContinuationIgnoresShellBallAnchorForStructuredPendingEvidence(t *testing.T) {
+	service := newTestService()
+	service.model = nil
+
+	decision := service.classifyTaskContinuation(
+		contextsvc.TaskContextSnapshot{
+			Trigger:   "file_drop",
+			InputType: "file",
+			Files:     []string{"logs/network.log"},
+			PageTitle: "Quick Intake",
+			PageURL:   "local://shell-ball",
+			AppName:   "desktop",
+		},
+		nil,
+		taskContinuationContext{
+			SessionMode: "implicit_active",
+			Candidates: []runengine.TaskRecord{{
+				TaskID:      "task_001",
+				Status:      "waiting_input",
+				CurrentStep: "collect_input",
+				UpdatedAt:   time.Now().Add(-10 * time.Second),
+				Snapshot: contextsvc.TaskContextSnapshot{
+					PageTitle:   "Build Dashboard",
+					PageURL:     "https://example.com/build-a",
+					AppName:     "Chrome",
+					WindowTitle: "Browser - Build Dashboard",
+				},
+			}},
+		},
+		taskContinuationOptions{ConfirmRequired: true},
+	)
+
+	if decision.Decision != "continue" || decision.TaskID != "task_001" {
+		t.Fatalf("expected shell-ball file intake to continue the pending anchored task, got %+v", decision)
+	}
+}
+
 func TestClassifyTaskContinuationContinuesProcessingTaskOnStrongAttachmentEvidence(t *testing.T) {
 	service := newTestService()
 	service.model = nil

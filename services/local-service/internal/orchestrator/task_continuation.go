@@ -399,12 +399,13 @@ func buildTaskContinuationEvidence(current, previous contextsvc.TaskContextSnaps
 	sharedFiles := sharedContinuationFiles(current.Files, previous.Files)
 	sameWindowAnchor := sameNonEmpty(current.WindowTitle, previous.WindowTitle) && sameNonEmpty(current.AppName, previous.AppName)
 	samePageAnchor := sameNonEmpty(current.PageTitle, previous.PageTitle) && sameNonEmpty(current.AppName, previous.AppName)
+	structuredSupplement := isStructuredSupplementInput(current)
 
 	return taskContinuationEvidence{
 		HasStrongAnchor:          samePageURL || sameHoverTarget || sameWindowAnchor || samePageAnchor || sameSelectionText || sameErrorText || sharedFiles,
 		HasLineageMatch:          sameSelectionText || sameErrorText || sharedFiles,
-		HasConflictingAnchor:     hasConflictingContextAnchor(current, previous),
-		StructuredSupplement:     isStructuredSupplementInput(current),
+		HasConflictingAnchor:     hasConflictingContextAnchor(current, previous, structuredSupplement),
+		StructuredSupplement:     structuredSupplement,
 		CurrentHasContextAnchor:  hasSnapshotContextAnchor(current),
 		PreviousHasContextAnchor: hasSnapshotContextAnchor(previous),
 	}
@@ -444,7 +445,10 @@ func hasSnapshotContextAnchor(snapshot contextsvc.TaskContextSnapshot) bool {
 		strings.TrimSpace(snapshot.HoverTarget) != ""
 }
 
-func hasConflictingContextAnchor(current, previous contextsvc.TaskContextSnapshot) bool {
+func hasConflictingContextAnchor(current, previous contextsvc.TaskContextSnapshot, structuredSupplement bool) bool {
+	if structuredSupplement && isShellBallIntakeAnchor(current) {
+		current = withoutShellBallIntakeAnchor(current)
+	}
 	if nonEmptyAndDifferent(current.PageURL, previous.PageURL) {
 		return true
 	}
@@ -457,6 +461,22 @@ func hasConflictingContextAnchor(current, previous contextsvc.TaskContextSnapsho
 		return true
 	}
 	return false
+}
+
+// isShellBallIntakeAnchor identifies the frontend's default shell-ball wrapper
+// context. It is an intake surface marker, not evidence that the user's active
+// work context moved away from the pending task.
+func isShellBallIntakeAnchor(snapshot contextsvc.TaskContextSnapshot) bool {
+	return strings.TrimSpace(snapshot.PageURL) == "local://shell-ball" &&
+		strings.EqualFold(strings.TrimSpace(snapshot.AppName), "desktop")
+}
+
+func withoutShellBallIntakeAnchor(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+	snapshot.PageTitle = ""
+	snapshot.PageURL = ""
+	snapshot.AppName = ""
+	snapshot.WindowTitle = ""
+	return snapshot
 }
 
 func sharedContinuationFiles(current, previous []string) bool {
@@ -500,11 +520,12 @@ func (s *Service) continueTask(task runengine.TaskRecord, snapshot contextsvc.Ta
 		return s.continuePendingTask(task, snapshot, explicitIntent, options)
 	}
 
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", buildTaskContinuationBubbleText(snapshot, decision), time.Now().Format(dateTimeLayout))
+	continuationSnapshot := sanitizeContinuationUpdateSnapshot(snapshotFromTask(task), snapshot)
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", buildTaskContinuationBubbleText(continuationSnapshot, decision), time.Now().Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
-		Snapshot:        snapshot,
+		Snapshot:        continuationSnapshot,
 		BubbleMessage:   bubble,
-		SteeringMessage: buildTaskContinuationInstruction(snapshot, explicitIntent),
+		SteeringMessage: buildTaskContinuationInstruction(continuationSnapshot, explicitIntent),
 	})
 	if !changed {
 		return nil, ErrTaskNotFound
@@ -517,11 +538,13 @@ func (s *Service) continueTask(task runengine.TaskRecord, snapshot contextsvc.Ta
 }
 
 func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (map[string]any, error) {
-	mergedSnapshot := mergeContinuationSnapshots(snapshotFromTask(task), snapshot)
+	baseSnapshot := snapshotFromTask(task)
+	continuationSnapshot := sanitizeContinuationUpdateSnapshot(baseSnapshot, snapshot)
+	mergedSnapshot := mergeContinuationSnapshots(baseSnapshot, continuationSnapshot)
 	if s.intent.AnalyzeSnapshot(mergedSnapshot) == "waiting_input" {
 		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已把补充内容挂回当前任务，请继续补充剩余信息。", time.Now().Format(dateTimeLayout))
 		updatedTask, changed := s.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
-			Snapshot:      snapshot,
+			Snapshot:      continuationSnapshot,
 			Status:        "waiting_input",
 			CurrentStep:   firstNonEmptyString(task.CurrentStep, "collect_input"),
 			BubbleMessage: bubble,
@@ -540,7 +563,7 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contex
 	suggestion = s.normalizeSuggestedIntentForAvailability(mergedSnapshot, suggestion, options.ConfirmRequired)
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), time.Now().Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
-		Snapshot:      snapshot,
+		Snapshot:      continuationSnapshot,
 		Title:         suggestion.TaskTitle,
 		Intent:        suggestion.Intent,
 		Status:        taskStatusForSuggestion(suggestion.RequiresConfirm),
@@ -711,7 +734,18 @@ func (s *Service) sessionHasRecentRuntimeTask(sessionID, group string) bool {
 	return false
 }
 
+func sanitizeContinuationUpdateSnapshot(base, update contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+	if hasSnapshotContextAnchor(base) && isStructuredSupplementInput(update) && isShellBallIntakeAnchor(update) {
+		// Shell-ball default anchors describe how supplemental evidence entered
+		// the system; they must not replace the real page/app anchors of the
+		// pending task that asked for the evidence.
+		return withoutShellBallIntakeAnchor(update)
+	}
+	return update
+}
+
 func mergeContinuationSnapshots(base, update contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+	update = sanitizeContinuationUpdateSnapshot(base, update)
 	merged := base
 	merged.Source = pickContinuationValue(base.Source, update.Source)
 	merged.Trigger = pickContinuationValue(base.Trigger, update.Trigger)
