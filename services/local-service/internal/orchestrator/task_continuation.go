@@ -331,8 +331,9 @@ func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapsh
 }
 
 // pendingTaskContinuationDecision keeps waiting tasks open for plain textual
-// follow-up while requiring structured objects to prove task-specific lineage
-// or context anchors before they can attach to the pending task.
+// follow-up in the active session while requiring structured objects to prove
+// task-specific lineage or context anchors before they can attach to the
+// pending task.
 func pendingTaskContinuationDecision(candidate runengine.TaskRecord, evidence taskContinuationEvidence, continuationContext taskContinuationContext, explicitIntentName string) (taskContinuationDecision, bool) {
 	if candidate.Status != "waiting_input" && candidate.Status != "confirming_intent" {
 		return taskContinuationDecision{}, false
@@ -350,11 +351,11 @@ func pendingTaskContinuationDecision(candidate runengine.TaskRecord, evidence ta
 			Reason:   "structured follow-up evidence belongs to the pending task",
 		}, true
 	}
-	if continuationContext.SessionMode == "explicit_active" && explicitIntentName == "" {
+	if plainTextCanUseActivePendingSession(continuationContext, explicitIntentName) {
 		return taskContinuationDecision{
 			Decision: "continue",
 			TaskID:   candidate.TaskID,
-			Reason:   "explicit session task is already waiting for follow-up input",
+			Reason:   "active session task is already waiting for plain-text follow-up input",
 		}, true
 	}
 	if evidence.HasStrongAnchor || (!evidence.CurrentHasContextAnchor && !evidence.PreviousHasContextAnchor && explicitIntentName == "") {
@@ -365,6 +366,13 @@ func pendingTaskContinuationDecision(candidate runengine.TaskRecord, evidence ta
 		}, true
 	}
 	return taskContinuationDecision{}, false
+}
+
+func plainTextCanUseActivePendingSession(continuationContext taskContinuationContext, explicitIntentName string) bool {
+	if explicitIntentName != "" || len(continuationContext.Candidates) != 1 {
+		return false
+	}
+	return continuationContext.SessionMode == "explicit_active" || continuationContext.SessionMode == "implicit_active"
 }
 
 // uniqueTaskSpecificContinuationDecision preserves structured follow-up routing
