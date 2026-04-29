@@ -3522,6 +3522,12 @@ func fresherTaskRecord(runtimeTask, storageTask runengine.TaskRecord) runengine.
 	if storageTask.FinishedAt != nil && runtimeTask.FinishedAt == nil {
 		return storageTask
 	}
+	if !isEmptySnapshot(runtimeTask.Snapshot) && isEmptySnapshot(storageTask.Snapshot) {
+		// Runtime snapshots keep the near-field context needed by continuation
+		// classification; an equally fresh storage projection must not erase
+		// those anchors before the pending-task decision runs.
+		return runtimeTask
+	}
 	return storageTask
 }
 

@@ -341,11 +341,25 @@ func confirmationRequiredContinuationDecision(candidate runengine.TaskRecord, ev
 			Reason:   "confirmation-required input lacks structured follow-up evidence for the pending task",
 		}, true
 	}
+	if !hasPendingTaskContinuationEvidence(evidence) {
+		return taskContinuationDecision{
+			Decision: "new_task",
+			Reason:   "confirmation-required structured input lacks task-specific continuation evidence",
+		}, true
+	}
 	return taskContinuationDecision{
 		Decision: "continue",
 		TaskID:   candidate.TaskID,
 		Reason:   "structured follow-up evidence belongs to the pending task",
 	}, true
+}
+
+// hasPendingTaskContinuationEvidence keeps confirmation-required supplements
+// from merging into the lone pending task solely because they are structured.
+// The input must still prove it belongs to that task through lineage or a
+// compatible page/window/object anchor.
+func hasPendingTaskContinuationEvidence(evidence taskContinuationEvidence) bool {
+	return evidence.HasLineageMatch || evidence.HasStrongAnchor
 }
 
 // explicitIntentRequiresFreshTask treats agent.task.start explicit intents as a

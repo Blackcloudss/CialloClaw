@@ -12494,8 +12494,9 @@ func TestServiceStartTaskConfirmRequiredFileDoesNotContinueProcessingTask(t *tes
 	activeTaskID = activeTask.TaskID
 
 	startResult, err := service.StartTask(map[string]any{
-		"source":  "floating_ball",
-		"trigger": "file_drop",
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
 		"input": map[string]any{
 			"type":  "file",
 			"text":  "先让我确认再处理这个文件",
@@ -12562,15 +12563,16 @@ func TestServiceStartTaskConfirmRequiredFileContinuesWaitingInputTask(t *testing
 	activeTaskID = activeTask.TaskID
 
 	startResult, err := service.StartTask(map[string]any{
-		"source":  "floating_ball",
-		"trigger": "file_drop",
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
 		"input": map[string]any{
 			"type":  "file",
 			"files": []string{"logs/network.log"},
 			"page_context": map[string]any{
-				"app_name": "desktop",
-				"title":    "Quick Intake",
-				"url":      "local://shell-ball",
+				"app_name": "Chrome",
+				"title":    "Build Dashboard",
+				"url":      "https://example.com/build",
 			},
 		},
 		"options": map[string]any{
@@ -12601,7 +12603,81 @@ func TestServiceStartTaskConfirmRequiredFileContinuesWaitingInputTask(t *testing
 		t.Fatalf("expected continued waiting-input task to retain file evidence, got %+v", record.Snapshot.Files)
 	}
 	if record.Snapshot.PageURL != "https://example.com/build" || record.Snapshot.AppName != "Chrome" {
-		t.Fatalf("expected shell-ball intake anchor not to replace original page context, got %+v", record.Snapshot)
+		t.Fatalf("expected continued file intake to preserve original page context, got %+v", record.Snapshot)
+	}
+}
+
+func TestServiceStartTaskConfirmRequiredFileStartsNewTaskWithoutPendingEvidence(t *testing.T) {
+	var activeTaskID string
+	modelCalled := false
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_confirm_required_unanchored_file",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"same task"}`, activeTaskID),
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_file_waiting_input",
+		Title:       "等待补充分析文件",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+	activeTaskID = activeTask.TaskID
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"files": []string{"logs/network.log"},
+			"page_context": map[string]any{
+				"app_name": "desktop",
+				"title":    "Quick Intake",
+				"url":      "local://shell-ball",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start unanchored confirm-required file task failed: %v", err)
+	}
+	if modelCalled {
+		t.Fatal("expected confirm-required unanchored file to avoid model continuation")
+	}
+	task := startResult["task"].(map[string]any)
+	if task["task_id"] == activeTaskID {
+		t.Fatalf("expected unanchored file intake to open a new task, got %+v", task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected unanchored file intake to wait for confirmation, got %+v", task)
+	}
+	record, ok := service.runEngine.GetTask(activeTaskID)
+	if !ok {
+		t.Fatal("expected original waiting task to remain in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected original waiting task not to receive unrelated files, got %+v", record.Snapshot.Files)
 	}
 }
 
