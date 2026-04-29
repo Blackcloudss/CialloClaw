@@ -795,6 +795,12 @@ func normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time
 	if stringValue(item, "planned_at") == "" {
 		item["planned_at"] = stringValue(item, "due_at")
 	}
+	if stringValue(item, "bucket") == notepadBucketClosed && stringValue(item, "status") != "completed" {
+		// Source-note editors already normalize an explicit closed bucket into a
+		// completed block. Keep backend sync aligned so manual source edits do
+		// not bounce between ended columns and non-completed task states.
+		item["status"] = "completed"
+	}
 	if stringValue(item, "status") == "completed" {
 		item["bucket"] = notepadBucketClosed
 		if stringValue(item, "ended_at") == "" {
