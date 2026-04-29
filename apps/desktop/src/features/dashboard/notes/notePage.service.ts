@@ -858,7 +858,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
     const checked = normalizeFallbackCheckedState(current.bucket, current.checked);
     const bucket = normalizeFallbackBucket(current.bucket, checked, note.path);
     const dueAt = normalizeFallbackMetadataTime(current.dueAt);
-    const endedAt = normalizeFallbackMetadataTime(current.endedAt) ?? (checked ? dueAt : null);
+    const endedAt = checked ? (normalizeFallbackMetadataTime(current.endedAt) ?? dueAt) : null;
     const nextOccurrenceAt = normalizeFallbackMetadataTime(current.nextOccurrenceAt);
     const item = {
       agent_suggestion: current.agentSuggestion ?? "等待巡检把这张便签同步成正式事项。",

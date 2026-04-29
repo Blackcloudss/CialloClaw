@@ -635,7 +635,10 @@ export function createSourceNoteEditorDraftSignature(draft: SourceNoteEditorDraf
 export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now = new Date()) {
   const normalizedNow = toIsoTimestamp(now);
   const derivedContent = deriveDraftTitleAndBody(draft);
-  const normalizedChecked = normalizeSourceNoteCheckedState(draft.bucket, derivedContent.checked);
+  const normalizedChecked = normalizeSourceNoteCheckedState(
+    draft.bucket,
+    draft.title.trim() === "" ? derivedContent.checked : false,
+  );
   const normalizedBucket = normalizeSourceNoteBucket(
     draft.bucket,
     normalizedChecked,
@@ -647,7 +650,7 @@ export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now
     bucket: normalizedBucket,
     checked: normalizedChecked,
     createdAt: draft.createdAt.trim() || normalizedNow,
-    endedAt: draft.endedAt.trim() || (normalizedChecked ? normalizedNow : ""),
+    endedAt: normalizedChecked ? (draft.endedAt.trim() || normalizedNow) : "",
     noteText: derivedContent.noteText,
     title: derivedContent.title,
     updatedAt: normalizedNow,

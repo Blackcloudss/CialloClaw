@@ -2127,6 +2127,30 @@ test("source note fallback consumes managed timestamp metadata without rendering
   assert.equal(items[0]?.item.ended_at, "2026-04-11T10:00:00.000Z");
 });
 
+test("source note fallback drops ended metadata for active checklist notes", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: [
+      "- [ ] Reopen note",
+      "bucket: later",
+      "ended_at: 2026-04-11T10:00:00.000Z",
+      "",
+    ].join("\n"),
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.bucket, "later");
+  assert.equal(items[0]?.item.status, "normal");
+  assert.equal(items[0]?.item.ended_at, null);
+});
+
 test("source note fallback normalizes shorthand due and next timestamps", () => {
   const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
   const note = {
@@ -2309,6 +2333,37 @@ test("source note editor normalizes an explicit closed bucket into a completed c
   assert.equal(serialized.normalizedDraft.bucket, "closed");
   assert.match(serialized.blockContent, /^bucket: closed$/m);
   assert.match(serialized.blockContent, /^ended_at: 2026-04-10T09:30:00.000Z$/m);
+});
+
+test("source note editor clears ended metadata when a closed note is moved back to an active bucket", () => {
+  const { serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
+
+  const serialized = serializeSourceNoteEditorDraft({
+    agentSuggestion: "",
+    bucket: "later",
+    checked: true,
+    createdAt: "2026-04-09T08:00:00.000Z",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "2026-04-10T09:00:00.000Z",
+    extraMetadata: [],
+    nextOccurrenceAt: "",
+    noteText: "",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "",
+    sourceLine: 1,
+    sourcePath: "D:/workspace/todos/later.md",
+    title: "Reopen note",
+    updatedAt: "2026-04-10T09:00:00.000Z",
+  }, new Date("2026-04-10T09:30:00.000Z"));
+
+  assert.equal(serialized.normalizedDraft.checked, false);
+  assert.equal(serialized.normalizedDraft.bucket, "later");
+  assert.equal(serialized.normalizedDraft.endedAt, "");
+  assert.match(serialized.blockContent, /^- \[ \] Reopen note$/m);
+  assert.doesNotMatch(serialized.blockContent, /^bucket: closed$/m);
+  assert.doesNotMatch(serialized.blockContent, /^ended_at:/m);
 });
 
 test("task page no longer exposes edit guidance and uses 安全总览 without anchors", () => {

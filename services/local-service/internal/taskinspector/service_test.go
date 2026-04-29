@@ -355,6 +355,44 @@ func TestServiceRunNormalizesExplicitClosedBucketToCompleted(t *testing.T) {
 	}
 }
 
+func TestServiceRunDropsEndedAtMetadataForActiveNotes(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] Reopen note",
+		"  bucket: later",
+		"  ended_at: 2026-04-11T10:00:00.000Z",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "reopen.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	service.now = func() time.Time { return time.Date(2026, 4, 12, 9, 30, 0, 0, time.UTC) }
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if len(result.NotepadItems) != 1 {
+		t.Fatalf("expected one parsed note, got %+v", result.NotepadItems)
+	}
+	item := result.NotepadItems[0]
+	if item["bucket"] != notepadBucketLater || item["status"] != "normal" {
+		t.Fatalf("expected reopened note to stay active, got %+v", item)
+	}
+	if item["ended_at"] != nil {
+		t.Fatalf("expected active note to drop ended_at metadata, got %+v", item)
+	}
+}
+
 func TestServiceRunCombinesNoteMetadataAndChecklistBody(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)

@@ -806,6 +806,8 @@ func normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time
 		if stringValue(item, "ended_at") == "" {
 			item["ended_at"] = now.UTC().Format(time.RFC3339)
 		}
+	} else {
+		delete(item, "ended_at")
 	}
 	return item
 }
