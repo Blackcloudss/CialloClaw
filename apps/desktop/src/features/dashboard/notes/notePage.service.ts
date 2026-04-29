@@ -602,6 +602,9 @@ function inferSourceNaturalFallbackFields(text: string, sourcePath: string | nul
 }
 
 function normalizeFallbackBucket(value: string | null, checked: boolean, sourcePath: string | null) {
+  if (checked) {
+    return "closed";
+  }
   if (value === "upcoming" || value === "later" || value === "recurring_rule" || value === "closed") {
     return value;
   }

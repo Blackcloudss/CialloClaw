@@ -2083,6 +2083,26 @@ test("source note fallback derives generic natural source items as upcoming", ()
   assert.equal(items[0]?.item.bucket, "upcoming");
 });
 
+test("source note fallback normalizes completed checklist cards to closed", () => {
+  const { buildSourceNoteFallbackItems, partitionNoteItemsByBucket } = loadNotePageServiceModule();
+  const note = {
+    content: "- [x] Weekly retro\nbucket: recurring_rule\nrepeat: every week\n",
+    fileName: "weekly.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/recurring/weekly.md",
+    sourceRoot: "D:/workspace",
+    title: "weekly",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+  const grouped = partitionNoteItemsByBucket(items);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.bucket, "closed");
+  assert.deepEqual(grouped.closed.map((item) => item.item.title), ["Weekly retro"]);
+  assert.equal(grouped.recurring_rule.length, 0);
+});
+
 test("source note editor preserves explicit later bucket outside later source roots", () => {
   const { upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
   const note = {
@@ -2115,6 +2135,42 @@ test("source note editor preserves explicit later bucket outside later source ro
   });
 
   assert.match(updated.content, /^bucket: later$/m);
+});
+
+test("source note editor normalizes completed buckets to closed before persistence", () => {
+  const { upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
+  const note = {
+    content: "- [ ] Weekly retro\nrepeat: every week\n",
+    fileName: "weekly.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/recurring/weekly.md",
+    sourceRoot: "D:/workspace",
+    title: "weekly",
+  };
+
+  const updated = upsertSourceNoteEditorBlock(note, {
+    agentSuggestion: "",
+    bucket: "recurring_rule",
+    checked: true,
+    createdAt: "",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "",
+    extraMetadata: [],
+    nextOccurrenceAt: "",
+    noteText: "",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "every week",
+    sourceLine: 1,
+    sourcePath: note.path,
+    title: "Weekly retro",
+    updatedAt: "",
+  });
+
+  assert.match(updated.content, /^- \[x\] Weekly retro$/m);
+  assert.match(updated.content, /^bucket: closed$/m);
+  assert.doesNotMatch(updated.content, /^bucket: recurring_rule$/m);
 });
 
 test("task page no longer exposes edit guidance and uses 安全总览 without anchors", () => {

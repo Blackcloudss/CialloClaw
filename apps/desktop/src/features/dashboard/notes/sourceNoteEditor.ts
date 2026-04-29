@@ -251,12 +251,35 @@ function getDefaultBucketForSourcePath(
   return "upcoming";
 }
 
+function normalizeSourceNoteBucket(
+  bucket: SourceNoteEditorDraft["bucket"],
+  checked: boolean,
+  sourcePath: string | null,
+  recurring: boolean,
+): SourceNoteEditorDraft["bucket"] {
+  if (checked) {
+    return "closed";
+  }
+  if (recurring) {
+    return "recurring_rule";
+  }
+  if (bucket === "upcoming" || bucket === "later") {
+    return bucket;
+  }
+  return getDefaultBucketForSourcePath(sourcePath, checked, recurring);
+}
+
 function buildDraftFromParsedBlock(block: SourceNoteEditorBlock, fallbackItem?: NoteListItem | null): SourceNoteEditorDraft {
   const fallbackDraft = fallbackItem ? buildSourceNoteEditorDraftFromItem(fallbackItem, block.sourcePath) : null;
 
   return {
     agentSuggestion: block.agentSuggestion || fallbackDraft?.agentSuggestion || "",
-    bucket: block.bucketIsExplicit ? block.bucket : (fallbackDraft?.bucket ?? block.bucket),
+    bucket: normalizeSourceNoteBucket(
+      block.bucketIsExplicit ? block.bucket : (fallbackDraft?.bucket ?? block.bucket),
+      block.checked,
+      block.sourcePath,
+      block.repeatRule !== "",
+    ),
     checked: block.checked,
     createdAt: block.createdAt || fallbackDraft?.createdAt || "",
     dueAt: block.dueAt || fallbackDraft?.dueAt || "",
@@ -602,9 +625,15 @@ export function createSourceNoteEditorDraftSignature(draft: SourceNoteEditorDraf
 export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now = new Date()) {
   const normalizedNow = toIsoTimestamp(now);
   const derivedContent = deriveDraftTitleAndBody(draft);
+  const normalizedBucket = normalizeSourceNoteBucket(
+    draft.bucket,
+    derivedContent.checked,
+    draft.sourcePath,
+    draft.repeatRule.trim() !== "",
+  );
   const normalizedDraft = createDraftSignaturePayload({
     ...draft,
-    bucket: draft.repeatRule.trim() !== "" ? "recurring_rule" : draft.bucket,
+    bucket: normalizedBucket,
     checked: derivedContent.checked,
     createdAt: draft.createdAt.trim() || normalizedNow,
     noteText: derivedContent.noteText,
