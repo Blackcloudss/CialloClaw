@@ -299,23 +299,11 @@ func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapsh
 	if options.ConfirmRequired {
 		return confirmationRequiredContinuationDecision(candidate, evidence)
 	}
+	if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName); ok {
+		return decision, true
+	}
 
 	switch candidate.Status {
-	case "waiting_input", "confirming_intent":
-		if continuationContext.SessionMode == "explicit_active" && explicitIntentName == "" {
-			return taskContinuationDecision{
-				Decision: "continue",
-				TaskID:   candidate.TaskID,
-				Reason:   "explicit session task is already waiting for follow-up input",
-			}, true
-		}
-		if evidence.HasStrongAnchor || evidence.StructuredSupplement || (!evidence.CurrentHasContextAnchor && !evidence.PreviousHasContextAnchor && explicitIntentName == "") {
-			return taskContinuationDecision{
-				Decision: "continue",
-				TaskID:   candidate.TaskID,
-				Reason:   "unfinished task is explicitly waiting for follow-up input",
-			}, true
-		}
 	case "processing":
 		if evidence.HasLineageMatch || (evidence.HasStrongAnchor && evidence.StructuredSupplement) {
 			return taskContinuationDecision{
@@ -324,6 +312,43 @@ func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapsh
 				Reason:   "strong continuation anchors match the active processing task",
 			}, true
 		}
+	}
+	return taskContinuationDecision{}, false
+}
+
+// pendingTaskContinuationDecision keeps waiting tasks open for plain textual
+// follow-up while requiring structured objects to prove task-specific lineage
+// or context anchors before they can attach to the pending task.
+func pendingTaskContinuationDecision(candidate runengine.TaskRecord, evidence taskContinuationEvidence, continuationContext taskContinuationContext, explicitIntentName string) (taskContinuationDecision, bool) {
+	if candidate.Status != "waiting_input" && candidate.Status != "confirming_intent" {
+		return taskContinuationDecision{}, false
+	}
+	if evidence.StructuredSupplement {
+		if !hasTaskSpecificContinuationEvidence(evidence) {
+			return taskContinuationDecision{
+				Decision: "new_task",
+				Reason:   "structured input lacks task-specific continuation evidence for the pending task",
+			}, true
+		}
+		return taskContinuationDecision{
+			Decision: "continue",
+			TaskID:   candidate.TaskID,
+			Reason:   "structured follow-up evidence belongs to the pending task",
+		}, true
+	}
+	if continuationContext.SessionMode == "explicit_active" && explicitIntentName == "" {
+		return taskContinuationDecision{
+			Decision: "continue",
+			TaskID:   candidate.TaskID,
+			Reason:   "explicit session task is already waiting for follow-up input",
+		}, true
+	}
+	if evidence.HasStrongAnchor || (!evidence.CurrentHasContextAnchor && !evidence.PreviousHasContextAnchor && explicitIntentName == "") {
+		return taskContinuationDecision{
+			Decision: "continue",
+			TaskID:   candidate.TaskID,
+			Reason:   "unfinished task is explicitly waiting for follow-up input",
+		}, true
 	}
 	return taskContinuationDecision{}, false
 }
@@ -341,7 +366,7 @@ func confirmationRequiredContinuationDecision(candidate runengine.TaskRecord, ev
 			Reason:   "confirmation-required input lacks structured follow-up evidence for the pending task",
 		}, true
 	}
-	if !hasPendingTaskContinuationEvidence(evidence) {
+	if !hasTaskSpecificContinuationEvidence(evidence) {
 		return taskContinuationDecision{
 			Decision: "new_task",
 			Reason:   "confirmation-required structured input lacks task-specific continuation evidence",
@@ -354,11 +379,11 @@ func confirmationRequiredContinuationDecision(candidate runengine.TaskRecord, ev
 	}, true
 }
 
-// hasPendingTaskContinuationEvidence keeps confirmation-required supplements
-// from merging into the lone pending task solely because they are structured.
-// The input must still prove it belongs to that task through lineage or a
-// compatible page/window/object anchor.
-func hasPendingTaskContinuationEvidence(evidence taskContinuationEvidence) bool {
+// hasTaskSpecificContinuationEvidence keeps structured inputs from merging into
+// the lone pending task solely because they are structured. The input must
+// still prove it belongs to that task through lineage or a compatible
+// page/window/object anchor.
+func hasTaskSpecificContinuationEvidence(evidence taskContinuationEvidence) bool {
 	return evidence.HasLineageMatch || evidence.HasStrongAnchor
 }
 

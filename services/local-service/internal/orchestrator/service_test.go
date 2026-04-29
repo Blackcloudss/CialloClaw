@@ -12464,6 +12464,57 @@ func TestServiceStartTaskRoutesDescribedFileAttachmentIntoExistingTask(t *testin
 	}
 }
 
+func TestServiceStartTaskDescribedFileStartsNewTaskWithoutPendingEvidence(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Attachment summary ready.")
+
+	waitingTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_file_pending_unanchored",
+		Title:       "Waiting for build dashboard evidence",
+		SourceType:  "hover_input",
+		Status:      "waiting_input",
+		CurrentStep: "collect_input",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": waitingTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "file_drop",
+		"input": map[string]any{
+			"type":  "file",
+			"text":  "summarize this attachment",
+			"files": []string{"logs/network.log"},
+		},
+		"options": map[string]any{
+			"confirm_required": false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start described file task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["task_id"] == waitingTask.TaskID {
+		t.Fatalf("expected unanchored described file to open a fresh task, got %+v", task)
+	}
+	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
+		t.Fatalf("expected described file task to execute as fresh work, got %+v", task)
+	}
+	record, ok := service.runEngine.GetTask(waitingTask.TaskID)
+	if !ok {
+		t.Fatal("expected original waiting task to remain in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected original waiting task not to receive unrelated files, got %+v", record.Snapshot.Files)
+	}
+}
+
 func TestServiceStartTaskConfirmRequiredFileDoesNotContinueProcessingTask(t *testing.T) {
 	var activeTaskID string
 	modelCalled := false
