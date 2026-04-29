@@ -1826,6 +1826,97 @@ test("source note editor keeps adjacent heading notes separate", () => {
   assert.equal(blocks[1]?.sourceLine, 2);
 });
 
+test("source note editor does not split natural notes on indented heading-like body lines", () => {
+  const { parseSourceNoteEditorBlocks, serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
+  const note = {
+    content: "# Release prep\n  # keep this in the body\n  still indented\n",
+    fileName: "notes.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/notes.md",
+    sourceRoot: "D:/workspace",
+    title: "notes",
+  };
+
+  const blocks = parseSourceNoteEditorBlocks(note);
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.title, "Release prep");
+  assert.equal(blocks[0]?.noteText, "  # keep this in the body\n  still indented");
+
+  const serialized = serializeSourceNoteEditorDraft({
+    agentSuggestion: "",
+    bucket: "upcoming",
+    checked: false,
+    createdAt: "",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "",
+    extraMetadata: [],
+    nextOccurrenceAt: "",
+    noteText: blocks[0]?.noteText ?? "",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "",
+    sourceLine: blocks[0]?.sourceLine ?? null,
+    sourcePath: note.path,
+    title: blocks[0]?.title ?? "",
+    updatedAt: "",
+  }, new Date("2026-04-10T09:30:00.000Z"));
+
+  assert.match(serialized.blockContent, /^ {4}# keep this in the body$/m);
+  assert.match(serialized.blockContent, /^ {4}still indented$/m);
+});
+
+test("source note editor round-trips resource, reminder, and tags metadata", () => {
+  const { parseSourceNoteEditorBlocks, serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
+  const note = {
+    content: [
+      "- [ ] Release prep",
+      "resource: workspace/specs/release.md",
+      "reminder: tomorrow morning",
+      "tags: launch, docs",
+      "",
+    ].join("\n"),
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/todos/tasks.md",
+    sourceRoot: "D:/workspace",
+    title: "tasks",
+  };
+
+  const block = parseSourceNoteEditorBlocks(note)[0];
+
+  assert.deepEqual(block?.extraMetadata, [
+    { key: "resource", value: "workspace/specs/release.md" },
+    { key: "reminder", value: "tomorrow morning" },
+    { key: "tags", value: "launch, docs" },
+  ]);
+
+  const serialized = serializeSourceNoteEditorDraft({
+    agentSuggestion: "",
+    bucket: block?.bucket ?? "upcoming",
+    checked: block?.checked ?? false,
+    createdAt: "",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "",
+    extraMetadata: block?.extraMetadata ?? [],
+    nextOccurrenceAt: "",
+    noteText: block?.noteText ?? "",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "",
+    sourceLine: block?.sourceLine ?? null,
+    sourcePath: note.path,
+    title: block?.title ?? "Release prep",
+    updatedAt: "",
+  }, new Date("2026-04-10T09:30:00.000Z"));
+
+  assert.match(serialized.blockContent, /^resource: workspace\/specs\/release\.md$/m);
+  assert.match(serialized.blockContent, /^reminder: tomorrow morning$/m);
+  assert.match(serialized.blockContent, /^tags: launch, docs$/m);
+});
+
 test("source note fallback mirrors natural scheduling hints before inspector sync", () => {
   const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
   const note = {
@@ -1937,6 +2028,24 @@ test("source note fallback derives generic source checklist items as upcoming", 
   assert.equal(items.length, 1);
   assert.equal(items[0]?.item.title, "Review report");
   assert.equal(items[0]?.item.bucket, "upcoming");
+});
+
+test("source note fallback keeps indented heading-like body lines inside the same note", () => {
+  const { buildSourceNoteFallbackItems } = loadNotePageServiceModule();
+  const note = {
+    content: "# Release prep\n  # keep this in the body\n  still indented\n",
+    fileName: "notes.md",
+    modifiedAtMs: null,
+    path: "D:/workspace/notes.md",
+    sourceRoot: "D:/workspace",
+    title: "notes",
+  };
+
+  const items = buildSourceNoteFallbackItems(note);
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.item.title, "Release prep");
+  assert.equal(items[0]?.item.note_text, "  # keep this in the body\n  still indented");
 });
 
 test("source note fallback keeps checklist metadata after spacer lines", () => {

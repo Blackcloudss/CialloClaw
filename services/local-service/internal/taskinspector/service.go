@@ -629,6 +629,9 @@ func splitMetadataLine(line string) (string, string, bool) {
 
 func normalizeNaturalNotepadLine(line string) string {
 	trimmedRight := strings.TrimRight(line, " \t\r")
+	if isIndentedMarkdownLine(trimmedRight) {
+		return trimmedRight
+	}
 	trimmed := strings.TrimSpace(trimmedRight)
 	if strings.HasPrefix(trimmed, "#") {
 		return strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
@@ -637,7 +640,7 @@ func normalizeNaturalNotepadLine(line string) string {
 }
 
 func isNaturalNotepadHeadingLine(line string) bool {
-	return strings.HasPrefix(strings.TrimSpace(line), "#") && normalizeNaturalNotepadLine(line) != ""
+	return !isIndentedMarkdownLine(line) && strings.HasPrefix(strings.TrimSpace(line), "#") && normalizeNaturalNotepadLine(line) != ""
 }
 
 func hasNaturalNotepadContent(lines []string) bool {

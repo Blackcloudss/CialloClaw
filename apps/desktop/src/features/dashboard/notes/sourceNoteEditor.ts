@@ -11,13 +11,10 @@ const SOURCE_NOTE_RESERVED_METADATA_KEYS = new Set([
   "note",
   "prerequisite",
   "recent_instance_status",
-  "reminder",
   "repeat",
-  "resource",
   "scope",
   "status",
   "suggest",
-  "tags",
   "updated_at",
 ]);
 
@@ -48,6 +45,9 @@ function isIndentedSourceNoteLine(line: string) {
 
 function normalizeNaturalNoteLine(line: string) {
   const trimmedRight = line.trimEnd();
+  if (isIndentedSourceNoteLine(trimmedRight)) {
+    return trimmedRight;
+  }
   const trimmed = trimmedRight.trim();
   if (trimmed.startsWith("#")) {
     return trimmed.replace(/^#+\s*/, "").trim();
@@ -71,7 +71,7 @@ function normalizeChecklistBodyLine(line: string) {
 }
 
 function isNaturalHeadingLine(line: string) {
-  return line.trim().startsWith("#") && normalizeNaturalNoteLine(line) !== "";
+  return !isIndentedSourceNoteLine(line) && line.trim().startsWith("#") && normalizeNaturalNoteLine(line) !== "";
 }
 
 function hasNaturalNoteContent(lines: string[]) {

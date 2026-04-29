@@ -414,6 +414,9 @@ function normalizeSourceChecklistBodyLine(line: string) {
 
 function normalizeSourceNaturalNoteLine(line: string) {
   const trimmedRight = line.trimEnd();
+  if (isIndentedSourceLine(trimmedRight)) {
+    return trimmedRight;
+  }
   const trimmed = trimmedRight.trim();
   if (trimmed.startsWith("#")) {
     return trimmed.replace(/^#+\s*/, "").trim();
@@ -422,7 +425,7 @@ function normalizeSourceNaturalNoteLine(line: string) {
 }
 
 function isSourceNaturalHeadingLine(line: string) {
-  return line.trim().startsWith("#") && normalizeSourceNaturalNoteLine(line) !== "";
+  return !isIndentedSourceLine(line) && line.trim().startsWith("#") && normalizeSourceNaturalNoteLine(line) !== "";
 }
 
 function hasSourceNaturalNoteContent(lines: string[]) {
