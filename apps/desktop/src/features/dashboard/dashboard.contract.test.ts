@@ -146,6 +146,8 @@ function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLo
         item: {
           bucket: "upcoming" | "later" | "recurring_rule" | "closed";
           due_at: string | null;
+          ended_at: string | null;
+          next_occurrence_at: string | null;
           note_text: string | null;
           repeat_rule: string | null;
           title: string;
@@ -220,6 +222,7 @@ function loadSourceNoteEditorModule() {
         noteText: string;
         sourceLine: number | null;
         title: string;
+        updatedAt: string;
       }>;
       buildSourceNoteEditorDraftFromNote: (note: {
         content: string;
@@ -314,7 +317,28 @@ function loadSourceNoteEditorModule() {
         sourcePath: string | null;
         title: string;
         updatedAt: string;
-      }, now?: Date) => { blockContent: string };
+      }, now?: Date) => {
+        blockContent: string;
+        normalizedDraft: {
+          agentSuggestion: string;
+          bucket: "upcoming" | "later" | "recurring_rule" | "closed";
+          checked: boolean;
+          createdAt: string;
+          dueAt: string;
+          effectiveScope: string;
+          endedAt: string;
+          extraMetadata: Array<{ key: string; value: string }>;
+          nextOccurrenceAt: string;
+          noteText: string;
+          prerequisite: string;
+          recentInstanceStatus: string;
+          repeatRule: string;
+          sourceLine: number | null;
+          sourcePath: string | null;
+          title: string;
+          updatedAt: string;
+        };
+      };
     },
   );
 }
@@ -1523,7 +1547,7 @@ test("source note editor splits top-level checklist items away from natural note
     updatedAt: "",
   });
 
-  assert.equal(updated.content, "- [ ] Release prep\n\n  first paragraph\n\n  second paragraph\n  - item A\n- [ ] verify changelog\n- [ ] update docs\n\n  due: keep visible\n");
+  assert.match(updated.content, /^- \[ \] Release prep\ncreated_at: .+\nupdated_at: .+\n\n[ ]{2}first paragraph\n\n[ ]{2}second paragraph\n[ ]{2}- item A\n- \[ \] verify changelog\n- \[ \] update docs\ndue: keep visible\n$/);
 
   const reparsed = parseSourceNoteEditorBlocks({
     ...note,
@@ -1776,8 +1800,8 @@ test("source note editor preserves indented first and last body lines during ser
     updatedAt: "",
   }, new Date("2026-04-10T09:30:00.000Z"));
 
-  assert.match(serialized.blockContent, /^(  const answer = 42;|    const answer = 42;)$/m);
-  assert.match(serialized.blockContent, /^(  return answer;|    return answer;)$/m);
+  assert.match(serialized.blockContent, /^([ ]{2}const answer = 42;|[ ]{4}const answer = 42;)$/m);
+  assert.match(serialized.blockContent, /^([ ]{2}return answer;|[ ]{4}return answer;)$/m);
 });
 
 test("source note editor keeps adjacent heading notes separate", () => {
@@ -1822,9 +1846,8 @@ test("source note fallback mirrors natural scheduling hints before inspector syn
   assert.equal(items[0]?.item.note_text, "补充影响范围和回滚说明");
   assert.equal(items[1]?.item.title, "每周一同步巡检报告");
   assert.equal(items[1]?.item.bucket, "recurring_rule");
-  assert.ok(items[1]?.item.due_at);
-  assert.ok(items[1]?.item.next_occurrence_at);
-  assert.notEqual(items[1]?.item.due_at, items[1]?.item.next_occurrence_at);
+  assert.equal(items[1]?.item.due_at, null);
+  assert.equal(items[1]?.item.next_occurrence_at, null);
   assert.equal(items[1]?.item.repeat_rule, "每周一同步巡检报告");
   assert.equal(items[2]?.item.title, "后天检查巡检结果");
   assert.equal(items[2]?.item.bucket, "upcoming");
@@ -2137,6 +2160,34 @@ test("source note editor preserves explicit later bucket outside later source ro
   assert.match(updated.content, /^bucket: later$/m);
 });
 
+test("source note editor preserves selected recurring bucket without explicit rule", () => {
+  const { serializeSourceNoteEditorDraft } = loadSourceNoteEditorModule();
+
+  const serialized = serializeSourceNoteEditorDraft({
+    agentSuggestion: "",
+    bucket: "recurring_rule",
+    checked: false,
+    createdAt: "",
+    dueAt: "",
+    effectiveScope: "",
+    endedAt: "",
+    extraMetadata: [],
+    nextOccurrenceAt: "",
+    noteText: "",
+    prerequisite: "",
+    recentInstanceStatus: "",
+    repeatRule: "",
+    sourceLine: 1,
+    sourcePath: "D:/workspace/todos/inbox.md",
+    title: "Weekly retro",
+    updatedAt: "",
+  }, new Date("2026-04-10T09:30:00.000Z"));
+
+  assert.equal(serialized.normalizedDraft.bucket, "recurring_rule");
+  assert.match(serialized.blockContent, /^bucket: recurring_rule$/m);
+  assert.doesNotMatch(serialized.blockContent, /^repeat:/m);
+});
+
 test("source note editor normalizes completed buckets to closed before persistence", () => {
   const { upsertSourceNoteEditorBlock } = loadSourceNoteEditorModule();
   const note = {
@@ -2209,11 +2260,13 @@ test("security board styles stay scoped to the safety feature stylesheet", () =>
 test("security board cards keep CJK headlines and status badges readable", () => {
   const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
   const securityBoardSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/securityBoard.css"), "utf8");
+  const desktopThemeSource = readFileSync(resolve(desktopRoot, "src/styles/desktopTheme.css"), "utf8");
 
   assert.match(securityAppSource, /className="security-page__status-strip"/);
   assert.match(securityAppSource, /className="security-page__status-badge"/);
   assert.match(securityAppSource, /className="security-page__card-badge"/);
-  assert.match(securityBoardSource, /--security-font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun"/);
+  assert.match(securityBoardSource, /--security-font-display: var\(--cc-font-display\)/);
+  assert.match(desktopThemeSource, /--cc-font-display: "LXGW WenKai TC", "Nunito", "Iowan Old Style", Georgia, serif;/);
   assert.match(securityBoardSource, /\.security-page__card-line \{[\s\S]*line-height: 1\.18;/);
   assert.match(securityBoardSource, /\.security-page__card-line \{[\s\S]*overflow-wrap: anywhere;/);
   assert.match(securityBoardSource, /\.security-page__status-badge,[\s\S]*white-space: normal;/);
@@ -2277,8 +2330,10 @@ test("security audit cards and mirror cards stay aligned with the v6 frontend pr
 
 test("mirror cards use CJK-friendly display typography without clipped line clamps", () => {
   const mirrorStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/mirror.css"), "utf8");
+  const desktopThemeSource = readFileSync(resolve(desktopRoot, "src/styles/desktopTheme.css"), "utf8");
 
-  assert.match(mirrorStyleSource, /--mirror-font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun"/);
+  assert.match(mirrorStyleSource, /--mirror-font-display: var\(--cc-font-display\)/);
+  assert.match(desktopThemeSource, /--cc-font-display: "LXGW WenKai TC", "Nunito", "Iowan Old Style", Georgia, serif;/);
   assert.match(mirrorStyleSource, /\.mirror-page__card-line \{[\s\S]*line-height: 1\.28;/);
   assert.match(mirrorStyleSource, /\.mirror-page__card-line \{[\s\S]*padding-bottom: 0\.12em;/);
   assert.match(mirrorStyleSource, /\.mirror-page__card-line--memory \{[\s\S]*word-break: break-word;/);

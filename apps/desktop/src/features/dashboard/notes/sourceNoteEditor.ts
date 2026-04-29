@@ -260,7 +260,7 @@ function normalizeSourceNoteBucket(
   if (checked) {
     return "closed";
   }
-  if (recurring) {
+  if (recurring || bucket === "recurring_rule") {
     return "recurring_rule";
   }
   if (bucket === "upcoming" || bucket === "later") {
