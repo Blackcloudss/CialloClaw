@@ -377,6 +377,8 @@ func plainTextCanUseActivePendingSession(continuationContext taskContinuationCon
 
 // uniqueTaskSpecificContinuationDecision preserves structured follow-up routing
 // when a multi-candidate session still has exactly one task-specific match.
+// Inputs without that match are claimed as new tasks here so model fallback
+// cannot guess an owner for file, selection, or error evidence.
 // Confirmation only gates execution after that ownership decision is made.
 func uniqueTaskSpecificContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) (taskContinuationDecision, bool) {
 	if len(continuationContext.Candidates) < 2 || !isStructuredSupplementInput(snapshot) {
@@ -398,7 +400,10 @@ func uniqueTaskSpecificContinuationDecision(snapshot contextsvc.TaskContextSnaps
 	}
 	switch len(matches) {
 	case 0:
-		return taskContinuationDecision{}, false
+		return taskContinuationDecision{
+			Decision: "new_task",
+			Reason:   "structured input has no unique task-specific continuation match",
+		}, true
 	case 1:
 		return matches[0], true
 	default:

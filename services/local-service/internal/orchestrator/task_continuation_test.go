@@ -6,6 +6,7 @@ import (
 	"time"
 
 	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 )
 
@@ -336,6 +337,75 @@ func TestClassifyTaskContinuationStartsNewConfirmRequiredTaskWithoutTaskEvidence
 
 	if decision.Decision != "new_task" {
 		t.Fatalf("expected shell-ball-only structured input to open a new task, got %+v", decision)
+	}
+}
+
+func TestClassifyTaskContinuationStartsNewStructuredMultiCandidateWithoutUniqueMatch(t *testing.T) {
+	var modelCalled bool
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalled = true
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_structured_multi_candidate_no_match",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"decision":"continue","task_id":"task_001","reason":"model must not choose unanchored structured continuation"}`,
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+
+	decision := service.classifyTaskContinuation(
+		contextsvc.TaskContextSnapshot{
+			Trigger:     "file_drop",
+			InputType:   "file",
+			Files:       []string{"logs/network.log"},
+			PageTitle:   "Quick Intake",
+			PageURL:     "local://shell-ball",
+			AppName:     "desktop",
+			WindowTitle: "Shell Ball",
+		},
+		nil,
+		taskContinuationContext{
+			SessionMode: "explicit_active",
+			Candidates: []runengine.TaskRecord{
+				{
+					TaskID:      "task_001",
+					Status:      "waiting_input",
+					CurrentStep: "collect_input",
+					UpdatedAt:   time.Now().Add(-10 * time.Second),
+					Snapshot: contextsvc.TaskContextSnapshot{
+						PageTitle:   "Build Dashboard",
+						PageURL:     "https://example.com/build",
+						AppName:     "Chrome",
+						WindowTitle: "Browser - Build Dashboard",
+					},
+				},
+				{
+					TaskID:      "task_002",
+					Status:      "waiting_input",
+					CurrentStep: "collect_input",
+					UpdatedAt:   time.Now().Add(-9 * time.Second),
+					Snapshot: contextsvc.TaskContextSnapshot{
+						PageTitle:   "Issue Tracker",
+						PageURL:     "https://example.com/issues",
+						AppName:     "Chrome",
+						WindowTitle: "Browser - Issue Tracker",
+					},
+				},
+			},
+		},
+		taskContinuationOptions{},
+	)
+
+	if modelCalled {
+		t.Fatal("expected unanchored structured multi-candidate input to bypass model continuation")
+	}
+	if decision.Decision != "new_task" {
+		t.Fatalf("expected structured input without a unique task-specific match to open a new task, got %+v", decision)
 	}
 }
 
