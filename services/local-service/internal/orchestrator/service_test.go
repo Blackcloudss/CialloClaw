@@ -12875,7 +12875,7 @@ func TestServiceStartTaskPlainTextImplicitPendingTaskStartsNewWithoutExplicitCon
 	}
 }
 
-func TestFresherTaskRecordKeepsRuntimeSnapshotWhenStorageProjectionIsNewer(t *testing.T) {
+func TestFresherTaskRecordRestoresRuntimeAnchorsWhenStorageProjectionIsNewer(t *testing.T) {
 	runtimeUpdatedAt := time.Date(2026, 4, 29, 7, 0, 0, 0, time.UTC)
 	runtimeTask := runengine.TaskRecord{
 		TaskID:      "task_001",
@@ -12894,9 +12894,13 @@ func TestFresherTaskRecordKeepsRuntimeSnapshotWhenStorageProjectionIsNewer(t *te
 		CurrentStep: "agent_loop",
 		UpdatedAt:   runtimeUpdatedAt.Add(time.Second),
 		Snapshot: contextsvc.TaskContextSnapshot{
-			InputType: "file",
-			Text:      "Continue with the attached log.",
-			Files:     []string{"logs/network.log"},
+			InputType:   "file",
+			Text:        "Continue with the attached log.",
+			Files:       []string{"logs/network.log"},
+			PageTitle:   "Quick Intake",
+			PageURL:     "local://shell-ball",
+			AppName:     "desktop",
+			WindowTitle: "Shell Ball",
 		},
 	}
 

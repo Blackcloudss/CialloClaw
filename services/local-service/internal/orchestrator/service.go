@@ -3546,6 +3546,15 @@ func snapshotWithMissingAnchors(selected, fallback contextsvc.TaskContextSnapsho
 		return cloneTaskSnapshot(selected)
 	}
 	merged := cloneTaskSnapshot(selected)
+	if isShellBallIntakeAnchor(merged) && !isShellBallIntakeAnchor(fallback) {
+		// Shell-ball intake context is not a task-specific anchor. Treat it as
+		// missing when another persisted copy still has the real page/window
+		// anchors needed for continuation routing.
+		merged.PageTitle = ""
+		merged.PageURL = ""
+		merged.AppName = ""
+		merged.WindowTitle = ""
+	}
 	if strings.TrimSpace(merged.PageTitle) == "" {
 		merged.PageTitle = fallback.PageTitle
 	}
