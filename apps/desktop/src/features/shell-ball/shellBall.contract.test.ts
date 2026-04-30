@@ -6923,11 +6923,12 @@ test("shell-ball text drop populates and focuses the input instead of starting a
   assert.match(interactionSource, /setInputValue\(nextInputValue\);\s*handleInputFocusRequest\(\);/);
   assert.doesNotMatch(interactionSource, /startTaskFromSelectedText/);
   assert.match(appSource, /const handleSurfaceTextDrop = useCallback\(\(text: string\) => \{/);
-  assert.match(appSource, /handleDroppedText\(text\);\s*window\.requestAnimationFrame\(\(\) => \{\s*void emitShellBallInputRequestFocus\(Date\.now\(\)\);\s*\}\);/);
-  assert.match(appSource, /window\.addEventListener\("dragenter", handleWindowTextDrag\);/);
-  assert.match(appSource, /window\.addEventListener\("dragover", handleWindowTextDrag\);/);
-  assert.match(appSource, /window\.addEventListener\("dragleave", clearTextDragState\);/);
-  assert.match(appSource, /window\.addEventListener\("drop", clearTextDragState\);/);
+  assert.match(appSource, /handleDroppedText\(text\);\s*window\.requestAnimationFrame\(\(\) => \{\s*focusInlineInputField\(false\);\s*\}\);/);
+  assert.doesNotMatch(appSource, /emitShellBallInputRequestFocus/);
+  assert.match(appSource, /useEventListener\("dragenter", handleWindowTextDrag, \{/);
+  assert.match(appSource, /useEventListener\("dragover", handleWindowTextDrag, \{/);
+  assert.match(appSource, /useEventListener\("dragleave", clearTextDragState, \{/);
+  assert.match(appSource, /useEventListener\("drop", clearTextDragState, \{/);
   assert.match(appSource, /onTextDrop=\{handleSurfaceTextDrop\}/);
   assert.match(appSource, /textDropActive=\{shouldArmShellBallTextDropTarget\(/);
   assert.match(surfaceSource, /onDragEnterCapture=\{handleDragOver\}/);
@@ -7030,13 +7031,15 @@ test("desktop tauri setup enables mouse activity tracking for dwell context", ()
 });
 
 test("shell-ball file drops queue pending attachments instead of starting a task immediately", () => {
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
   const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
 
   assert.match(coordinatorSource, /const handleDroppedFiles = useCallback\(async \(paths: string\[\]\) => \{/);
   assert.match(coordinatorSource, /handlersRef\.current\.onAppendPendingFiles\(normalizedPaths\);/);
-  assert.match(coordinatorSource, /await emitShellBallInputRequestFocus\(Date\.now\(\)\);/);
-  assert.match(coordinatorSource, /console\.warn\("shell-ball file drop focus request failed", error\);/);
+  assert.doesNotMatch(coordinatorSource, /emitShellBallInputRequestFocus/);
+  assert.match(appSource, /const droppedPaths = event\.payload\.paths;\s*void \(async \(\) => \{\s*try \{\s*await dragDropHandlersRef\.current\.handleDroppedFiles\(droppedPaths\);\s*inputFocusRequestRef\.current\(\);/);
+  assert.match(appSource, /console\.warn\("shell-ball file drop handling failed", error\);/);
   assert.doesNotMatch(coordinatorSource, /issue #187/);
   assert.match(interactionSource, /function handleDroppedFiles\(paths: string\[\]\) \{/);
   assert.match(interactionSource, /setPendingFiles\(\(currentPaths\) => mergeShellBallPendingFiles\(currentPaths, normalizedPaths\)\);/);
