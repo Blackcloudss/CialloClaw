@@ -305,6 +305,12 @@ func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapsh
 			Reason:   "explicit start intent lacks continuation anchors for the unfinished task",
 		}, true
 	}
+	if candidate.Status == "processing" && evidence.StructuredSupplement {
+		return taskContinuationDecision{
+			Decision: "new_task",
+			Reason:   "structured input cannot attach to an active execution task",
+		}, true
+	}
 	if options.ConfirmRequired {
 		if evidence.StructuredSupplement {
 			return confirmationRequiredStructuredContinuationDecision(candidate, evidence)
@@ -323,16 +329,6 @@ func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapsh
 		return decision, true
 	}
 
-	switch candidate.Status {
-	case "processing":
-		if evidence.HasLineageMatch || (evidence.HasStrongAnchor && evidence.StructuredSupplement) {
-			return taskContinuationDecision{
-				Decision: "continue",
-				TaskID:   candidate.TaskID,
-				Reason:   "strong continuation anchors match the active processing task",
-			}, true
-		}
-	}
 	return taskContinuationDecision{}, false
 }
 
@@ -455,13 +451,6 @@ func taskSpecificContinuationDecision(candidate runengine.TaskRecord, evidence t
 	}
 	if decision, ok := pendingTaskContinuationDecision(candidate, evidence, continuationContext, explicitIntentName, options); ok {
 		return decision, ok
-	}
-	if candidate.Status == "processing" && (evidence.HasLineageMatch || (evidence.HasStrongAnchor && evidence.StructuredSupplement)) {
-		return taskContinuationDecision{
-			Decision: "continue",
-			TaskID:   candidate.TaskID,
-			Reason:   "strong continuation anchors match the active processing task",
-		}, true
 	}
 	return taskContinuationDecision{}, false
 }

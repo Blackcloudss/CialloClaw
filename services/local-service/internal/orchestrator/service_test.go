@@ -12404,19 +12404,25 @@ func TestServiceStartTaskNotificationIncludesSessionID(t *testing.T) {
 	}
 }
 
-func TestServiceStartTaskRoutesDescribedFileAttachmentIntoExistingTask(t *testing.T) {
+func TestServiceStartTaskDescribedFileDoesNotAttachToProcessingTask(t *testing.T) {
 	var activeTaskID string
-	var continuationPrompt string
+	continuationClassifierCalled := false
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
 		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
-			continuationPrompt = request.Input
+			if request.TaskID == "task_continuation_classifier" {
+				continuationClassifierCalled = true
+			}
+			outputText := "Attachment summary ready."
+			if request.TaskID == "task_continuation_classifier" {
+				outputText = fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"the file is supplementary evidence for the same task"}`, activeTaskID)
+			}
 			return model.GenerateTextResponse{
 				TaskID:     request.TaskID,
 				RunID:      request.RunID,
 				RequestID:  "req_continue_file",
 				Provider:   "openai_responses",
 				ModelID:    "gpt-5.4",
-				OutputText: fmt.Sprintf(`{"decision":"continue","task_id":"%s","reason":"the file is supplementary evidence for the same task"}`, activeTaskID),
+				OutputText: outputText,
 				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
 				LatencyMS:  25,
 			}, nil
@@ -12448,19 +12454,19 @@ func TestServiceStartTaskRoutesDescribedFileAttachmentIntoExistingTask(t *testin
 	if err != nil {
 		t.Fatalf("start file follow-up failed: %v", err)
 	}
-	if !strings.Contains(continuationPrompt, "requires_confirmation=false") {
-		t.Fatalf("expected continuation classifier to use described file confirmation policy, got %s", continuationPrompt)
+	if continuationClassifierCalled {
+		t.Fatal("expected structured evidence for a processing task to bypass model continuation")
 	}
 	task := followUpResult["task"].(map[string]any)
-	if task["task_id"] != activeTaskID {
-		t.Fatalf("expected file follow-up to stay on task %s, got %+v", activeTaskID, task)
+	if task["task_id"] == activeTaskID {
+		t.Fatalf("expected file follow-up to open a new task instead of attaching to %s, got %+v", activeTaskID, task)
 	}
 	record, ok := service.runEngine.GetTask(activeTaskID)
 	if !ok {
-		t.Fatal("expected continued file task to remain in runtime")
+		t.Fatal("expected original processing task to remain in runtime")
 	}
-	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "logs/network.log" {
-		t.Fatalf("expected file follow-up to merge snapshot files, got %+v", record.Snapshot.Files)
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected original processing task snapshot to remain unchanged, got %+v", record.Snapshot.Files)
 	}
 }
 
@@ -12887,6 +12893,11 @@ func TestFresherTaskRecordKeepsRuntimeSnapshotWhenStorageProjectionIsNewer(t *te
 		Status:      "processing",
 		CurrentStep: "agent_loop",
 		UpdatedAt:   runtimeUpdatedAt.Add(time.Second),
+		Snapshot: contextsvc.TaskContextSnapshot{
+			InputType: "file",
+			Text:      "Continue with the attached log.",
+			Files:     []string{"logs/network.log"},
+		},
 	}
 
 	selected := fresherTaskRecord(runtimeTask, storageTask)
@@ -12898,7 +12909,12 @@ func TestFresherTaskRecordKeepsRuntimeSnapshotWhenStorageProjectionIsNewer(t *te
 	if selected.Snapshot.PageURL != runtimeTask.Snapshot.PageURL ||
 		selected.Snapshot.AppName != runtimeTask.Snapshot.AppName ||
 		selected.Snapshot.WindowTitle != runtimeTask.Snapshot.WindowTitle {
-		t.Fatalf("expected runtime snapshot anchors to win over newer empty storage snapshot, got %+v", selected.Snapshot)
+		t.Fatalf("expected runtime snapshot anchors to fill the newer partial storage snapshot, got %+v", selected.Snapshot)
+	}
+	if selected.Snapshot.Text != storageTask.Snapshot.Text ||
+		len(selected.Snapshot.Files) != 1 ||
+		selected.Snapshot.Files[0] != storageTask.Snapshot.Files[0] {
+		t.Fatalf("expected newer storage snapshot payload to stay selected, got %+v", selected.Snapshot)
 	}
 }
 

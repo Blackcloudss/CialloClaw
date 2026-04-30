@@ -409,7 +409,7 @@ func TestClassifyTaskContinuationStartsNewStructuredMultiCandidateWithoutUniqueM
 	}
 }
 
-func TestClassifyTaskContinuationContinuesProcessingTaskOnStrongAttachmentEvidence(t *testing.T) {
+func TestClassifyTaskContinuationStartsNewTaskForProcessingStructuredEvidence(t *testing.T) {
 	service := newTestService()
 	service.model = nil
 
@@ -438,8 +438,8 @@ func TestClassifyTaskContinuationContinuesProcessingTaskOnStrongAttachmentEviden
 		taskContinuationOptions{},
 	)
 
-	if decision.Decision != "continue" || decision.TaskID != "task_001" {
-		t.Fatalf("expected strong context plus attachment evidence to continue the processing task, got %+v", decision)
+	if decision.Decision != "new_task" {
+		t.Fatalf("expected structured evidence not to attach to the processing task, got %+v", decision)
 	}
 }
 

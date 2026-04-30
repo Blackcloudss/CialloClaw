@@ -3526,19 +3526,42 @@ func fresherTaskRecord(runtimeTask, storageTask runengine.TaskRecord) runengine.
 }
 
 func taskRecordWithSnapshotAnchors(selected, runtimeTask, storageTask runengine.TaskRecord) runengine.TaskRecord {
-	if !isEmptySnapshot(selected.Snapshot) {
-		return selected
-	}
 	// Snapshot anchors are continuation evidence, not freshness state; keep the
-	// fresher task fields and only fill missing anchors from the alternate copy.
-	if !isEmptySnapshot(runtimeTask.Snapshot) {
-		selected.Snapshot = cloneTaskSnapshot(runtimeTask.Snapshot)
-		return selected
-	}
-	if !isEmptySnapshot(storageTask.Snapshot) {
-		selected.Snapshot = cloneTaskSnapshot(storageTask.Snapshot)
-	}
+	// fresher task fields and only fill missing anchors from the alternate
+	// copies. A partial fresher snapshot can still carry text or files while
+	// missing the page/window anchors needed for follow-up routing.
+	selected.Snapshot = snapshotWithMissingAnchors(selected.Snapshot, runtimeTask.Snapshot)
+	selected.Snapshot = snapshotWithMissingAnchors(selected.Snapshot, storageTask.Snapshot)
 	return selected
+}
+
+func snapshotWithMissingAnchors(selected, fallback contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+	if isEmptySnapshot(selected) {
+		if isEmptySnapshot(fallback) {
+			return selected
+		}
+		return cloneTaskSnapshot(fallback)
+	}
+	if isEmptySnapshot(fallback) {
+		return cloneTaskSnapshot(selected)
+	}
+	merged := cloneTaskSnapshot(selected)
+	if strings.TrimSpace(merged.PageTitle) == "" {
+		merged.PageTitle = fallback.PageTitle
+	}
+	if strings.TrimSpace(merged.PageURL) == "" {
+		merged.PageURL = fallback.PageURL
+	}
+	if strings.TrimSpace(merged.AppName) == "" {
+		merged.AppName = fallback.AppName
+	}
+	if strings.TrimSpace(merged.WindowTitle) == "" {
+		merged.WindowTitle = fallback.WindowTitle
+	}
+	if strings.TrimSpace(merged.HoverTarget) == "" {
+		merged.HoverTarget = fallback.HoverTarget
+	}
+	return merged
 }
 
 func (s *Service) taskDetailFromStorage(taskID string) (runengine.TaskRecord, bool) {
