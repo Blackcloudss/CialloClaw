@@ -704,8 +704,14 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contex
 	}
 
 	confirmRequired := pendingContinuationRequiresConfirm(task, continuationSnapshot, options)
-	suggestion := s.intent.Suggest(mergedSnapshot, explicitIntent, confirmRequired)
+	suggestion := s.intent.Suggest(mergedSnapshot, pendingContinuationIntent(task, explicitIntent), confirmRequired)
 	suggestion = s.normalizeSuggestedIntentForAvailability(mergedSnapshot, suggestion, confirmRequired)
+	if confirmRequired {
+		// A pending confirmation gate belongs to the task lifecycle. Follow-up
+		// input may enrich the task snapshot, but it must not unlock intent
+		// shortcuts that normally skip confirmation for fresh starts.
+		suggestion.RequiresConfirm = true
+	}
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), time.Now().Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
 		Snapshot:      continuationSnapshot,
@@ -748,13 +754,26 @@ func pendingContinuationRequiresConfirm(task runengine.TaskRecord, snapshot cont
 	if options.ForceConfirmRequired {
 		return true
 	}
+	if task.Status == "confirming_intent" {
+		return true
+	}
 	if !isStructuredSupplementInput(snapshot) {
 		return false
 	}
 	// Structured evidence may resume a waiting task only after intent ownership
 	// is already known; otherwise attaching evidence is still separate from
 	// permission to execute a newly inferred task.
-	return task.Status == "confirming_intent" || !taskHasConfirmedIntent(task)
+	return !taskHasConfirmedIntent(task)
+}
+
+func pendingContinuationIntent(task runengine.TaskRecord, explicitIntent map[string]any) map[string]any {
+	if len(explicitIntent) > 0 {
+		return explicitIntent
+	}
+	if task.Status == "confirming_intent" && len(task.Intent) > 0 {
+		return cloneMap(task.Intent)
+	}
+	return nil
 }
 
 func taskHasConfirmedIntent(task runengine.TaskRecord) bool {

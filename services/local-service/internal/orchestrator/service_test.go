@@ -12806,6 +12806,83 @@ func TestServiceSubmitInputConfirmRequiredTextContinuesImplicitPendingTask(t *te
 	}
 }
 
+func TestServiceSubmitInputPlainTextKeepsConfirmingTaskBehindConfirmation(t *testing.T) {
+	var modelTaskIDs []string
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelTaskIDs = append(modelTaskIDs, request.TaskID)
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_confirming_text_follow_up",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Task should not execute before formal confirmation.",
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  25,
+			}, nil
+		},
+	})
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_confirming_text_follow_up",
+		Title:       "Confirm build analysis",
+		SourceType:  "hover_input",
+		Status:      "confirming_intent",
+		CurrentStep: "intent_confirmation",
+		RiskLevel:   "green",
+		Intent: map[string]any{
+			"name":      "agent_loop",
+			"arguments": map[string]any{},
+		},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			InputType:   "text",
+			Text:        "Analyze the build failure.",
+			PageTitle:   "Build Dashboard",
+			PageURL:     "https://example.com/build",
+			AppName:     "Chrome",
+			WindowTitle: "Browser - Build Dashboard",
+		},
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "Use the latest customer impact numbers.",
+			"input_mode": "text",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit plain text follow-up for confirming task failed: %v", err)
+	}
+	task := result["task"].(map[string]any)
+	if task["task_id"] != activeTask.TaskID {
+		t.Fatalf("expected text follow-up to remain on confirming task %s, got %+v", activeTask.TaskID, task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected plain text follow-up to stay behind confirmation, got %+v", task)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected plain text follow-up to defer delivery_result, got %+v", result["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(activeTask.TaskID)
+	if !ok {
+		t.Fatal("expected confirming task to remain in runtime")
+	}
+	if record.Status != "confirming_intent" || record.CurrentStep != "intent_confirmation" {
+		t.Fatalf("expected runtime task to keep confirmation gate, got %+v", record)
+	}
+	if !strings.Contains(record.Snapshot.Text, "Analyze the build failure.") ||
+		!strings.Contains(record.Snapshot.Text, "Use the latest customer impact numbers.") {
+		t.Fatalf("expected runtime task to retain original and follow-up text, got %+v", record.Snapshot)
+	}
+	if len(modelTaskIDs) > 0 {
+		t.Fatalf("expected plain text follow-up to keep confirmation gate without model execution, got model calls %v", modelTaskIDs)
+	}
+}
+
 func TestServiceStartTaskPlainTextImplicitPendingTaskStartsNewWithoutExplicitConfirmation(t *testing.T) {
 	var activeTaskID string
 	var classifierCalled bool
