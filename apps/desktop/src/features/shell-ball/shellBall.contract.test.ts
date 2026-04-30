@@ -2339,6 +2339,7 @@ test("task-entry services keep rpc transport failures visible and forward file d
           return undefined;
         },
         rememberConversationSessionFromTask() {},
+        rememberConversationPageContextFromTask() {},
       },
     },
     async (moduleExports) => {
@@ -2368,6 +2369,11 @@ test("task-entry services keep rpc transport failures visible and forward file d
 
   const startTaskCalls: Array<Record<string, unknown>> = [];
   const bootstrapSubmitCalls: Array<Record<string, unknown>> = [];
+  const rememberedPageContext = {
+    app_name: "Chrome",
+    title: "Build Dashboard",
+    url: "https://example.com/build",
+  };
   const taskResult: {
     bubble_message: null;
     delivery_result: null;
@@ -2424,9 +2430,13 @@ test("task-entry services keep rpc transport failures visible and forward file d
       },
       "./conversationSessionService": {
         getCurrentConversationSessionId(): string | undefined {
-          return undefined;
+          return "sess_shell_ball_files";
+        },
+        getConversationPageContextForSession(sessionId?: string) {
+          return sessionId === "sess_shell_ball_files" ? rememberedPageContext : undefined;
         },
         rememberConversationSessionFromTask() {},
+        rememberConversationPageContextFromTask() {},
       },
     },
     async (moduleExports) => {
@@ -2453,9 +2463,9 @@ test("task-entry services keep rpc transport failures visible and forward file d
         text: "explain these files",
         files: ["C:\\workspace\\notes.md", "C:\\workspace\\spec.md"],
         page_context: {
-          app_name: "desktop",
-          title: "Quick Intake",
-          url: "local://shell-ball",
+          app_name: "Chrome",
+          title: "Build Dashboard",
+          url: "https://example.com/build",
         },
       });
       assert.deepEqual(startTaskCalls[0]?.options, {
@@ -2463,6 +2473,7 @@ test("task-entry services keep rpc transport failures visible and forward file d
       });
 
       await service.startTaskFromFiles(["C:\\workspace\\logs.txt"]);
+      assert.equal(startTaskCalls[1]?.session_id, "sess_shell_ball_files");
       assert.deepEqual(startTaskCalls[1]?.options, {
         confirm_required: false,
       });
@@ -2470,9 +2481,9 @@ test("task-entry services keep rpc transport failures visible and forward file d
         type: "file",
         files: ["C:\\workspace\\logs.txt"],
         page_context: {
-          app_name: "desktop",
-          title: "Quick Intake",
-          url: "local://shell-ball",
+          app_name: "Chrome",
+          title: "Build Dashboard",
+          url: "https://example.com/build",
         },
       });
 
@@ -2530,7 +2541,11 @@ test("task-entry services keep rpc transport failures visible and forward file d
         getCurrentConversationSessionId(): string | undefined {
           return undefined;
         },
+        getConversationPageContextForSession(): undefined {
+          return undefined;
+        },
         rememberConversationSessionFromTask() {},
+        rememberConversationPageContextFromTask() {},
       },
     },
     async (moduleExports) => {
@@ -2585,6 +2600,7 @@ test("submitTextInput enriches formal context with desktop snapshots before rpc 
             return undefined;
           },
           rememberConversationSessionFromTask() {},
+          rememberConversationPageContextFromTask() {},
         },
         "./mirrorMemoryService": {
           recordMirrorConversationFailure() {},
@@ -2698,6 +2714,7 @@ test("submitTextInput keeps ordinary text submissions free of ambient page and s
             return undefined;
           },
           rememberConversationSessionFromTask() {},
+          rememberConversationPageContextFromTask() {},
         },
         "./mirrorMemoryService": {
           recordMirrorConversationFailure() {},
@@ -6797,6 +6814,8 @@ test("shell-ball direct input only reuses backend-owned conversation sessions", 
 
   assert.match(sessionServiceSource, /export function getCurrentConversationSessionId\(\) \{/);
   assert.match(sessionServiceSource, /export function rememberConversationSessionFromTask\(task: Task \| null \| undefined\) \{/);
+  assert.match(sessionServiceSource, /export function rememberConversationPageContextFromTask\(/);
+  assert.match(sessionServiceSource, /export function getConversationPageContextForSession\(/);
   assert.doesNotMatch(interactionSource, /function ensureConversationSessionId\(\) \{/);
   assert.doesNotMatch(interactionSource, /createShellBallConversationSessionId/);
   assert.match(interactionSource, /trigger: "hover_text_input",[\s\S]*sessionId: getCurrentConversationSessionId\(\),/);
@@ -6804,6 +6823,56 @@ test("shell-ball direct input only reuses backend-owned conversation sessions", 
   assert.match(appSource, /getCurrentConversationSessionId,/);
   assert.match(coordinatorSource, /getCurrentConversationSessionId\?: \(\) => string \| undefined;/);
   assert.match(coordinatorSource, /sessionId: handlersRef\.current\.getCurrentConversationSessionId\?\.\(\),/);
+});
+
+test("conversation session cache preserves real page anchors for later file continuations", () => {
+  withSourceModuleRuntime(
+    resolve(desktopRoot, "src/services/conversationSessionService.ts"),
+    {},
+    (moduleExports) => {
+      const service = moduleExports as {
+        getConversationPageContextForSession: (sessionId?: string) => unknown;
+        rememberConversationPageContextFromTask: (task: Record<string, unknown>, pageContext: Record<string, unknown>) => unknown;
+        rememberConversationSessionFromTask: (task: Record<string, unknown>) => unknown;
+      };
+
+      service.rememberConversationSessionFromTask({
+        task_id: "task_shell_ball_anchor",
+        session_id: "sess_shell_ball_anchor",
+      });
+
+      assert.equal(
+        service.rememberConversationPageContextFromTask(
+          { session_id: "sess_shell_ball_anchor" },
+          { app_name: "desktop", title: "Quick Intake", url: "local://shell-ball" },
+        ),
+        null,
+      );
+      assert.equal(service.getConversationPageContextForSession("sess_shell_ball_anchor"), undefined);
+
+      service.rememberConversationPageContextFromTask(
+        { session_id: "sess_shell_ball_anchor" },
+        { app_name: "Chrome", title: "Build Dashboard", url: "https://example.com/build" },
+      );
+
+      assert.deepEqual(service.getConversationPageContextForSession("sess_shell_ball_anchor"), {
+        app_name: "Chrome",
+        title: "Build Dashboard",
+        url: "https://example.com/build",
+        window_title: undefined,
+        visible_text: undefined,
+        hover_target: undefined,
+      });
+      assert.deepEqual(service.getConversationPageContextForSession(), {
+        app_name: "Chrome",
+        title: "Build Dashboard",
+        url: "https://example.com/build",
+        window_title: undefined,
+        visible_text: undefined,
+        hover_target: undefined,
+      });
+    },
+  );
 });
 
 test("shell-ball surface passes mascot double-click and drag wiring through the mascot only", () => {
