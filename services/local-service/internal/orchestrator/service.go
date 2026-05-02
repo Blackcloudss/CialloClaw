@@ -1577,6 +1577,9 @@ func (s *Service) TaskSteer(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
+	if !taskCanAcceptExplicitSteering(task) {
+		return nil, ErrTaskStatusInvalid
+	}
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已记录新的补充要求，后续执行会纳入该指令。", time.Now().Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.AppendSteeringMessage(task.TaskID, message, bubble)
 	if !changed {
@@ -1586,6 +1589,19 @@ func (s *Service) TaskSteer(params map[string]any) (map[string]any, error) {
 		"task":           taskMap(updatedTask),
 		"bubble_message": bubble,
 	}, nil
+}
+
+func taskCanAcceptExplicitSteering(task runengine.TaskRecord) bool {
+	if taskIsTerminal(task.Status) {
+		return false
+	}
+	if task.Status == "processing" {
+		// Active processing tasks can only consume steering when the running
+		// agent loop polls between rounds. Other processing paths must finish or
+		// queue a separate task instead of pretending the guidance was consumed.
+		return taskCanConsumeActiveSteering(task)
+	}
+	return true
 }
 
 // TaskArtifactList handles `agent.task.artifact.list` and returns protocol-ready

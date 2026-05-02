@@ -17,6 +17,7 @@ func TestResolveTaskContinuationContextUsesSingleActiveSession(t *testing.T) {
 		Title:       "Analyze the current failure",
 		SourceType:  "hover_input",
 		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
 		CurrentStep: "agent_loop",
 		RiskLevel:   "yellow",
 	})
@@ -156,11 +157,17 @@ func TestTaskContinuationInputSummaryUsesConfirmationPolicy(t *testing.T) {
 	}
 }
 
-func TestCanContinueTaskOnlyAllowsExplicitFollowUpAndProcessingStates(t *testing.T) {
-	for _, status := range []string{"waiting_input", "confirming_intent", "processing"} {
+func TestCanContinueTaskOnlyAllowsExplicitFollowUpAndLoopProcessingStates(t *testing.T) {
+	for _, status := range []string{"waiting_input", "confirming_intent"} {
 		if !canContinueTask(runengine.TaskRecord{Status: status}) {
 			t.Fatalf("expected %s to remain continuation-eligible", status)
 		}
+	}
+	if !canContinueTask(runengine.TaskRecord{Status: "processing", Intent: map[string]any{"name": "agent_loop"}}) {
+		t.Fatal("expected agent-loop processing task to remain continuation-eligible")
+	}
+	if canContinueTask(runengine.TaskRecord{Status: "processing", Intent: map[string]any{"name": "summarize"}}) {
+		t.Fatal("expected prompt-path processing task to be excluded from continuation eligibility")
 	}
 	for _, status := range []string{"waiting_auth", "paused", "blocked", "failed", "completed"} {
 		if canContinueTask(runengine.TaskRecord{Status: status}) {

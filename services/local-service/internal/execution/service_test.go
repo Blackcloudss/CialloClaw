@@ -38,6 +38,11 @@ type stubModelClient struct {
 	plannerInputs          []string
 }
 
+type recordingPromptModelClient struct {
+	output string
+	input  string
+}
+
 type recordingLoopRuntimeStore struct {
 	runs            []storage.RunRecord
 	steps           []storage.StepRecord
@@ -170,6 +175,18 @@ func (s *stubModelClient) GenerateText(_ context.Context, request model.Generate
 		TaskID:     request.TaskID,
 		RunID:      request.RunID,
 		RequestID:  "req_test",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: s.output,
+	}, nil
+}
+
+func (s *recordingPromptModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	s.input = request.Input
+	return model.GenerateTextResponse{
+		TaskID:     request.TaskID,
+		RunID:      request.RunID,
+		RequestID:  "req_prompt_steering",
 		Provider:   "openai_responses",
 		ModelID:    "gpt-5.4",
 		OutputText: s.output,
@@ -1214,6 +1231,31 @@ func TestExecuteAgentLoopDoesNotDuplicateQueuedSteeringOnFirstRound(t *testing.T
 	}
 	if count := strings.Count(modelClient.plannerInputs[0], "Keep the answer concise."); count != 1 {
 		t.Fatalf("expected queued steering to appear once in the first planner input, got %d occurrences in %q", count, modelClient.plannerInputs[0])
+	}
+}
+
+func TestExecutePromptPathIncludesQueuedSteeringMessages(t *testing.T) {
+	modelClient := &recordingPromptModelClient{output: "Prompt runtime finished with steering."}
+	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:           "task_prompt_queued_steer",
+		RunID:            "run_prompt_queued_steer",
+		Title:            "Prompt queued steering",
+		Intent:           map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot:         contextsvc.TaskContextSnapshot{InputType: "text", Text: "Summarize the release note."},
+		SteeringMessages: []string{"Focus on the network impact."},
+		DeliveryType:     "bubble",
+		ResultTitle:      "Prompt result",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.Content != "Prompt runtime finished with steering." {
+		t.Fatalf("unexpected prompt result: %+v", result)
+	}
+	if !strings.Contains(modelClient.input, "Follow-up steering:") || !strings.Contains(modelClient.input, "Focus on the network impact.") {
+		t.Fatalf("expected prompt input to include queued steering, got %q", modelClient.input)
 	}
 }
 

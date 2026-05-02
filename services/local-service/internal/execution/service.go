@@ -1860,7 +1860,14 @@ func (s *Service) generateOutput(ctx context.Context, request Request, inputText
 		return trace, nil
 	}
 
-	trace, err := s.generateOutputWithPrompt(ctx, request, inputText)
+	promptInputText := inputText
+	if len(request.SteeringMessages) > 0 {
+		// Prompt-only execution does not have a live loop poller, so queued
+		// steering must be folded into this generation request before the task
+		// resumes from authorization or a session queue.
+		promptInputText = agentloopAppendSteeringInput(inputText, request.SteeringMessages)
+	}
+	trace, err := s.generateOutputWithPrompt(ctx, request, promptInputText)
 	if err != nil {
 		if fallbackTrace, fallbackOK := budgetDowngradeGenerationFallback(request, inputText, err); fallbackOK {
 			fallbackTrace.BudgetFailure = budgetFailureSignal(request, err)
