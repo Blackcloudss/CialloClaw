@@ -7251,6 +7251,23 @@ test("shell-ball app routes fresh clipboard prompts through the formal text subm
   assert.match(syncSource, /clipboardSnapshot: "desktop-shell-ball:clipboard-snapshot"/);
 });
 
+test("shell-ball routes active processing text follow-ups through task steer", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(coordinatorSource, /import \{ respondSecurityDetailed, steerTask \} from "@\/rpc\/methods";/);
+  assert.match(coordinatorSource, /const activeShellBallTaskIntentNameRef = useRef<string \| null>\(null\);/);
+  assert.match(coordinatorSource, /const activeShellBallTaskStatusRef = useRef<TaskUpdatedNotification\["status"\] \| null>\(null\);/);
+  assert.match(coordinatorSource, /shouldRouteShellBallSubmitToActiveSteering\(\{/);
+  assert.match(coordinatorSource, /input\.activeTaskIntentName === "agent_loop"/);
+  assert.match(coordinatorSource, /input\.activeTaskStatus === "processing"/);
+  assert.match(coordinatorSource, /input\.files\.length === 0/);
+  assert.match(coordinatorSource, /activeTaskIntentName: activeShellBallTaskIntentNameRef\.current/);
+  assert.match(coordinatorSource, /const result = await steerTask\(\{/);
+  assert.match(coordinatorSource, /request_meta: createShellBallRequestMeta\(\)/);
+  assert.match(coordinatorSource, /task_id: activeShellBallTaskId/);
+  assert.match(coordinatorSource, /message: submittedText/);
+});
+
 test("shell-ball screenshot command routes through the formal screen task path", () => {
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
 
