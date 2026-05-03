@@ -918,6 +918,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     approvalPendingBubbleKeysRef.current.add(bubbleKey);
 
     if (activeShellBallTaskIdRef.current === input.taskId) {
+      // approval.pending can arrive before task.updated, so keep the local
+      // routing ref aligned with the formal authorization state immediately.
+      activeShellBallTaskStatusRef.current = "waiting_auth";
       syncShellBallVisualStateFromTaskStatus("waiting_auth");
     }
 

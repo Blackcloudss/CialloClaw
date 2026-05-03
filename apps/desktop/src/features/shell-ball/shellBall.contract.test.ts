@@ -7323,6 +7323,7 @@ test("shell-ball coordinator subscribes to formal task, approval, and runtime up
   assert.match(coordinatorSource, /const queuedRuntimeNotificationsRef = useRef\(new Map<string, QueuedRuntimeNotification\[]>\(\)\);/);
   assert.match(coordinatorSource, /queuedRuntimeNotifications\.forEach\(\(notification\) => \{\s*appendRuntimeObservationBubble\(notification\.taskId, notification\.payload\);/);
   assert.match(coordinatorSource, /syncShellBallVisualStateFromTaskStatus\(payload\.status\)/);
+  assert.match(coordinatorSource, /activeShellBallTaskStatusRef\.current = "waiting_auth";\s*syncShellBallVisualStateFromTaskStatus\("waiting_auth"\);/);
   assert.match(coordinatorSource, /approvalRequest: payload\.approval_request/);
 });
 
