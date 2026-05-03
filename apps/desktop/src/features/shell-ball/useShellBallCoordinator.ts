@@ -189,10 +189,19 @@ function createShellBallBubbleDesktopState(turnOrder: ShellBallBubbleTurnOrder =
   };
 }
 
-// Active agent-loop text follow-ups should use the formal steering RPC instead
-// of re-entering input.submit and asking backend continuation heuristics to
-// infer task ownership. Structured files and shortcuts still keep their own
-// formal intake path.
+// Active text follow-ups should use the formal steering RPC whenever the
+// backend can append them to the current task. Structured files and shortcuts
+// still keep their own formal intake path.
+function isShellBallActiveTaskSteerable(input: {
+  activeTaskIntentName: string | null;
+  activeTaskStatus: TaskUpdatedNotification["status"] | null;
+}) {
+  if (input.activeTaskStatus === "processing") {
+    return input.activeTaskIntentName === "agent_loop";
+  }
+  return input.activeTaskStatus === "waiting_auth" || input.activeTaskStatus === "blocked";
+}
+
 function shouldRouteShellBallSubmitToActiveSteering(input: {
   activeTaskId: string | null;
   activeTaskIntentName: string | null;
@@ -202,8 +211,7 @@ function shouldRouteShellBallSubmitToActiveSteering(input: {
 }) {
   return (
     input.activeTaskId !== null &&
-    input.activeTaskIntentName === "agent_loop" &&
-    input.activeTaskStatus === "processing" &&
+    isShellBallActiveTaskSteerable(input) &&
     input.files.length === 0 &&
     input.text.trim() !== ""
   );
