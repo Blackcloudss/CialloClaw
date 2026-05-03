@@ -1,16 +1,18 @@
-import type {
-  AgentTaskSteerResult,
-  ApprovalDecision,
-  ApprovalRequest,
-  BubbleMessage,
-  DeliveryResult,
-  InputContext,
-  TaskRuntimeNotification,
-  TaskSteeredNotification,
-  TaskUpdatedNotification,
+import {
+  ERROR_CODES,
+  type AgentTaskSteerResult,
+  type ApprovalDecision,
+  type ApprovalRequest,
+  type BubbleMessage,
+  type DeliveryResult,
+  type InputContext,
+  type TaskRuntimeNotification,
+  type TaskSteeredNotification,
+  type TaskUpdatedNotification,
 } from "@cialloclaw/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { JsonRpcClientError } from "@/rpc/client";
 import { respondSecurityDetailed, steerTask } from "@/rpc/methods";
 import { subscribeAllTaskRuntime, subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { submitTextInput } from "@/services/agentInputService";
@@ -649,6 +651,10 @@ function createShellBallSteerBubbleItem(
     turnIndex: turnOrder.turnIndex,
     turnPhase: turnOrder.turnPhase,
   });
+}
+
+function isTaskStatusInvalidRpcError(error: unknown) {
+  return error instanceof JsonRpcClientError && error.code === ERROR_CODES.TASK_STATUS_INVALID;
 }
 
 function getShellBallTaskErrorText(error: unknown) {
@@ -2356,6 +2362,83 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
             revealBubbleRegion();
           } catch (error) {
             console.warn("shell-ball active task steer failed", error);
+            // The cached active-task status can race with backend state changes.
+            // Preserve the submitted text by re-entering the ordinary intake path.
+            if (isTaskStatusInvalidRpcError(error)) {
+              const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
+
+              try {
+                const fallbackResult = await submitTextInput({
+                  text: submittedText,
+                  source: "floating_ball",
+                  trigger: "hover_text_input",
+                  inputMode: "text",
+                  sessionId: handlersRef.current.getCurrentConversationSessionId?.(),
+                  options: {
+                    confirm_required: false,
+                    preferred_delivery: "bubble",
+                  },
+                });
+
+                if (!isShellBallInputSubmitResult(fallbackResult)) {
+                  throw new Error("Shell-ball steer fallback did not return a task result.");
+                }
+
+                registerShellBallTask(
+                  fallbackResult.task.task_id,
+                  turnIndex,
+                  fallbackResult.task.status,
+                  fallbackResult.task.intent?.name ?? null,
+                );
+                setBubbleItems((currentItems) => {
+                  const retargetedItems = currentItems.map((item) =>
+                    item.bubble.bubble_id === userBubbleItem.bubble.bubble_id
+                      ? {
+                          ...item,
+                          bubble: {
+                            ...item.bubble,
+                            task_id: fallbackResult.task.task_id,
+                          },
+                        }
+                      : item,
+                  );
+
+                  return replaceShellBallPendingBubble(
+                    retargetedItems,
+                    pendingAgentBubbleItem.bubble.bubble_id,
+                    createShellBallAgentBubbleItem(fallbackResult, new Date().toISOString(), {
+                      turnIndex,
+                      turnPhase: 1,
+                    }),
+                  );
+                });
+                revealBubbleRegion();
+                void autoOpenShellBallDeliveryResult(fallbackResult.task.task_id, fallbackResult.delivery_result);
+              } catch (fallbackError) {
+                console.warn("shell-ball active task steer fallback submit failed", fallbackError);
+                handlersRef.current.setInputValue(submittedText);
+                handlersRef.current.onInputFocusChange(true);
+                setBubbleItems((currentItems) =>
+                  replaceShellBallPendingBubble(
+                    currentItems,
+                    pendingAgentBubbleItem.bubble.bubble_id,
+                    createShellBallTaskErrorBubbleItem({
+                      createdAt: new Date().toISOString(),
+                      error: fallbackError,
+                      taskId: activeShellBallTaskId,
+                      turnIndex,
+                      turnPhase: 1,
+                    }),
+                  ),
+                );
+                revealBubbleRegion();
+              } finally {
+                finishPendingTaskRegistration();
+              }
+
+              break;
+            }
+
             setBubbleItems((currentItems) =>
               replaceShellBallPendingBubble(
                 currentItems,

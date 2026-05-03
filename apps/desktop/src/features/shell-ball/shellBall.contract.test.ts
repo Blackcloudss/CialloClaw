@@ -7271,6 +7271,22 @@ test("shell-ball routes active resumable text follow-ups through task steer", ()
   assert.match(coordinatorSource, /message: submittedText/);
 });
 
+test("shell-ball falls back to regular submit when active steer status races", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(coordinatorSource, /import \{ JsonRpcClientError \} from "@\/rpc\/client";/);
+  assert.match(coordinatorSource, /ERROR_CODES/);
+  assert.match(coordinatorSource, /function isTaskStatusInvalidRpcError\(error: unknown\)/);
+  assert.match(coordinatorSource, /error instanceof JsonRpcClientError && error\.code === ERROR_CODES\.TASK_STATUS_INVALID/);
+  assert.match(coordinatorSource, /if \(isTaskStatusInvalidRpcError\(error\)\) \{/);
+  assert.match(coordinatorSource, /const fallbackResult = await submitTextInput\(\{/);
+  assert.match(coordinatorSource, /text: submittedText/);
+  assert.match(coordinatorSource, /trigger: "hover_text_input"/);
+  assert.match(coordinatorSource, /preferred_delivery: "bubble"/);
+  assert.match(coordinatorSource, /task_id: fallbackResult\.task\.task_id/);
+  assert.match(coordinatorSource, /autoOpenShellBallDeliveryResult\(fallbackResult\.task\.task_id, fallbackResult\.delivery_result\)/);
+});
+
 test("shell-ball screenshot command routes through the formal screen task path", () => {
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
 
