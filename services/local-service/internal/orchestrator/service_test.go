@@ -8706,6 +8706,73 @@ func TestServiceSecurityAuditListFallsBackToStoredAuditRecords(t *testing.T) {
 	}
 }
 
+func TestServiceSecurityAuditListScopesStructuredRestartAttemptToCurrentRun(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "security audit current run scope")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_audit_current_attempt"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_audit_current_attempt",
+		RunID:               "run_current_attempt",
+		PrimaryRunID:        "run_primary_attempt",
+		Title:               "audit scoped task",
+		SourceType:          "hover_input",
+		Status:              "failed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"brief"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "failed",
+		RiskLevel:           "yellow",
+		StartedAt:           "2026-04-22T09:00:00Z",
+		UpdatedAt:           "2026-04-22T09:05:00Z",
+		FinishedAt:          "2026-04-22T09:06:00Z",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	for _, record := range []audit.Record{
+		{
+			AuditID:   "audit_previous_attempt",
+			TaskID:    taskID,
+			RunID:     "run_primary_attempt",
+			Type:      "file",
+			Action:    "write_file",
+			Summary:   "previous attempt audit",
+			Target:    "workspace/previous.md",
+			Result:    "success",
+			CreatedAt: "2026-04-22T09:02:00Z",
+		},
+		{
+			AuditID:   "audit_current_attempt",
+			TaskID:    taskID,
+			RunID:     "run_current_attempt",
+			Type:      "file",
+			Action:    "write_file",
+			Summary:   "current attempt audit",
+			Target:    "workspace/current.md",
+			Result:    "success",
+			CreatedAt: "2026-04-22T09:05:00Z",
+		},
+	} {
+		if err := service.storage.AuditWriter().WriteAuditRecord(context.Background(), record); err != nil {
+			t.Fatalf("write audit record failed: %v", err)
+		}
+	}
+
+	result, err := service.SecurityAuditList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("security audit list failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["audit_id"] != "audit_current_attempt" {
+		t.Fatalf("expected only current attempt audit record, got %+v", items)
+	}
+}
+
 func TestServiceSecurityAuditListRequiresTaskID(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed summary")
 	_, err := service.SecurityAuditList(map[string]any{"limit": 20, "offset": 0})
@@ -14850,5 +14917,17 @@ func modelConfig() serviceconfig.ModelConfig {
 		Provider: "openai_responses",
 		ModelID:  "gpt-5.4",
 		Endpoint: "https://api.openai.com/v1/responses",
+	}
+}
+
+func TestTaskUsesAttemptScopedFormalReadsFallsBackToPrimaryRunID(t *testing.T) {
+	if !taskUsesAttemptScopedFormalReads(runengine.TaskRecord{RunID: "run_current", PrimaryRunID: "run_primary"}) {
+		t.Fatal("expected different primary/current run ids to enable attempt-scoped reads")
+	}
+	if taskUsesAttemptScopedFormalReads(runengine.TaskRecord{RunID: "run_primary", PrimaryRunID: "run_primary"}) {
+		t.Fatal("expected primary attempt to keep task-scoped reads")
+	}
+	if !taskUsesAttemptScopedFormalReads(runengine.TaskRecord{RunID: "run_restart", ExecutionAttempt: 2}) {
+		t.Fatal("expected execution attempt fallback to keep restart-scoped reads for legacy snapshots")
 	}
 }
