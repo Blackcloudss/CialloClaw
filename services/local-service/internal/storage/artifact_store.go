@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -47,14 +48,18 @@ func (s *inMemoryArtifactStore) SaveArtifacts(_ context.Context, records []Artif
 	return nil
 }
 
-func (s *inMemoryArtifactStore) ListArtifacts(_ context.Context, taskID string, limit, offset int) ([]ArtifactRecord, int, error) {
+func (s *inMemoryArtifactStore) ListArtifacts(_ context.Context, taskID, runID string, limit, offset int) ([]ArtifactRecord, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	items := make([]ArtifactRecord, 0, len(s.records))
 	for _, record := range s.records {
-		if taskID == "" || record.TaskID == taskID {
-			items = append(items, record)
+		if taskID != "" && record.TaskID != taskID {
+			continue
 		}
+		if runID != "" && record.RunID != runID {
+			continue
+		}
+		items = append(items, record)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		left := parseGovernanceTime(items[i].CreatedAt)
@@ -127,22 +132,32 @@ func (s *SQLiteArtifactStore) SaveArtifacts(ctx context.Context, records []Artif
 }
 
 // ListArtifacts returns persisted artifacts for one task.
-func (s *SQLiteArtifactStore) ListArtifacts(ctx context.Context, taskID string, limit, offset int) ([]ArtifactRecord, int, error) {
+func (s *SQLiteArtifactStore) ListArtifacts(ctx context.Context, taskID, runID string, limit, offset int) ([]ArtifactRecord, int, error) {
 	countQuery := `SELECT COUNT(1) FROM artifacts`
 	query := `SELECT artifact_id, task_id, COALESCE(run_id, ''), artifact_type, title, path, mime_type, delivery_type, delivery_payload_json, created_at FROM artifacts`
-	args := []any{}
+	filters := make([]string, 0, 2)
+	filterArgs := make([]any, 0, 2)
 	if taskID != "" {
-		countQuery += ` WHERE task_id = ?`
-		query += ` WHERE task_id = ?`
-		args = append(args, taskID)
+		filters = append(filters, `task_id = ?`)
+		filterArgs = append(filterArgs, taskID)
+	}
+	if runID != "" {
+		filters = append(filters, `run_id = ?`)
+		filterArgs = append(filterArgs, runID)
+	}
+	if len(filters) > 0 {
+		whereClause := ` WHERE ` + strings.Join(filters, ` AND `)
+		countQuery += whereClause
+		query += whereClause
 	}
 	query += ` ORDER BY created_at DESC, artifact_id DESC`
+	args := append([]any(nil), filterArgs...)
 	if limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
 		args = append(args, limit, offset)
 	}
 	var total int
-	if err := s.db.QueryRowContext(ctx, countQuery, firstArg(taskID)...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count artifacts: %w", err)
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)

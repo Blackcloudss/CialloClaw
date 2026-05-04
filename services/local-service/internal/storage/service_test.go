@@ -822,14 +822,14 @@ func TestLoopRuntimeStorePersistsNormalizedRecords(t *testing.T) {
 	if total != 1 || len(events) != 1 || events[0].Type != "loop.completed" {
 		t.Fatalf("unexpected loop events: total=%d items=%+v", total, events)
 	}
-	deliveryResult, ok, err := store.GetLatestDeliveryResult(context.Background(), "task_loop_001")
+	deliveryResult, ok, err := store.GetLatestDeliveryResult(context.Background(), "task_loop_001", "")
 	if err != nil {
 		t.Fatalf("GetLatestDeliveryResult returned error: %v", err)
 	}
 	if !ok || deliveryResult.DeliveryResultID != "delivery_result_001" || deliveryResult.PreviewText != "loop preview" {
 		t.Fatalf("unexpected latest delivery_result: ok=%v record=%+v", ok, deliveryResult)
 	}
-	citations, err := store.ListTaskCitations(context.Background(), "task_loop_001")
+	citations, err := store.ListTaskCitations(context.Background(), "task_loop_001", "")
 	if err != nil {
 		t.Fatalf("ListTaskCitations returned error: %v", err)
 	}
@@ -961,7 +961,7 @@ func TestAuditWriterReturnsWorkingImplementation(t *testing.T) {
 		t.Fatalf("expected sqlite audit store, got %T", service.auditStore)
 	}
 	assertAuditCount(t, sqliteWriter.db, 1)
-	items, total, err := service.AuditStore().ListAuditRecords(context.Background(), "task_001", 20, 0)
+	items, total, err := service.AuditStore().ListAuditRecords(context.Background(), "task_001", "", 20, 0)
 	if err != nil {
 		t.Fatalf("ListAuditRecords returned error: %v", err)
 	}
@@ -1005,7 +1005,7 @@ func TestAuditStoreListsRecords(t *testing.T) {
 	_ = writer.WriteAuditRecord(context.Background(), audit.Record{AuditID: "audit_001", TaskID: "task_001", Type: "file", Action: "write_file", Summary: "write one", Target: "workspace/one.md", Result: "success", CreatedAt: "2026-04-08T10:00:00Z"})
 	_ = writer.WriteAuditRecord(context.Background(), audit.Record{AuditID: "audit_002", TaskID: "task_002", Type: "file", Action: "write_file", Summary: "write two", Target: "workspace/two.md", Result: "success", CreatedAt: "2026-04-08T10:01:00Z"})
 
-	items, total, err := service.AuditStore().ListAuditRecords(context.Background(), "task_001", 20, 0)
+	items, total, err := service.AuditStore().ListAuditRecords(context.Background(), "task_001", "", 20, 0)
 	if err != nil {
 		t.Fatalf("ListAuditRecords returned error: %v", err)
 	}
@@ -1084,7 +1084,7 @@ func TestArtifactStoreReturnsWorkingImplementation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveArtifacts returned error: %v", err)
 	}
-	items, total, err := store.ListArtifacts(context.Background(), "task_001", 20, 0)
+	items, total, err := store.ListArtifacts(context.Background(), "task_001", "", 20, 0)
 	if err != nil {
 		t.Fatalf("ListArtifacts returned error: %v", err)
 	}

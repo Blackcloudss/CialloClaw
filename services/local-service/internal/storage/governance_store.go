@@ -149,14 +149,18 @@ func (s *inMemoryAuditStore) WriteAuditRecord(_ context.Context, record audit.Re
 	return nil
 }
 
-func (s *inMemoryAuditStore) ListAuditRecords(_ context.Context, taskID string, limit, offset int) ([]audit.Record, int, error) {
+func (s *inMemoryAuditStore) ListAuditRecords(_ context.Context, taskID, runID string, limit, offset int) ([]audit.Record, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	items := make([]audit.Record, 0)
 	for _, record := range s.records {
-		if taskID == "" || record.TaskID == taskID {
-			items = append(items, record)
+		if taskID != "" && record.TaskID != taskID {
+			continue
 		}
+		if runID != "" && record.RunID != runID {
+			continue
+		}
+		items = append(items, record)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		return parseGovernanceTime(items[i].CreatedAt).After(parseGovernanceTime(items[j].CreatedAt))
@@ -246,23 +250,33 @@ func (s *SQLiteAuditStore) WriteAuditRecord(ctx context.Context, record audit.Re
 	return nil
 }
 
-func (s *SQLiteAuditStore) ListAuditRecords(ctx context.Context, taskID string, limit, offset int) ([]audit.Record, int, error) {
+func (s *SQLiteAuditStore) ListAuditRecords(ctx context.Context, taskID, runID string, limit, offset int) ([]audit.Record, int, error) {
 	countQuery := `SELECT COUNT(1) FROM audit_records`
 	query := `SELECT audit_id, task_id, COALESCE(run_id, ''), type, action, summary, target, result, created_at FROM audit_records`
-	args := []any{}
+	filters := make([]string, 0, 2)
+	filterArgs := make([]any, 0, 2)
 	if taskID != "" {
-		countQuery += ` WHERE task_id = ?`
-		query += ` WHERE task_id = ?`
-		args = append(args, taskID)
+		filters = append(filters, `task_id = ?`)
+		filterArgs = append(filterArgs, taskID)
+	}
+	if runID != "" {
+		filters = append(filters, `run_id = ?`)
+		filterArgs = append(filterArgs, runID)
+	}
+	if len(filters) > 0 {
+		whereClause := ` WHERE ` + strings.Join(filters, ` AND `)
+		countQuery += whereClause
+		query += whereClause
 	}
 	query += ` ORDER BY created_at DESC, audit_id DESC`
+	args := append([]any(nil), filterArgs...)
 	if limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
 		args = append(args, limit, offset)
 	}
 
 	var total int
-	if err := s.db.QueryRowContext(ctx, countQuery, firstArg(taskID)...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count audit records: %w", err)
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)

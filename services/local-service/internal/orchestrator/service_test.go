@@ -3254,6 +3254,17 @@ func TestServiceTaskDetailGetRestartAttemptHidesPreviousRunFormalObjects(t *test
 	if runtimeSummary["latest_failure_code"] != nil || runtimeSummary["latest_failure_summary"] != nil {
 		t.Fatalf("expected restart runtime summary to clear previous failure markers, got %+v", runtimeSummary)
 	}
+	artifactListResult, err := service.TaskArtifactList(map[string]any{"task_id": task.TaskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task artifact list failed: %v", err)
+	}
+	if items := artifactListResult["items"].([]map[string]any); len(items) != 0 {
+		t.Fatalf("expected restart artifact list to hide previous artifacts, got %+v", items)
+	}
+	_, err = service.TaskArtifactOpen(map[string]any{"task_id": task.TaskID, "artifact_id": "art_restart_detail_previous"})
+	if !errors.Is(err, ErrArtifactNotFound) {
+		t.Fatalf("expected restart artifact open to reject previous attempt artifact, got %v", err)
+	}
 }
 
 func TestMaybeEscalateHumanLoopSkipsSideEffectingExecutionAttempt(t *testing.T) {
@@ -3788,7 +3799,7 @@ func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
 		t.Fatalf("expected persisted read_file runtime events, got %+v", events)
 	}
 
-	deliveryRecord, ok, err := service.storage.LoopRuntimeStore().GetLatestDeliveryResult(context.Background(), taskID)
+	deliveryRecord, ok, err := service.storage.LoopRuntimeStore().GetLatestDeliveryResult(context.Background(), taskID, "")
 	if err != nil {
 		t.Fatalf("get latest delivery result failed: %v", err)
 	}
@@ -6136,7 +6147,7 @@ func TestServiceAttachFormalCitationsPersistsFirstClassCitationFallback(t *testi
 		"payload": map[string]any{"task_id": task.TaskID},
 	}, artifacts)
 
-	citations, err := service.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), task.TaskID)
+	citations, err := service.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), task.TaskID, "")
 	if err != nil {
 		t.Fatalf("list first-class citations failed: %v", err)
 	}
@@ -6627,7 +6638,7 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 	if record.Authorization == nil || record.Authorization["decision"] != "allow_once" {
 		t.Fatalf("expected authorization record to be stored, got %+v", record.Authorization)
 	}
-	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), task["task_id"].(string), 20, 0)
+	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), task["task_id"].(string), "", 20, 0)
 	if err != nil {
 		t.Fatalf("list persisted artifacts failed: %v", err)
 	}
@@ -6722,7 +6733,7 @@ func TestServiceStartTaskPreservesClipCaptureModeThroughScreenApproval(t *testin
 	if respondTask["status"] != "completed" {
 		t.Fatalf("expected authorized clip screen task to complete, got %+v", respondTask)
 	}
-	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), task["task_id"].(string), 20, 0)
+	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), task["task_id"].(string), "", 20, 0)
 	if err != nil || total != 1 || len(artifacts) != 1 {
 		t.Fatalf("expected one persisted clip screen artifact, total=%d len=%d err=%v", total, len(artifacts), err)
 	}
@@ -6941,7 +6952,7 @@ func TestServiceStartTaskHandlesClipScreenAnalyzePath(t *testing.T) {
 	if record.Artifacts[0]["mime_type"] != "video/webm" {
 		t.Fatalf("expected clip screen analyze to keep video artifact mime type, got %+v", record.Artifacts)
 	}
-	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, 20, 0)
+	artifacts, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, "", 20, 0)
 	if err != nil || total != 1 || len(artifacts) != 1 {
 		t.Fatalf("expected one persisted clip artifact, total=%d len=%d err=%v", total, len(artifacts), err)
 	}
@@ -11372,7 +11383,7 @@ func TestServiceStartTaskPersistsArtifactsToStore(t *testing.T) {
 		t.Fatal("expected runtime task to remain available")
 	}
 	runID := taskRecord.RunID
-	records, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, 20, 0)
+	records, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, "", 20, 0)
 	if err != nil {
 		t.Fatalf("list persisted artifacts failed: %v", err)
 	}

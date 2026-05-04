@@ -86,7 +86,7 @@ type ArtifactRecord struct {
 // ArtifactStore defines artifact persistence and lookup behavior.
 type ArtifactStore interface {
 	SaveArtifacts(ctx context.Context, records []ArtifactRecord) error
-	ListArtifacts(ctx context.Context, taskID string, limit, offset int) ([]ArtifactRecord, int, error)
+	ListArtifacts(ctx context.Context, taskID, runID string, limit, offset int) ([]ArtifactRecord, int, error)
 }
 
 // TodoItemRecord describes one persisted notes/todo snapshot.
@@ -468,10 +468,10 @@ type LoopRuntimeStore interface {
 	SaveEvents(ctx context.Context, records []EventRecord) error
 	SaveDeliveryResult(ctx context.Context, record DeliveryResultRecord) error
 	GetRun(ctx context.Context, runID string) (RunRecord, error)
-	ListDeliveryResults(ctx context.Context, taskID string, limit, offset int) ([]DeliveryResultRecord, int, error)
+	ListDeliveryResults(ctx context.Context, taskID, runID string, limit, offset int) ([]DeliveryResultRecord, int, error)
 	ReplaceTaskCitations(ctx context.Context, taskID string, records []CitationRecord) error
-	GetLatestDeliveryResult(ctx context.Context, taskID string) (DeliveryResultRecord, bool, error)
-	ListTaskCitations(ctx context.Context, taskID string) ([]CitationRecord, error)
+	GetLatestDeliveryResult(ctx context.Context, taskID, runID string) (DeliveryResultRecord, bool, error)
+	ListTaskCitations(ctx context.Context, taskID, runID string) ([]CitationRecord, error)
 	ListEvents(ctx context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]EventRecord, int, error)
 }
 
@@ -484,7 +484,7 @@ type ToolCallStore interface {
 // AuditStore defines persistence for audit records.
 type AuditStore interface {
 	WriteAuditRecord(ctx context.Context, record audit.Record) error
-	ListAuditRecords(ctx context.Context, taskID string, limit, offset int) ([]audit.Record, int, error)
+	ListAuditRecords(ctx context.Context, taskID, runID string, limit, offset int) ([]audit.Record, int, error)
 }
 
 // RecoveryPointStore defines persistence for recovery points.

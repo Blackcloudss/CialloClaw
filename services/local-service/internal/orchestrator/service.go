@@ -2599,7 +2599,7 @@ func (s *Service) SecurityAuditList(params map[string]any) (map[string]any, erro
 	if s.storage == nil {
 		return map[string]any{"items": []map[string]any{}, "page": pageMap(limit, offset, 0)}, nil
 	}
-	records, total, err := s.storage.AuditStore().ListAuditRecords(context.Background(), taskID, limit, offset)
+	records, total, err := s.storage.AuditStore().ListAuditRecords(context.Background(), taskID, "", limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
 	}
@@ -3780,56 +3780,23 @@ func taskUsesAttemptScopedFormalReads(task runengine.TaskRecord) bool {
 	return task.ExecutionAttempt > 1 && strings.TrimSpace(task.RunID) != ""
 }
 
-func filterDeliveryResultsForTaskAttempt(task runengine.TaskRecord, records []storage.DeliveryResultRecord) []storage.DeliveryResultRecord {
+func taskAttemptRunIDFilter(task runengine.TaskRecord) string {
 	if !taskUsesAttemptScopedFormalReads(task) {
-		return records
+		return ""
 	}
-	filtered := make([]storage.DeliveryResultRecord, 0, len(records))
-	for _, record := range records {
-		if strings.TrimSpace(record.RunID) == task.RunID {
-			filtered = append(filtered, record)
-		}
-	}
-	return filtered
+	return task.RunID
 }
 
-func filterCitationsForTaskAttempt(task runengine.TaskRecord, records []storage.CitationRecord) []storage.CitationRecord {
-	if !taskUsesAttemptScopedFormalReads(task) {
-		return records
-	}
-	filtered := make([]storage.CitationRecord, 0, len(records))
-	for _, record := range records {
-		if strings.TrimSpace(record.RunID) == task.RunID {
-			filtered = append(filtered, record)
+func formalReadTask(taskID string, engine *runengine.Engine, loadFromStorage func(string) (runengine.TaskRecord, bool)) (runengine.TaskRecord, bool) {
+	if engine != nil {
+		if task, ok := engine.GetTask(taskID); ok {
+			return task, true
 		}
 	}
-	return filtered
-}
-
-func filterArtifactsForTaskAttempt(task runengine.TaskRecord, records []storage.ArtifactRecord) []storage.ArtifactRecord {
-	if !taskUsesAttemptScopedFormalReads(task) {
-		return records
+	if loadFromStorage == nil {
+		return runengine.TaskRecord{}, false
 	}
-	filtered := make([]storage.ArtifactRecord, 0, len(records))
-	for _, record := range records {
-		if strings.TrimSpace(record.RunID) == task.RunID {
-			filtered = append(filtered, record)
-		}
-	}
-	return filtered
-}
-
-func filterAuditRecordsForTaskAttempt(task runengine.TaskRecord, records []audit.Record) []audit.Record {
-	if !taskUsesAttemptScopedFormalReads(task) {
-		return records
-	}
-	filtered := make([]audit.Record, 0, len(records))
-	for _, record := range records {
-		if strings.TrimSpace(record.RunID) == task.RunID {
-			filtered = append(filtered, record)
-		}
-	}
-	return filtered
+	return loadFromStorage(taskID)
 }
 
 // latestAttemptDeliveryResultFromStorage restores the newest first-class
@@ -3840,15 +3807,10 @@ func (s *Service) latestAttemptDeliveryResultFromStorage(task runengine.TaskReco
 	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(task.TaskID) == "" {
 		return nil
 	}
-	records, _, err := s.storage.LoopRuntimeStore().ListDeliveryResults(context.Background(), task.TaskID, 0, 0)
-	if err != nil || len(records) == 0 {
+	record, ok, err := s.storage.LoopRuntimeStore().GetLatestDeliveryResult(context.Background(), task.TaskID, taskAttemptRunIDFilter(task))
+	if err != nil || !ok {
 		return nil
 	}
-	records = filterDeliveryResultsForTaskAttempt(task, records)
-	if len(records) == 0 {
-		return nil
-	}
-	record := records[0]
 	payload := map[string]any{}
 	if strings.TrimSpace(record.PayloadJSON) != "" {
 		if err := json.Unmarshal([]byte(record.PayloadJSON), &payload); err != nil {
@@ -3871,11 +3833,10 @@ func (s *Service) loadAttemptTaskCitationsFromStorage(task runengine.TaskRecord)
 	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(task.TaskID) == "" {
 		return nil
 	}
-	records, err := s.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), task.TaskID)
+	records, err := s.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), task.TaskID, taskAttemptRunIDFilter(task))
 	if err != nil {
 		return nil
 	}
-	records = filterCitationsForTaskAttempt(task, records)
 	citations := make([]map[string]any, 0, len(records))
 	for _, record := range records {
 		citation := map[string]any{
@@ -5550,7 +5511,7 @@ func (s *Service) latestAuditRecordFromStorage(taskID string) map[string]any {
 	if s.storage == nil {
 		return nil
 	}
-	items, _, err := s.storage.AuditStore().ListAuditRecords(context.Background(), taskID, 1, 0)
+	items, _, err := s.storage.AuditStore().ListAuditRecords(context.Background(), taskID, "", 1, 0)
 	if err != nil || len(items) == 0 {
 		return nil
 	}
@@ -5561,7 +5522,7 @@ func (s *Service) loadAuditRecordsFromStorage(taskID string, limit, offset int) 
 	if s == nil || s.storage == nil || s.storage.AuditStore() == nil || strings.TrimSpace(taskID) == "" {
 		return nil
 	}
-	items, _, err := s.storage.AuditStore().ListAuditRecords(context.Background(), taskID, limit, offset)
+	items, _, err := s.storage.AuditStore().ListAuditRecords(context.Background(), taskID, "", limit, offset)
 	if err != nil {
 		return nil
 	}
@@ -5576,20 +5537,9 @@ func (s *Service) loadAttemptAuditRecordsFromStorage(task runengine.TaskRecord, 
 	if s == nil || s.storage == nil || s.storage.AuditStore() == nil || strings.TrimSpace(task.TaskID) == "" {
 		return nil
 	}
-	items, _, err := s.storage.AuditStore().ListAuditRecords(context.Background(), task.TaskID, 0, 0)
+	items, _, err := s.storage.AuditStore().ListAuditRecords(context.Background(), task.TaskID, taskAttemptRunIDFilter(task), limit, offset)
 	if err != nil {
 		return nil
-	}
-	items = filterAuditRecordsForTaskAttempt(task, items)
-	if limit > 0 || offset > 0 {
-		if offset >= len(items) {
-			return []map[string]any{}
-		}
-		end := offset + limit
-		if limit <= 0 || end > len(items) {
-			end = len(items)
-		}
-		items = items[offset:end]
 	}
 	result := make([]map[string]any, 0, len(items))
 	for _, item := range items {
@@ -6818,7 +6768,7 @@ func (s *Service) loadArtifactsFromStorage(taskID string, limit, offset int) []m
 	if s.storage == nil || s.storage.ArtifactStore() == nil || strings.TrimSpace(taskID) == "" {
 		return nil
 	}
-	records, _, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, limit, offset)
+	records, _, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, "", limit, offset)
 	if err != nil {
 		return nil
 	}
@@ -6833,20 +6783,9 @@ func (s *Service) loadAttemptArtifactsFromStorage(task runengine.TaskRecord, lim
 	if s.storage == nil || s.storage.ArtifactStore() == nil || strings.TrimSpace(task.TaskID) == "" {
 		return nil
 	}
-	records, _, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), task.TaskID, 0, 0)
+	records, _, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), task.TaskID, taskAttemptRunIDFilter(task), limit, offset)
 	if err != nil {
 		return nil
-	}
-	records = filterArtifactsForTaskAttempt(task, records)
-	if limit > 0 || offset > 0 {
-		if offset >= len(records) {
-			return []map[string]any{}
-		}
-		end := offset + limit
-		if limit <= 0 || end > len(records) {
-			end = len(records)
-		}
-		records = records[offset:end]
 	}
 	items := make([]map[string]any, 0, len(records))
 	for _, record := range records {
@@ -6856,8 +6795,13 @@ func (s *Service) loadAttemptArtifactsFromStorage(task runengine.TaskRecord, lim
 }
 
 func (s *Service) listArtifactsPage(taskID string, limit, offset int) ([]map[string]any, int, error) {
+	task, taskFound := formalReadTask(taskID, s.runEngine, s.taskDetailFromStorage)
+	runIDFilter := ""
+	if taskFound {
+		runIDFilter = taskAttemptRunIDFilter(task)
+	}
 	if s.storage != nil && s.storage.ArtifactStore() != nil {
-		records, total, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, limit, offset)
+		records, total, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, runIDFilter, limit, offset)
 		if err != nil {
 			return nil, 0, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
 		}
@@ -6870,7 +6814,7 @@ func (s *Service) listArtifactsPage(taskID string, limit, offset int) ([]map[str
 		}
 	}
 	items := delivery.EnsureArtifactIdentifiers(taskID, currentTaskArtifacts(s.runEngine, taskID))
-	if task, ok := s.runEngine.GetTask(taskID); ok {
+	if taskFound {
 		items = s.artifactsForTask(task, task.Artifacts)
 	}
 	total := len(items)
@@ -6899,8 +6843,9 @@ func (s *Service) findArtifactForTask(taskID, artifactID string) (map[string]any
 	if strings.TrimSpace(taskID) == "" {
 		return nil, ErrTaskNotFound
 	}
+	task, taskFound := formalReadTask(taskID, s.runEngine, s.taskDetailFromStorage)
 	exists := false
-	if task, ok := s.runEngine.GetTask(taskID); ok {
+	if taskFound {
 		exists = true
 		for _, artifact := range delivery.EnsureArtifactIdentifiers(taskID, task.Artifacts) {
 			if stringValue(artifact, "artifact_id", "") == artifactID {
@@ -6908,13 +6853,8 @@ func (s *Service) findArtifactForTask(taskID, artifactID string) (map[string]any
 			}
 		}
 	}
-	if !exists {
-		if _, ok := s.taskDetailFromStorage(taskID); ok {
-			exists = true
-		}
-	}
 	if s.storage != nil && s.storage.ArtifactStore() != nil {
-		records, _, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, 0, 0)
+		records, _, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, taskAttemptRunIDFilter(task), 0, 0)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
 		}

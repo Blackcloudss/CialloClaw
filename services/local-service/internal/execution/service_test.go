@@ -81,11 +81,14 @@ func (s *recordingLoopRuntimeStore) GetRun(_ context.Context, runID string) (sto
 	return storage.RunRecord{}, sql.ErrNoRows
 }
 
-func (s *recordingLoopRuntimeStore) ListDeliveryResults(_ context.Context, taskID string, limit, offset int) ([]storage.DeliveryResultRecord, int, error) {
+func (s *recordingLoopRuntimeStore) ListDeliveryResults(_ context.Context, taskID, runID string, limit, offset int) ([]storage.DeliveryResultRecord, int, error) {
 	items := make([]storage.DeliveryResultRecord, 0, len(s.deliveryResults))
 	for index := len(s.deliveryResults) - 1; index >= 0; index-- {
 		record := s.deliveryResults[index]
 		if taskID != "" && record.TaskID != taskID {
+			continue
+		}
+		if runID != "" && record.RunID != runID {
 			continue
 		}
 		items = append(items, record)
@@ -109,11 +112,14 @@ func (s *recordingLoopRuntimeStore) ReplaceTaskCitations(_ context.Context, task
 	return nil
 }
 
-func (s *recordingLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, taskID string) (storage.DeliveryResultRecord, bool, error) {
+func (s *recordingLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, taskID, runID string) (storage.DeliveryResultRecord, bool, error) {
 	var latest storage.DeliveryResultRecord
 	found := false
 	for _, record := range s.deliveryResults {
-		if record.TaskID != taskID {
+		if taskID != "" && record.TaskID != taskID {
+			continue
+		}
+		if runID != "" && record.RunID != runID {
 			continue
 		}
 		if !found || record.CreatedAt > latest.CreatedAt {
@@ -124,8 +130,16 @@ func (s *recordingLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, t
 	return latest, found, nil
 }
 
-func (s *recordingLoopRuntimeStore) ListTaskCitations(_ context.Context, taskID string) ([]storage.CitationRecord, error) {
-	return append([]storage.CitationRecord(nil), s.citationsByTask[taskID]...), nil
+func (s *recordingLoopRuntimeStore) ListTaskCitations(_ context.Context, taskID, runID string) ([]storage.CitationRecord, error) {
+	source := s.citationsByTask[taskID]
+	items := make([]storage.CitationRecord, 0, len(source))
+	for _, record := range source {
+		if runID != "" && record.RunID != runID {
+			continue
+		}
+		items = append(items, record)
+	}
+	return items, nil
 }
 
 func (s *recordingLoopRuntimeStore) ListEvents(_ context.Context, taskID, runID, eventType, createdAtFrom, createdAtTo string, limit, offset int) ([]storage.EventRecord, int, error) {
@@ -2203,7 +2217,7 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(artifactPath))); err != nil {
 		t.Fatalf("expected promoted artifact file to exist, got %v", err)
 	}
-	records, total, err := service.artifactStore.ListArtifacts(context.Background(), "task_screen_exec_001", 20, 0)
+	records, total, err := service.artifactStore.ListArtifacts(context.Background(), "task_screen_exec_001", "", 20, 0)
 	if err != nil || total != 1 || len(records) != 1 {
 		t.Fatalf("expected persisted screen artifact record, total=%d len=%d err=%v", total, len(records), err)
 	}

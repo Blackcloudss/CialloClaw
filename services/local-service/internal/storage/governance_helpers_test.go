@@ -91,7 +91,7 @@ func TestInMemoryGovernanceAndToolStoresCoverHelpers(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write in-memory audit failed: %v", err)
 	}
-	auditItems, auditTotal, err := auditStore.ListAuditRecords(context.Background(), "task_001", 10, 0)
+	auditItems, auditTotal, err := auditStore.ListAuditRecords(context.Background(), "task_001", "", 10, 0)
 	if err != nil || auditTotal != 1 || len(auditItems) != 1 {
 		t.Fatalf("unexpected in-memory audit list: total=%d items=%+v err=%v", auditTotal, auditItems, err)
 	}

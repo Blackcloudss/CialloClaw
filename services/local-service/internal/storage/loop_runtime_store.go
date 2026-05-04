@@ -145,12 +145,15 @@ func (s *inMemoryLoopRuntimeStore) GetRun(_ context.Context, runID string) (RunR
 	return record, nil
 }
 
-func (s *inMemoryLoopRuntimeStore) ListDeliveryResults(_ context.Context, taskID string, limit, offset int) ([]DeliveryResultRecord, int, error) {
+func (s *inMemoryLoopRuntimeStore) ListDeliveryResults(_ context.Context, taskID, runID string, limit, offset int) ([]DeliveryResultRecord, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	items := make([]DeliveryResultRecord, 0, len(s.deliveryResults))
 	for _, record := range s.deliveryResults {
 		if taskID != "" && record.TaskID != taskID {
+			continue
+		}
+		if runID != "" && record.RunID != runID {
 			continue
 		}
 		items = append(items, record)
@@ -180,13 +183,16 @@ func (s *inMemoryLoopRuntimeStore) ReplaceTaskCitations(_ context.Context, taskI
 	return nil
 }
 
-func (s *inMemoryLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, taskID string) (DeliveryResultRecord, bool, error) {
+func (s *inMemoryLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, taskID, runID string) (DeliveryResultRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	latest := DeliveryResultRecord{}
 	found := false
 	for _, record := range s.deliveryResults {
-		if record.TaskID != taskID {
+		if taskID != "" && record.TaskID != taskID {
+			continue
+		}
+		if runID != "" && record.RunID != runID {
 			continue
 		}
 		if !found || parseGovernanceTime(record.CreatedAt).After(parseGovernanceTime(latest.CreatedAt)) {
@@ -197,10 +203,17 @@ func (s *inMemoryLoopRuntimeStore) GetLatestDeliveryResult(_ context.Context, ta
 	return latest, found, nil
 }
 
-func (s *inMemoryLoopRuntimeStore) ListTaskCitations(_ context.Context, taskID string) ([]CitationRecord, error) {
+func (s *inMemoryLoopRuntimeStore) ListTaskCitations(_ context.Context, taskID, runID string) ([]CitationRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	records := append([]CitationRecord(nil), s.citations[taskID]...)
+	source := s.citations[taskID]
+	records := make([]CitationRecord, 0, len(source))
+	for _, record := range source {
+		if runID != "" && record.RunID != runID {
+			continue
+		}
+		records = append(records, record)
+	}
 	sort.SliceStable(records, func(i, j int) bool {
 		if records[i].OrderIndex == records[j].OrderIndex {
 			return records[i].CitationID < records[j].CitationID
@@ -322,16 +335,32 @@ func (s *SQLiteLoopRuntimeStore) GetRun(ctx context.Context, runID string) (RunR
 	return record, nil
 }
 
-func (s *SQLiteLoopRuntimeStore) ListDeliveryResults(ctx context.Context, taskID string, limit, offset int) ([]DeliveryResultRecord, int, error) {
-	countQuery := `SELECT COUNT(1) FROM delivery_results WHERE task_id = ?`
-	query := `SELECT delivery_result_id, task_id, COALESCE(run_id, ''), type, title, payload_json, COALESCE(preview_text, ''), created_at FROM delivery_results WHERE task_id = ? ORDER BY created_at DESC, delivery_result_id DESC`
-	args := []any{taskID}
+func (s *SQLiteLoopRuntimeStore) ListDeliveryResults(ctx context.Context, taskID, runID string, limit, offset int) ([]DeliveryResultRecord, int, error) {
+	filters := make([]string, 0, 2)
+	filterArgs := make([]any, 0, 2)
+	if strings.TrimSpace(taskID) != "" {
+		filters = append(filters, `task_id = ?`)
+		filterArgs = append(filterArgs, taskID)
+	}
+	if strings.TrimSpace(runID) != "" {
+		filters = append(filters, `run_id = ?`)
+		filterArgs = append(filterArgs, runID)
+	}
+	countQuery := `SELECT COUNT(1) FROM delivery_results`
+	query := `SELECT delivery_result_id, task_id, COALESCE(run_id, ''), type, title, payload_json, COALESCE(preview_text, ''), created_at FROM delivery_results`
+	if len(filters) > 0 {
+		whereClause := ` WHERE ` + strings.Join(filters, ` AND `)
+		countQuery += whereClause
+		query += whereClause
+	}
+	query += ` ORDER BY created_at DESC, delivery_result_id DESC`
+	args := append([]any(nil), filterArgs...)
 	if limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
 		args = append(args, limit, offset)
 	}
 	var total int
-	if err := s.db.QueryRowContext(ctx, countQuery, taskID).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count delivery results: %w", err)
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -380,14 +409,26 @@ func (s *SQLiteLoopRuntimeStore) ReplaceTaskCitations(ctx context.Context, taskI
 	return nil
 }
 
-func (s *SQLiteLoopRuntimeStore) GetLatestDeliveryResult(ctx context.Context, taskID string) (DeliveryResultRecord, bool, error) {
-	row := s.db.QueryRowContext(ctx, `
+func (s *SQLiteLoopRuntimeStore) GetLatestDeliveryResult(ctx context.Context, taskID, runID string) (DeliveryResultRecord, bool, error) {
+	filters := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	if strings.TrimSpace(taskID) != "" {
+		filters = append(filters, `task_id = ?`)
+		args = append(args, taskID)
+	}
+	if strings.TrimSpace(runID) != "" {
+		filters = append(filters, `run_id = ?`)
+		args = append(args, runID)
+	}
+	query := `
 		SELECT delivery_result_id, task_id, COALESCE(run_id, ''), type, title, payload_json, preview_text, created_at
 		FROM delivery_results
-		WHERE task_id = ?
-		ORDER BY created_at DESC, delivery_result_id DESC
-		LIMIT 1
-	`, taskID)
+	`
+	if len(filters) > 0 {
+		query += ` WHERE ` + strings.Join(filters, ` AND `)
+	}
+	query += ` ORDER BY created_at DESC, delivery_result_id DESC LIMIT 1`
+	row := s.db.QueryRowContext(ctx, query, args...)
 	var record DeliveryResultRecord
 	var previewText sql.NullString
 	if err := row.Scan(&record.DeliveryResultID, &record.TaskID, &record.RunID, &record.Type, &record.Title, &record.PayloadJSON, &previewText, &record.CreatedAt); err != nil {
@@ -400,14 +441,27 @@ func (s *SQLiteLoopRuntimeStore) GetLatestDeliveryResult(ctx context.Context, ta
 	return record, true, nil
 }
 
-func (s *SQLiteLoopRuntimeStore) ListTaskCitations(ctx context.Context, taskID string) ([]CitationRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `
+func (s *SQLiteLoopRuntimeStore) ListTaskCitations(ctx context.Context, taskID, runID string) ([]CitationRecord, error) {
+	filters := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	if strings.TrimSpace(taskID) != "" {
+		filters = append(filters, `task_id = ?`)
+		args = append(args, taskID)
+	}
+	if strings.TrimSpace(runID) != "" {
+		filters = append(filters, `run_id = ?`)
+		args = append(args, runID)
+	}
+	query := `
 		SELECT citation_id, task_id, run_id, source_type, source_ref, label,
 		       artifact_id, artifact_type, evidence_role, excerpt_text, screen_session_id, order_index
 		FROM task_citations
-		WHERE task_id = ?
-		ORDER BY order_index ASC, citation_id ASC
-	`, taskID)
+	`
+	if len(filters) > 0 {
+		query += ` WHERE ` + strings.Join(filters, ` AND `)
+	}
+	query += ` ORDER BY order_index ASC, citation_id ASC`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list task citations: %w", err)
 	}
