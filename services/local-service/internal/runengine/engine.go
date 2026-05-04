@@ -589,6 +589,7 @@ func (e *Engine) ReopenIntentConfirmation(taskID, title string, intent map[strin
 	record.ApprovalRequest = nil
 	record.Authorization = nil
 	record.ImpactScope = nil
+	record.TokenUsage = nil
 	record.StorageWritePlan = nil
 	record.ArtifactPlans = nil
 	record.MemoryReadPlans = nil
@@ -1196,6 +1197,7 @@ func (e *Engine) prepareRestartRecordLocked(record *TaskRecord, now time.Time, b
 	record.PendingExecution = nil
 	record.Authorization = nil
 	record.ImpactScope = nil
+	record.TokenUsage = nil
 	record.StorageWritePlan = nil
 	record.ArtifactPlans = nil
 	record.MemoryReadPlans = nil
@@ -3289,6 +3291,7 @@ func taskRecordToStorage(record TaskRecord) storage.TaskRunRecord {
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             record.RunID,
+		PrimaryRunID:      firstNonEmpty(record.PrimaryRunID, record.RunID),
 		RequestSource:     record.RequestSource,
 		RequestTrigger:    record.RequestTrigger,
 		ExecutionAttempt:  record.ExecutionAttempt,
@@ -3335,7 +3338,7 @@ func taskRecordFromStorage(record storage.TaskRunRecord) TaskRecord {
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             record.RunID,
-		PrimaryRunID:      record.RunID,
+		PrimaryRunID:      firstNonEmpty(record.PrimaryRunID, record.RunID),
 		RequestSource:     firstNonEmpty(record.RequestSource, record.Snapshot.Source),
 		RequestTrigger:    firstNonEmpty(record.RequestTrigger, record.Snapshot.Trigger),
 		ExecutionAttempt:  maxInt(record.ExecutionAttempt, 1),

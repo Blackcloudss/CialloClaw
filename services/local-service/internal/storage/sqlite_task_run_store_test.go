@@ -338,6 +338,39 @@ func TestSQLiteTaskRunStorePersistsExecutionAttempt(t *testing.T) {
 	}
 }
 
+func TestSQLiteTaskRunStorePersistsPrimaryRunID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "task-run-primary.db")
+	store, err := NewSQLiteTaskRunStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteTaskRunStore returned error: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	record := sampleTaskRunRecord()
+	record.RunID = "run_restart_003"
+	record.PrimaryRunID = "run_primary_001"
+	record.ExecutionAttempt = 3
+	if err := store.SaveTaskRun(context.Background(), record); err != nil {
+		t.Fatalf("SaveTaskRun returned error: %v", err)
+	}
+
+	loaded, err := store.GetTaskRun(context.Background(), record.TaskID)
+	if err != nil {
+		t.Fatalf("GetTaskRun returned error: %v", err)
+	}
+	if loaded.PrimaryRunID != record.PrimaryRunID {
+		t.Fatalf("expected primary run id %q to round-trip, got %q", record.PrimaryRunID, loaded.PrimaryRunID)
+	}
+
+	taskItems, taskTotal, err := store.taskStore.ListTasks(context.Background(), 10, 0)
+	if err != nil || taskTotal != 1 || len(taskItems) != 1 {
+		t.Fatalf("expected one structured task record, got total=%d items=%+v err=%v", taskTotal, taskItems, err)
+	}
+	if taskItems[0].PrimaryRunID != record.PrimaryRunID {
+		t.Fatalf("expected structured task row to keep primary run id %q, got %+v", record.PrimaryRunID, taskItems[0])
+	}
+}
+
 func TestSQLiteTaskRunStoreRejectsInvalidRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "task-runs-invalid.db")
 	store, err := NewSQLiteTaskRunStore(path)

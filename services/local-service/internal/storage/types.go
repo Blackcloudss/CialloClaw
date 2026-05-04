@@ -340,6 +340,7 @@ type TaskRunRecord struct {
 	TaskID            string
 	SessionID         string
 	RunID             string
+	PrimaryRunID      string
 	RequestSource     string
 	RequestTrigger    string
 	ExecutionAttempt  int

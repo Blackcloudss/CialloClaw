@@ -1688,6 +1688,9 @@ func TestEngineControlTaskRestartResetsFinishedOutputs(t *testing.T) {
 	if _, ok := engine.SetMirrorReferences(task.TaskID, []map[string]any{{"memory_id": "mem_write_task_001_1"}}); !ok {
 		t.Fatal("expected mirror references to be stored before restart")
 	}
+	if _, ok := engine.AppendAuditData(task.TaskID, nil, map[string]any{"total_tokens": 42, "total_cost_usd": 0.12}); !ok {
+		t.Fatal("expected token usage to be stored before restart")
+	}
 	originalRunID := task.RunID
 
 	restarted, err := engine.ControlTask(task.TaskID, "restart", map[string]any{"task_id": task.TaskID, "type": "status"})
@@ -1708,6 +1711,9 @@ func TestEngineControlTaskRestartResetsFinishedOutputs(t *testing.T) {
 	}
 	if restarted.MemoryReadPlans != nil || restarted.MemoryWritePlans != nil || restarted.MirrorReferences != nil {
 		t.Fatal("expected restart to clear handoff and mirror snapshots")
+	}
+	if restarted.TokenUsage != nil {
+		t.Fatalf("expected restart to clear token usage, got %+v", restarted.TokenUsage)
 	}
 	if restarted.LoopStopReason != "" {
 		t.Fatalf("expected restart to clear loop stop reason, got %q", restarted.LoopStopReason)
@@ -1794,6 +1800,9 @@ func TestEngineRestartPersistsExecutionAttemptAcrossReload(t *testing.T) {
 	}
 	if persisted.ExecutionAttempt != 3 {
 		t.Fatalf("expected persisted execution attempt to stay 3 after reload, got %d", persisted.ExecutionAttempt)
+	}
+	if persisted.PrimaryRunID != task.RunID {
+		t.Fatalf("expected persisted primary run id to remain %q after reload, got %q", task.RunID, persisted.PrimaryRunID)
 	}
 }
 
