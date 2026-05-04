@@ -1924,7 +1924,7 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 		}
 	}
 	if action == "restart" {
-		restartedTask, restartBubble, _, _, restartErr := s.executeTaskAttempt(previousTask, updatedTask, snapshotFromTask(updatedTask), updatedTask.Intent)
+		restartedTask, restartBubble, restartErr := s.advanceRestartedTaskAttempt(previousTask, updatedTask)
 		if restartErr != nil {
 			return nil, restartErr
 		}
@@ -1943,6 +1943,36 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 		"task":           taskMap(updatedTask),
 		"bubble_message": bubble,
 	}, nil
+}
+
+// advanceRestartedTaskAttempt sends a fresh restart run through the same
+// pre-execution gates as a new task. Restart may allocate a new run_id, but it
+// must not bypass session serialization or the authorization boundary before
+// the executor receives that run.
+func (s *Service) advanceRestartedTaskAttempt(previousTask, task runengine.TaskRecord) (runengine.TaskRecord, map[string]any, error) {
+	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {
+		return runengine.TaskRecord{}, nil, queueErr
+	} else if queued {
+		return queuedTask, queueBubble, nil
+	}
+
+	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, task.Intent)
+	if governanceErr != nil {
+		return runengine.TaskRecord{}, nil, governanceErr
+	}
+	if handled {
+		bubble := mapValue(governedResponse, "bubble_message")
+		if len(bubble) == 0 {
+			bubble = governedTask.BubbleMessage
+		}
+		return governedTask, bubble, nil
+	}
+
+	restartedTask, restartBubble, _, _, restartErr := s.executeTaskAttempt(previousTask, governedTask, snapshotFromTask(governedTask), governedTask.Intent)
+	if restartErr != nil {
+		return runengine.TaskRecord{}, nil, restartErr
+	}
+	return restartedTask, restartBubble, nil
 }
 
 // TaskInspectorConfigGet handles agent.task_inspector.config.get.
@@ -7627,6 +7657,9 @@ func executionSegmentKind(previousTask, processingTask runengine.TaskRecord) str
 	}
 	if previousTask.Status == "paused" || taskIsBlockedHumanLoop(previousTask) {
 		return executionSegmentResume
+	}
+	if processingTask.ExecutionAttempt > 1 {
+		return executionSegmentRestart
 	}
 	return executionSegmentInitial
 }

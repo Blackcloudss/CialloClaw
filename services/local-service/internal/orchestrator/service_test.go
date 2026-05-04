@@ -2621,6 +2621,12 @@ func TestExecutionSegmentKindClassifiesInitialResumeAndRestart(t *testing.T) {
 	if attempt := executionAttemptIndex(restartedAgainTask, legacyRestartProcessing); attempt != 3 {
 		t.Fatalf("expected fallback attempt inference to reach 3, got %d", attempt)
 	}
+
+	gatedRestartTask := runengine.TaskRecord{RunID: "run_after_restart", Status: "processing", ExecutionAttempt: 2}
+	gatedRestartProcessing := runengine.TaskRecord{RunID: "run_after_restart", Status: "processing", ExecutionAttempt: 2}
+	if segment := executionSegmentKind(gatedRestartTask, gatedRestartProcessing); segment != executionSegmentRestart {
+		t.Fatalf("expected gated restart attempt to keep restart segment, got %s", segment)
+	}
 }
 
 func TestServiceTaskControlResumeConsumesHumanLoopPendingPayload(t *testing.T) {
@@ -2993,6 +2999,112 @@ func TestServiceTaskControlRestartExecutesFreshAttempt(t *testing.T) {
 	}
 	if modelClient.generateToolCallsCount < 2 {
 		t.Fatalf("expected restart to invoke executor again, got %d tool-call generations", modelClient.generateToolCallsCount)
+	}
+}
+
+func TestServiceTaskControlRestartRechecksAuthorization(t *testing.T) {
+	modelCalls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: "Restart should wait for approval.",
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalls++
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_restart_auth_unexpected",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Restart should wait for approval.",
+			}, nil
+		},
+	})
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_restart_auth",
+		Title:       "Write restart output",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "write_file", "arguments": map[string]any{"target_path": "workspace_document", "require_authorization": true}},
+		CurrentStep: "return_result",
+		RiskLevel:   "green",
+	})
+	previousRunID := task.RunID
+
+	result, err := service.TaskControl(map[string]any{"task_id": task.TaskID, "action": "restart"})
+	if err != nil {
+		t.Fatalf("restart task failed: %v", err)
+	}
+	restartedTask := result["task"].(map[string]any)
+	if restartedTask["status"] != "waiting_auth" || restartedTask["current_step"] != "waiting_authorization" {
+		t.Fatalf("expected restart to stop at authorization, got %+v", restartedTask)
+	}
+	record, ok := service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected restarted task to remain in runtime")
+	}
+	if record.RunID == previousRunID {
+		t.Fatalf("expected restart authorization gate to use a fresh run_id, got %s", record.RunID)
+	}
+	if record.ExecutionAttempt != task.ExecutionAttempt+1 {
+		t.Fatalf("expected restart authorization gate to increment attempt, got before=%d after=%d", task.ExecutionAttempt, record.ExecutionAttempt)
+	}
+	if len(record.ApprovalRequest) == 0 || len(record.PendingExecution) == 0 {
+		t.Fatalf("expected restart to recreate approval state, got approval=%+v pending=%+v", record.ApprovalRequest, record.PendingExecution)
+	}
+	if record.DeliveryResult != nil || record.FinishedAt != nil {
+		t.Fatalf("expected restart to wait before delivery, got %+v", record)
+	}
+	if modelCalls != 0 {
+		t.Fatalf("expected restart authorization gate to avoid model execution, got %d calls", modelCalls)
+	}
+}
+
+func TestServiceTaskControlRestartQueuesBehindActiveSessionTask(t *testing.T) {
+	modelClient := &stubToolCallingModelClient{output: "Queued restart output."}
+	service, _ := newTestServiceWithModelClient(t, modelClient)
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_restart_queue",
+		Title:       "Active session task",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		CurrentStep: "agent_loop",
+		RiskLevel:   "green",
+	})
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_restart_queue",
+		Title:       "Finished task to restart",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		CurrentStep: "return_result",
+		RiskLevel:   "green",
+	})
+	previousRunID := task.RunID
+
+	result, err := service.TaskControl(map[string]any{"task_id": task.TaskID, "action": "restart"})
+	if err != nil {
+		t.Fatalf("restart task failed: %v", err)
+	}
+	restartedTask := result["task"].(map[string]any)
+	if restartedTask["status"] != "blocked" || restartedTask["current_step"] != "session_queue" {
+		t.Fatalf("expected restart to queue behind active session work, got %+v", restartedTask)
+	}
+	record, ok := service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected queued restart to remain in runtime")
+	}
+	if record.RunID == previousRunID {
+		t.Fatalf("expected queued restart to allocate a fresh run_id, got %s", record.RunID)
+	}
+	if record.ExecutionAttempt != task.ExecutionAttempt+1 {
+		t.Fatalf("expected queued restart to increment attempt, got before=%d after=%d", task.ExecutionAttempt, record.ExecutionAttempt)
+	}
+	if modelClient.generateToolCallsCount != 0 {
+		t.Fatalf("expected queued restart not to execute while session is busy, got %d model calls", modelClient.generateToolCallsCount)
+	}
+	activeRecord, ok := service.runEngine.GetTask(activeTask.TaskID)
+	if !ok || activeRecord.Status != "processing" {
+		t.Fatalf("expected active session owner to keep running, got %+v ok=%v", activeRecord, ok)
 	}
 }
 
