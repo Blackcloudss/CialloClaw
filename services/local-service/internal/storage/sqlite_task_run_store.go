@@ -148,6 +148,7 @@ func (s *SQLiteTaskRunStore) DeleteTaskRun(ctx context.Context, taskID string) e
 
 // SaveTaskRun saves or overwrites one task/run snapshot.
 func (s *SQLiteTaskRunStore) SaveTaskRun(ctx context.Context, record TaskRunRecord) error {
+	record.PrimaryRunID = normalizedTaskRunPrimaryRunID(record)
 	if err := validateTaskRunRecord(record); err != nil {
 		return err
 	}
@@ -371,6 +372,7 @@ func unmarshalTaskRunRecord(payload string) (TaskRunRecord, error) {
 	if err := json.Unmarshal([]byte(payload), &record); err != nil {
 		return TaskRunRecord{}, fmt.Errorf("unmarshal task run record: %w", err)
 	}
+	record.PrimaryRunID = normalizedTaskRunPrimaryRunID(record)
 	if err := validateTaskRunRecord(record); err != nil {
 		return TaskRunRecord{}, err
 	}

@@ -11,6 +11,13 @@ import (
 	"time"
 )
 
+func normalizedTaskRunPrimaryRunID(record TaskRunRecord) string {
+	if strings.TrimSpace(record.PrimaryRunID) != "" {
+		return strings.TrimSpace(record.PrimaryRunID)
+	}
+	return strings.TrimSpace(record.RunID)
+}
+
 // InMemoryTaskRunStore provides an in-memory fallback for task/run persistence.
 type InMemoryTaskRunStore struct {
 	mu        sync.RWMutex
@@ -81,6 +88,7 @@ func (s *InMemoryTaskRunStore) DeleteTaskRun(_ context.Context, taskID string) e
 
 // SaveTaskRun saves or overwrites one task/run snapshot.
 func (s *InMemoryTaskRunStore) SaveTaskRun(_ context.Context, record TaskRunRecord) error {
+	record.PrimaryRunID = normalizedTaskRunPrimaryRunID(record)
 	if err := validateTaskRunRecord(record); err != nil {
 		return err
 	}
@@ -212,7 +220,7 @@ func taskRecordFromSnapshot(record TaskRunRecord) (TaskRecord, error) {
 		TaskID:              record.TaskID,
 		SessionID:           record.SessionID,
 		RunID:               record.RunID,
-		PrimaryRunID:        record.RunID,
+		PrimaryRunID:        normalizedTaskRunPrimaryRunID(record),
 		Title:               record.Title,
 		SourceType:          record.SourceType,
 		Status:              record.Status,
