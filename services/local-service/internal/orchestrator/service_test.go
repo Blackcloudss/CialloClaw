@@ -2940,6 +2940,62 @@ func TestServiceTaskControlResumePausedTaskDoesNotReexecute(t *testing.T) {
 	}
 }
 
+func TestServiceTaskControlRestartExecutesFreshAttempt(t *testing.T) {
+	modelClient := &stubToolCallingModelClient{output: "Restarted loop output."}
+	service, _ := newTestServiceWithModelClient(t, modelClient)
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_restart_attempt",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Translate this note into English.",
+		},
+		"intent": map[string]any{
+			"name":      "agent_loop",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	startedTask := startResult["task"].(map[string]any)
+	if startedTask["status"] != "completed" {
+		t.Fatalf("expected initial task to complete, got %+v", startedTask)
+	}
+	taskID := startedTask["task_id"].(string)
+	previousRecord, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected completed task to remain in runtime")
+	}
+
+	result, err := service.TaskControl(map[string]any{"task_id": taskID, "action": "restart"})
+	if err != nil {
+		t.Fatalf("restart task failed: %v", err)
+	}
+	restartedTask := result["task"].(map[string]any)
+	if restartedTask["status"] != "completed" || restartedTask["current_step"] != "return_result" {
+		t.Fatalf("expected restart control to execute through completion, got %+v", restartedTask)
+	}
+	restartedRecord, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected restarted task to remain in runtime")
+	}
+	if restartedRecord.RunID == previousRecord.RunID {
+		t.Fatalf("expected restart to allocate a fresh run_id, got %s", restartedRecord.RunID)
+	}
+	if restartedRecord.ExecutionAttempt != previousRecord.ExecutionAttempt+1 {
+		t.Fatalf("expected restart attempt to increment, got before=%d after=%d", previousRecord.ExecutionAttempt, restartedRecord.ExecutionAttempt)
+	}
+	if restartedRecord.DeliveryResult == nil || restartedRecord.FinishedAt == nil {
+		t.Fatalf("expected restart execution to persist delivery and finished_at, got %+v", restartedRecord)
+	}
+	if modelClient.generateToolCallsCount < 2 {
+		t.Fatalf("expected restart to invoke executor again, got %d tool-call generations", modelClient.generateToolCallsCount)
+	}
+}
+
 func TestMaybeEscalateHumanLoopSkipsSideEffectingExecutionAttempt(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "unused")
 	task := service.runEngine.CreateTask(runengine.CreateTaskInput{

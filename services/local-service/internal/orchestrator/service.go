@@ -1884,13 +1884,15 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 	if !isSupportedTaskControlAction(action) {
 		return nil, fmt.Errorf("unsupported task control action: %s", action)
 	}
+	previousTask := runengine.TaskRecord{}
+	if existingTask, ok := s.runEngine.GetTask(taskID); ok {
+		previousTask = existingTask
+	}
 	wasHumanLoop := false
 	var reviewDecision map[string]any
 	arguments := mapValue(params, "arguments")
 	if action == "resume" {
-		if existingTask, ok := s.runEngine.GetTask(taskID); ok {
-			wasHumanLoop = taskIsBlockedHumanLoop(existingTask)
-		}
+		wasHumanLoop = taskIsBlockedHumanLoop(previousTask)
 		if wasHumanLoop {
 			decision, decisionErr := humanReviewDecisionFromParams(arguments)
 			if decisionErr != nil {
@@ -1919,6 +1921,16 @@ func (s *Service) TaskControl(params map[string]any) (map[string]any, error) {
 		} else if resumed {
 			updatedTask = traceResumedTask
 			bubble = traceBubble
+		}
+	}
+	if action == "restart" {
+		restartedTask, restartBubble, _, _, restartErr := s.executeTaskAttempt(previousTask, updatedTask, snapshotFromTask(updatedTask), updatedTask.Intent)
+		if restartErr != nil {
+			return nil, restartErr
+		}
+		updatedTask = restartedTask
+		if restartBubble != nil {
+			bubble = restartBubble
 		}
 	}
 	if taskIsTerminal(updatedTask.Status) {
@@ -7281,6 +7293,14 @@ func truncateText(value string, maxLength int) string {
 // dateTimeLayout is the shared timestamp layout exposed by orchestrator RPC
 // payloads.
 func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
+	return s.executeTaskAttempt(task, task, snapshot, taskIntent)
+}
+
+// executeTaskAttempt runs the current task state while preserving the previous
+// task snapshot for execution segment classification. Restart needs this split:
+// the new run must execute, but the executor still needs the old run_id to mark
+// the segment as restart instead of initial.
+func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
 	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, s.activeExecutionStepName(taskIntent), "开始生成正式结果")
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
@@ -7335,8 +7355,8 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 		SourceType:           processingTask.SourceType,
 		Title:                processingTask.Title,
 		Intent:               taskIntent,
-		AttemptIndex:         executionAttemptIndex(task, processingTask),
-		SegmentKind:          executionSegmentKind(task, processingTask),
+		AttemptIndex:         executionAttemptIndex(previousTask, processingTask),
+		SegmentKind:          executionSegmentKind(previousTask, processingTask),
 		Snapshot:             snapshot,
 		SteeringMessages:     append([]string(nil), processingTask.SteeringMessages...),
 		DeliveryType:         deliveryType,
