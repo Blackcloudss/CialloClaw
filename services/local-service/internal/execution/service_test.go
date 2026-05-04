@@ -1172,6 +1172,11 @@ func TestCanConsumeActiveSteeringRequiresLoopRuntimeAndPoller(t *testing.T) {
 	modelClient := &stubModelClient{output: "loop ready"}
 	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
 	intent := map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}}
+	var nilService *Service
+
+	if nilService.CanConsumeActiveSteering(intent) {
+		t.Fatal("expected nil service to reject active steering")
+	}
 
 	if service.CanConsumeActiveSteering(intent) {
 		t.Fatal("expected agent-loop service without a steering poller to reject active steering")
@@ -1190,6 +1195,13 @@ func TestCanConsumeActiveSteeringRequiresLoopRuntimeAndPoller(t *testing.T) {
 		t.Fatal("expected prompt-only model service to reject active steering")
 	}
 
+	service.ReplaceModel(nil)
+	if service.CanConsumeActiveSteering(intent) {
+		t.Fatal("expected missing current model to reject active steering")
+	}
+
+	service, _ = newTestExecutionServiceWithModelClient(t, modelClient)
+	service = service.WithSteeringPoller(func(_ string) []string { return nil })
 	service.loop = nil
 	if service.CanConsumeActiveSteering(intent) {
 		t.Fatal("expected missing loop runtime to reject active steering")

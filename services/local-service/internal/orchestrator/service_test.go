@@ -12574,6 +12574,61 @@ func TestServiceTaskSteerRejectsPendingInputTasks(t *testing.T) {
 	}
 }
 
+func TestServiceTaskSteerAllowsDeferredTasks(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "task steer")
+
+	testCases := []struct {
+		name string
+		task runengine.CreateTaskInput
+	}{
+		{
+			name: "waiting authorization",
+			task: runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_waiting_auth",
+				Title:       "Waiting auth task",
+				SourceType:  "hover_input",
+				Status:      "waiting_auth",
+				Intent:      map[string]any{"name": "write_file", "arguments": map[string]any{}},
+				CurrentStep: "waiting_authorization",
+				RiskLevel:   "yellow",
+			},
+		},
+		{
+			name: "blocked queue",
+			task: runengine.CreateTaskInput{
+				SessionID:   "sess_task_steer_blocked",
+				Title:       "Blocked task",
+				SourceType:  "hover_input",
+				Status:      "blocked",
+				Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+				CurrentStep: "session_queue",
+				RiskLevel:   "green",
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			task := service.runEngine.CreateTask(testCase.task)
+
+			result, err := service.TaskSteer(map[string]any{"task_id": task.TaskID, "message": "Carry this instruction into the resumed task."})
+			if err != nil {
+				t.Fatalf("expected deferred task steering to succeed, got %v", err)
+			}
+			if result["task"].(map[string]any)["task_id"] != task.TaskID {
+				t.Fatalf("expected steered task id %s, got %+v", task.TaskID, result)
+			}
+			record, ok := service.runEngine.GetTask(task.TaskID)
+			if !ok {
+				t.Fatal("expected deferred task to remain in runtime")
+			}
+			if len(record.SteeringMessages) != 1 || record.SteeringMessages[0] != "Carry this instruction into the resumed task." {
+				t.Fatalf("expected deferred steering to persist, got %+v", record.SteeringMessages)
+			}
+		})
+	}
+}
+
 func TestServiceActiveExecutionStepNameTracksSteeringCapability(t *testing.T) {
 	promptService, _ := newTestServiceWithModelClient(t, stubModelClient{output: "prompt fallback"})
 	intent := map[string]any{"name": "agent_loop", "arguments": map[string]any{}}
