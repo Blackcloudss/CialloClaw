@@ -1801,6 +1801,53 @@ func TestEnginePrepareRestartLeavesLiveTaskStableUntilCommit(t *testing.T) {
 	}
 }
 
+func TestEngineBlockPreparedTaskByPolicyPublishesPreparedAttempt(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_prepare_block",
+		Title:       "prepare block task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "write_file"},
+		CurrentStep: "return_result",
+		RiskLevel:   "yellow",
+	})
+	previousRunID := task.RunID
+
+	_, prepared, err := engine.PrepareRestart(task.TaskID, map[string]any{"task_id": task.TaskID, "type": "status"})
+	if err != nil {
+		t.Fatalf("prepare restart failed: %v", err)
+	}
+
+	blockedTask, ok := engine.BlockPreparedTaskByPolicy(
+		prepared,
+		"red",
+		"policy denied",
+		map[string]any{"files": []any{"workspace/output.md"}},
+		map[string]any{"task_id": task.TaskID, "type": "status", "text": "denied"},
+	)
+	if !ok {
+		t.Fatal("expected prepared policy block to commit")
+	}
+	if blockedTask.RunID != prepared.RunID || blockedTask.ExecutionAttempt != prepared.ExecutionAttempt {
+		t.Fatalf("expected blocked task to keep prepared restart identity, got %+v", blockedTask)
+	}
+	if blockedTask.RunID == previousRunID {
+		t.Fatalf("expected blocked task to keep fresh prepared run_id, got %s", blockedTask.RunID)
+	}
+	if blockedTask.Status != "cancelled" || blockedTask.CurrentStep != "risk_blocked" {
+		t.Fatalf("expected prepared policy block to end in risk_blocked cancel state, got %+v", blockedTask)
+	}
+
+	liveTask, ok := engine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected blocked restart to remain readable")
+	}
+	if liveTask.RunID != prepared.RunID || liveTask.ExecutionAttempt != prepared.ExecutionAttempt {
+		t.Fatalf("expected live task to publish prepared attempt after block, got %+v", liveTask)
+	}
+}
+
 func TestEngineRestartPersistsExecutionAttemptAcrossReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "task-run-attempts.db")
 	store, err := storage.NewSQLiteTaskRunStore(path)

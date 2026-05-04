@@ -3061,13 +3061,24 @@ func TestServiceTaskControlRestartRechecksAuthorization(t *testing.T) {
 	if !ok {
 		t.Fatal("expected restart authorization notifications to remain available")
 	}
+	taskUpdatedCount := 0
+	approvalPendingCount := 0
 	for _, notification := range notifications {
+		if notification.Method == "task.updated" {
+			taskUpdatedCount++
+		}
+		if notification.Method == "approval.pending" {
+			approvalPendingCount++
+		}
 		if notification.Method != "task.updated" {
 			continue
 		}
 		if status, _ := notification.Params["status"].(string); status == "processing" {
 			t.Fatalf("expected restart authorization gate to avoid transient processing notification, got %+v", notification.Params)
 		}
+	}
+	if taskUpdatedCount != 1 || approvalPendingCount != 1 {
+		t.Fatalf("expected one prepared waiting_auth publication, got task.updated=%d approval.pending=%d notifications=%+v", taskUpdatedCount, approvalPendingCount, notifications)
 	}
 }
 
@@ -3124,13 +3135,24 @@ func TestServiceTaskControlRestartQueuesBehindActiveSessionTask(t *testing.T) {
 	if !ok {
 		t.Fatal("expected queued restart notifications to remain available")
 	}
+	taskUpdatedCount := 0
+	sessionQueuedCount := 0
 	for _, notification := range notifications {
+		if notification.Method == "task.updated" {
+			taskUpdatedCount++
+		}
+		if notification.Method == "task.session_queued" {
+			sessionQueuedCount++
+		}
 		if notification.Method != "task.updated" {
 			continue
 		}
 		if status, _ := notification.Params["status"].(string); status == "processing" {
 			t.Fatalf("expected queued restart to avoid transient processing notification, got %+v", notification.Params)
 		}
+	}
+	if taskUpdatedCount != 1 || sessionQueuedCount != 1 {
+		t.Fatalf("expected one prepared queue publication, got task.updated=%d task.session_queued=%d notifications=%+v", taskUpdatedCount, sessionQueuedCount, notifications)
 	}
 }
 
@@ -3364,6 +3386,65 @@ func TestServiceRestartPreparationStaysInvisibleUntilAttemptCommits(t *testing.T
 	}
 	if restartedTask.RunID != preparedTask.RunID || restartedTask.ExecutionAttempt != preparedTask.ExecutionAttempt {
 		t.Fatalf("expected committed restart to publish the prepared attempt, got %+v", restartedTask)
+	}
+}
+
+func TestServiceBlockTaskByAssessmentPublishesPreparedRestartOnce(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "unused")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_restart_deny",
+		Title:       "Denied restart task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "write_file", "arguments": map[string]any{"target_path": "workspace_document"}},
+		CurrentStep: "return_result",
+		RiskLevel:   "yellow",
+	})
+	previousRunID := task.RunID
+	_, _ = service.runEngine.DrainNotifications(task.TaskID)
+
+	_, preparedTask, err := service.runEngine.PrepareRestart(task.TaskID, map[string]any{"task_id": task.TaskID, "type": "status"})
+	if err != nil {
+		t.Fatalf("prepare restart failed: %v", err)
+	}
+	assessment := execution.GovernanceAssessment{
+		Deny:          true,
+		RiskLevel:     "red",
+		Reason:        "policy_denied",
+		TargetObject:  "workspace/result.md",
+		ImpactScope:   map[string]any{"files": []any{"workspace/result.md"}},
+		OperationName: "write_file",
+	}
+
+	response, blockedTask, err := service.blockTaskByAssessment(preparedTask, assessment, true)
+	if err != nil {
+		t.Fatalf("block task by assessment failed: %v", err)
+	}
+	if blockedTask.RunID != preparedTask.RunID || blockedTask.ExecutionAttempt != preparedTask.ExecutionAttempt {
+		t.Fatalf("expected denied restart to publish prepared attempt identity, got %+v", blockedTask)
+	}
+	if blockedTask.RunID == previousRunID {
+		t.Fatalf("expected denied restart to keep fresh run_id, got %s", blockedTask.RunID)
+	}
+	if blockedTask.Status != "cancelled" || blockedTask.CurrentStep != "risk_blocked" {
+		t.Fatalf("expected denied restart to end in risk_blocked cancel state, got %+v", blockedTask)
+	}
+	if responseTask := response["task"].(map[string]any); responseTask["status"] != "cancelled" {
+		t.Fatalf("expected response task to report cancelled status, got %+v", responseTask)
+	}
+
+	notifications, ok := service.runEngine.DrainNotifications(task.TaskID)
+	if !ok {
+		t.Fatal("expected deny notifications to remain available")
+	}
+	taskUpdatedCount := 0
+	for _, notification := range notifications {
+		if notification.Method == "task.updated" {
+			taskUpdatedCount++
+		}
+	}
+	if taskUpdatedCount != 1 {
+		t.Fatalf("expected one prepared deny publication, got task.updated=%d notifications=%+v", taskUpdatedCount, notifications)
 	}
 }
 

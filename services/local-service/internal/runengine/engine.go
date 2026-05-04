@@ -997,6 +997,46 @@ func (e *Engine) BlockTaskByPolicy(taskID, riskLevel, outputSummary string, impa
 	return record.clone(), true
 }
 
+// BlockPreparedTaskByPolicy atomically publishes a prepared restart attempt as
+// the terminal risk-blocked state. Governance denial must attach to the fresh
+// run_id directly so restart readers never observe a transient mutation on the
+// previous finished attempt.
+func (e *Engine) BlockPreparedTaskByPolicy(task TaskRecord, riskLevel, outputSummary string, impactScope map[string]any, bubbleMessage map[string]any) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.commitPreparedTaskLocked(task)
+	if !ok {
+		return TaskRecord{}, false
+	}
+
+	now := e.now()
+	record.Status = "cancelled"
+	record.CurrentStep = "risk_blocked"
+	record.UpdatedAt = now
+	record.FinishedAt = &now
+	record.PendingExecution = nil
+	record.ApprovalRequest = nil
+	record.BubbleMessage = cloneMap(bubbleMessage)
+	record.ImpactScope = cloneMap(impactScope)
+	if riskLevel != "" {
+		record.RiskLevel = riskLevel
+	}
+	record.SecuritySummary = mergePreservedSecuritySummary(map[string]any{
+		"security_status":        "intercepted",
+		"risk_level":             record.RiskLevel,
+		"pending_authorizations": 0,
+		"latest_restore_point":   latestRestorePointFromSummary(record.SecuritySummary),
+	}, record.SecuritySummary)
+	record.Timeline = advanceTimeline(record.Timeline, "risk_blocked", "cancelled", firstNonEmpty(outputSummary, "高风险操作已被策略拦截"))
+	record.CurrentStepStatus = currentTimelineStatus(record.Timeline)
+	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", taskUpdatedNotificationParams(record))
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
 // CompleteTask collapses a task into completed and records its formal delivery,
 // artifacts, and recovery-point summary. The completion write also emits
 // delivery.ready so transports and dashboard queries observe the same formal

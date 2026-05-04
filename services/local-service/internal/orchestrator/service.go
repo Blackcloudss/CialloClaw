@@ -3251,6 +3251,14 @@ func taskSessionValue(sessionID string) any {
 	return strings.TrimSpace(sessionID)
 }
 
+func (s *Service) isPreparedRestartAttempt(task runengine.TaskRecord) bool {
+	currentTask, ok := s.runEngine.GetTask(task.TaskID)
+	if !ok {
+		return false
+	}
+	return strings.TrimSpace(currentTask.RunID) != strings.TrimSpace(task.RunID)
+}
+
 func (s *Service) queueTaskIfSessionBusy(task runengine.TaskRecord) (runengine.TaskRecord, map[string]any, bool, error) {
 	activeTask, ok := s.runEngine.ActiveSessionTask(task.SessionID, task.TaskID)
 	if !ok {
@@ -3263,9 +3271,13 @@ func (s *Service) queueTaskIfSessionBusy(task runengine.TaskRecord) (runengine.T
 		fmt.Sprintf("当前会话已有任务 %s 正在执行，本任务已排队等待。", truncateText(activeTask.Title, 24)),
 		task.UpdatedAt.Format(dateTimeLayout),
 	)
-	queuedTask, changed := s.runEngine.QueueTaskForSession(task.TaskID, activeTask.TaskID, bubble)
-	if currentTask, currentOk := s.runEngine.GetTask(task.TaskID); currentOk && currentTask.RunID != task.RunID {
+	preparedRestart := s.isPreparedRestartAttempt(task)
+	var queuedTask runengine.TaskRecord
+	var changed bool
+	if preparedRestart {
 		queuedTask, changed = s.runEngine.QueuePreparedTaskForSession(task, activeTask.TaskID, bubble)
+	} else {
+		queuedTask, changed = s.runEngine.QueueTaskForSession(task.TaskID, activeTask.TaskID, bubble)
 	}
 	if !changed {
 		return runengine.TaskRecord{}, nil, false, ErrTaskNotFound
@@ -6668,8 +6680,9 @@ func (s *Service) handleTaskGovernanceDecision(task runengine.TaskRecord, taskIn
 			return task, nil, false, nil
 		}
 	}
+	preparedRestart := s.isPreparedRestartAttempt(task)
 	if assessment.Deny {
-		response, blockedTask, blockErr := s.blockTaskByAssessment(task, assessment)
+		response, blockedTask, blockErr := s.blockTaskByAssessment(task, assessment, preparedRestart)
 		return blockedTask, response, true, blockErr
 	}
 	if !assessment.ApprovalRequired {
@@ -6678,9 +6691,12 @@ func (s *Service) handleTaskGovernanceDecision(task runengine.TaskRecord, taskIn
 	pendingExecution := s.applyGovernanceAssessment(s.buildPendingExecution(task, taskIntent), assessment)
 	approvalRequest := buildApprovalRequest(task.TaskID, taskIntent, assessment)
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", task.UpdatedAt.Format(dateTimeLayout))
-	updatedTask, changed := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
-	if currentTask, currentOk := s.runEngine.GetTask(task.TaskID); currentOk && currentTask.RunID != task.RunID {
+	var updatedTask runengine.TaskRecord
+	var changed bool
+	if preparedRestart {
 		updatedTask, changed = s.runEngine.MarkPreparedTaskWaitingApprovalWithPlan(task, approvalRequest, pendingExecution, bubble)
+	} else {
+		updatedTask, changed = s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
 	}
 	if !changed {
 		return task, nil, false, ErrTaskNotFound
@@ -6711,10 +6727,16 @@ func (s *Service) fallbackGovernanceAssessment(task runengine.TaskRecord, taskIn
 	}, true
 }
 
-func (s *Service) blockTaskByAssessment(task runengine.TaskRecord, assessment execution.GovernanceAssessment) (map[string]any, runengine.TaskRecord, error) {
+func (s *Service) blockTaskByAssessment(task runengine.TaskRecord, assessment execution.GovernanceAssessment, preparedRestart bool) (map[string]any, runengine.TaskRecord, error) {
 	bubbleText := governanceInterceptionBubble(assessment)
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", bubbleText, task.UpdatedAt.Format(dateTimeLayout))
-	updatedTask, ok := s.runEngine.BlockTaskByPolicy(task.TaskID, assessment.RiskLevel, bubbleText, assessment.ImpactScope, bubble)
+	var updatedTask runengine.TaskRecord
+	var ok bool
+	if preparedRestart {
+		updatedTask, ok = s.runEngine.BlockPreparedTaskByPolicy(task, assessment.RiskLevel, bubbleText, assessment.ImpactScope, bubble)
+	} else {
+		updatedTask, ok = s.runEngine.BlockTaskByPolicy(task.TaskID, assessment.RiskLevel, bubbleText, assessment.ImpactScope, bubble)
+	}
 	if !ok {
 		return nil, task, ErrTaskNotFound
 	}
@@ -7475,9 +7497,13 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 // the new run must execute, but the executor still needs the old run_id to mark
 // the segment as restart instead of initial.
 func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
-	processingTask, ok := s.runEngine.BeginExecution(task.TaskID, s.activeExecutionStepName(taskIntent), "开始生成正式结果")
-	if currentTask, currentOk := s.runEngine.GetTask(task.TaskID); currentOk && currentTask.RunID != task.RunID {
+	preparedRestart := s.isPreparedRestartAttempt(task)
+	var processingTask runengine.TaskRecord
+	var ok bool
+	if preparedRestart {
 		processingTask, ok = s.runEngine.BeginPreparedExecution(task, s.activeExecutionStepName(taskIntent), "开始生成正式结果")
+	} else {
+		processingTask, ok = s.runEngine.BeginExecution(task.TaskID, s.activeExecutionStepName(taskIntent), "开始生成正式结果")
 	}
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
