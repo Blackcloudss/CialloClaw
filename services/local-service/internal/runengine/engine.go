@@ -44,6 +44,7 @@ type TaskRecord struct {
 	TaskID            string
 	SessionID         string
 	RunID             string
+	PrimaryRunID      string
 	RequestSource     string
 	RequestTrigger    string
 	ExecutionAttempt  int
@@ -321,6 +322,7 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 		TaskID:            taskID,
 		SessionID:         firstNonEmpty(input.SessionID, e.nextIdentifier("sess")),
 		RunID:             runID,
+		PrimaryRunID:      runID,
 		RequestSource:     strings.TrimSpace(input.RequestSource),
 		RequestTrigger:    strings.TrimSpace(input.RequestTrigger),
 		ExecutionAttempt:  1,
@@ -3333,6 +3335,7 @@ func taskRecordFromStorage(record storage.TaskRunRecord) TaskRecord {
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             record.RunID,
+		PrimaryRunID:      record.RunID,
 		RequestSource:     firstNonEmpty(record.RequestSource, record.Snapshot.Source),
 		RequestTrigger:    firstNonEmpty(record.RequestTrigger, record.Snapshot.Trigger),
 		ExecutionAttempt:  maxInt(record.ExecutionAttempt, 1),

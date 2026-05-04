@@ -1220,6 +1220,9 @@ func mergeRuntimeTaskDetail(structuredTask, runtimeTask runengine.TaskRecord) ru
 	if runtimeTask.RunID != "" {
 		merged.RunID = runtimeTask.RunID
 	}
+	if runtimeTask.PrimaryRunID != "" {
+		merged.PrimaryRunID = runtimeTask.PrimaryRunID
+	}
 	if runtimeTask.ExecutionAttempt > 0 {
 		merged.ExecutionAttempt = runtimeTask.ExecutionAttempt
 	}
@@ -2625,7 +2628,11 @@ func (s *Service) SecurityAuditList(params map[string]any) (map[string]any, erro
 	if s.storage == nil {
 		return map[string]any{"items": []map[string]any{}, "page": pageMap(limit, offset, 0)}, nil
 	}
-	records, total, err := s.storage.AuditStore().ListAuditRecords(context.Background(), taskID, "", limit, offset)
+	runIDFilter := ""
+	if task, ok := formalReadTask(taskID, s.runEngine, s.taskDetailFromStorage); ok {
+		runIDFilter = taskAttemptRunIDFilter(task)
+	}
+	records, total, err := s.storage.AuditStore().ListAuditRecords(context.Background(), taskID, runIDFilter, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
 	}
@@ -3804,7 +3811,15 @@ func mergeStructuredTaskDetailCompatibility(task, taskRunTask runengine.TaskReco
 // taskUsesAttemptScopedFormalReads keeps task detail pinned to the active run
 // once restart allocates a fresh attempt under the same task_id.
 func taskUsesAttemptScopedFormalReads(task runengine.TaskRecord) bool {
-	return task.ExecutionAttempt > 1 && strings.TrimSpace(task.RunID) != ""
+	runID := strings.TrimSpace(task.RunID)
+	if runID == "" {
+		return false
+	}
+	primaryRunID := strings.TrimSpace(task.PrimaryRunID)
+	if primaryRunID != "" {
+		return runID != primaryRunID
+	}
+	return task.ExecutionAttempt > 1
 }
 
 func taskAttemptRunIDFilter(task runengine.TaskRecord) string {
@@ -4634,6 +4649,7 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord, inclu
 		TaskID:            record.TaskID,
 		SessionID:         record.SessionID,
 		RunID:             strings.TrimSpace(record.RunID),
+		PrimaryRunID:      firstNonEmptyString(strings.TrimSpace(record.PrimaryRunID), strings.TrimSpace(record.RunID)),
 		RequestSource:     record.RequestSource,
 		RequestTrigger:    record.RequestTrigger,
 		Title:             record.Title,
