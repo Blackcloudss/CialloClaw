@@ -1157,7 +1157,7 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	if authorizationRecord != nil {
 		authorizationRecordValue = authorizationRecord
 	}
-	storageAuditRecords := s.loadAuditRecordsFromStorage(task.TaskID, 0, 0)
+	storageAuditRecords := s.loadAttemptAuditRecordsFromStorage(task, 0, 0)
 	auditRecord := selectTaskDetailAuditRecord(task, task.AuditRecords, storageAuditRecords)
 	auditRecordValue := any(nil)
 	if auditRecord != nil {
@@ -1175,7 +1175,7 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	}
 	runtimeSummary := s.buildTaskRuntimeSummary(task)
 	deliveryResultValue := any(nil)
-	deliveryResult := s.latestDeliveryResultFromStorage(task.TaskID)
+	deliveryResult := s.latestAttemptDeliveryResultFromStorage(task)
 	if len(deliveryResult) == 0 {
 		deliveryResult = task.DeliveryResult
 	}
@@ -1188,8 +1188,8 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 		"task":                 taskMap(task),
 		"timeline":             protocolTaskStepList(timelineMap(task.Timeline)),
 		"delivery_result":      deliveryResultValue,
-		"artifacts":            protocolArtifactList(s.artifactsForTask(task.TaskID, task.Artifacts)),
-		"citations":            protocolCitationList(s.citationsForTask(task.TaskID, task.Citations)),
+		"artifacts":            protocolArtifactList(s.artifactsForTask(task, task.Artifacts)),
+		"citations":            protocolCitationList(s.citationsForTask(task, task.Citations)),
 		"mirror_references":    protocolMirrorReferenceList(task.MirrorReferences),
 		"approval_request":     approvalRequestValue,
 		"authorization_record": authorizationRecordValue,
@@ -1204,6 +1204,20 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 // temporarily stale.
 func mergeRuntimeTaskDetail(structuredTask, runtimeTask runengine.TaskRecord) runengine.TaskRecord {
 	merged := mergeStructuredTaskDetailCompatibility(structuredTask, runtimeTask)
+	if taskUsesAttemptScopedFormalReads(runtimeTask) {
+		merged.DeliveryResult = cloneMap(runtimeTask.DeliveryResult)
+		merged.Artifacts = cloneMapSlice(runtimeTask.Artifacts)
+		merged.Citations = cloneMapSlice(runtimeTask.Citations)
+		merged.AuditRecords = cloneMapSlice(runtimeTask.AuditRecords)
+		merged.LatestToolCall = cloneMap(runtimeTask.LatestToolCall)
+		merged.LoopStopReason = runtimeTask.LoopStopReason
+	}
+	if runtimeTask.RunID != "" {
+		merged.RunID = runtimeTask.RunID
+	}
+	if runtimeTask.ExecutionAttempt > 0 {
+		merged.ExecutionAttempt = runtimeTask.ExecutionAttempt
+	}
 	if runtimeTask.Status != "" {
 		merged.Status = runtimeTask.Status
 	}
@@ -1279,10 +1293,14 @@ func (s *Service) buildTaskRuntimeSummary(task runengine.TaskRecord) map[string]
 	if s.storage == nil || s.storage.LoopRuntimeStore() == nil {
 		return summary
 	}
+	runIDFilter := ""
+	if taskUsesAttemptScopedFormalReads(task) {
+		runIDFilter = task.RunID
+	}
 	// Keep latest_event_type scoped to normalized runtime events so task-level
 	// notifications such as task.updated or task.steered do not leak into the
 	// runtime summary contract when no runtime events have been persisted yet.
-	records, total, err := s.storage.LoopRuntimeStore().ListEvents(context.Background(), task.TaskID, "", "", "", "", 1, 0)
+	records, total, err := s.storage.LoopRuntimeStore().ListEvents(context.Background(), task.TaskID, runIDFilter, "", "", "", 1, 0)
 	if err == nil {
 		summary["events_count"] = total
 		if len(records) > 0 && strings.TrimSpace(records[0].Type) != "" {
@@ -2691,7 +2709,7 @@ func (s *Service) applyRestoreAfterApproval(task runengine.TaskRecord, point che
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, ErrTaskNotFound
 	}
-	auditRecord := s.writeRestoreAuditRecord(updatedTask.TaskID, point, applied, bubbleText)
+	auditRecord := s.writeRestoreAuditRecord(updatedTask.TaskID, updatedTask.RunID, point, applied, bubbleText)
 	updatedTask = s.appendAuditData(updatedTask, compactAuditRecords(auditRecord), nil)
 	return updatedTask, bubble, map[string]any{
 		"applied":        applied,
@@ -3686,6 +3704,7 @@ func structuredTaskNeedsTaskRunFallback(record storage.TaskRecord, _ runengine.T
 // being rolled out. The structured row stays authoritative and the task-run
 // snapshot only backfills fields the structured read could not rebuild.
 func mergeStructuredTaskDetailCompatibility(task, taskRunTask runengine.TaskRecord) runengine.TaskRecord {
+	attemptScopedFormalReads := taskUsesAttemptScopedFormalReads(task)
 	if task.FinishedAt == nil && taskRunTask.FinishedAt != nil {
 		task.FinishedAt = cloneTimePointer(taskRunTask.FinishedAt)
 	}
@@ -3698,16 +3717,16 @@ func mergeStructuredTaskDetailCompatibility(task, taskRunTask runengine.TaskReco
 	if len(task.BubbleMessage) == 0 {
 		task.BubbleMessage = cloneMap(taskRunTask.BubbleMessage)
 	}
-	if len(task.DeliveryResult) == 0 {
+	if len(task.DeliveryResult) == 0 && !attemptScopedFormalReads {
 		task.DeliveryResult = cloneMap(taskRunTask.DeliveryResult)
 	}
-	if len(task.Artifacts) == 0 {
+	if len(task.Artifacts) == 0 && !attemptScopedFormalReads {
 		task.Artifacts = cloneMapSlice(taskRunTask.Artifacts)
 	}
-	if len(task.Citations) == 0 {
+	if len(task.Citations) == 0 && !attemptScopedFormalReads {
 		task.Citations = cloneMapSlice(taskRunTask.Citations)
 	}
-	if len(task.AuditRecords) == 0 {
+	if len(task.AuditRecords) == 0 && !attemptScopedFormalReads {
 		task.AuditRecords = cloneMapSlice(taskRunTask.AuditRecords)
 	}
 	if len(task.MirrorReferences) == 0 {
@@ -3737,13 +3756,13 @@ func mergeStructuredTaskDetailCompatibility(task, taskRunTask runengine.TaskReco
 	if len(task.TokenUsage) == 0 {
 		task.TokenUsage = cloneMap(taskRunTask.TokenUsage)
 	}
-	if len(task.LatestEvent) == 0 {
+	if len(task.LatestEvent) == 0 && !attemptScopedFormalReads {
 		task.LatestEvent = cloneMap(taskRunTask.LatestEvent)
 	}
-	if len(task.LatestToolCall) == 0 {
+	if len(task.LatestToolCall) == 0 && !attemptScopedFormalReads {
 		task.LatestToolCall = cloneMap(taskRunTask.LatestToolCall)
 	}
-	if strings.TrimSpace(task.LoopStopReason) == "" {
+	if strings.TrimSpace(task.LoopStopReason) == "" && !attemptScopedFormalReads {
 		task.LoopStopReason = taskRunTask.LoopStopReason
 	}
 	if len(task.SteeringMessages) == 0 {
@@ -3755,17 +3774,81 @@ func mergeStructuredTaskDetailCompatibility(task, taskRunTask runengine.TaskReco
 	return task
 }
 
-// latestDeliveryResultFromStorage restores the newest first-class
-// delivery_result when structured task detail cannot rely on task_run
-// compatibility snapshots anymore.
-func (s *Service) latestDeliveryResultFromStorage(taskID string) map[string]any {
-	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(taskID) == "" {
+// taskUsesAttemptScopedFormalReads keeps task detail pinned to the active run
+// once restart allocates a fresh attempt under the same task_id.
+func taskUsesAttemptScopedFormalReads(task runengine.TaskRecord) bool {
+	return task.ExecutionAttempt > 1 && strings.TrimSpace(task.RunID) != ""
+}
+
+func filterDeliveryResultsForTaskAttempt(task runengine.TaskRecord, records []storage.DeliveryResultRecord) []storage.DeliveryResultRecord {
+	if !taskUsesAttemptScopedFormalReads(task) {
+		return records
+	}
+	filtered := make([]storage.DeliveryResultRecord, 0, len(records))
+	for _, record := range records {
+		if strings.TrimSpace(record.RunID) == task.RunID {
+			filtered = append(filtered, record)
+		}
+	}
+	return filtered
+}
+
+func filterCitationsForTaskAttempt(task runengine.TaskRecord, records []storage.CitationRecord) []storage.CitationRecord {
+	if !taskUsesAttemptScopedFormalReads(task) {
+		return records
+	}
+	filtered := make([]storage.CitationRecord, 0, len(records))
+	for _, record := range records {
+		if strings.TrimSpace(record.RunID) == task.RunID {
+			filtered = append(filtered, record)
+		}
+	}
+	return filtered
+}
+
+func filterArtifactsForTaskAttempt(task runengine.TaskRecord, records []storage.ArtifactRecord) []storage.ArtifactRecord {
+	if !taskUsesAttemptScopedFormalReads(task) {
+		return records
+	}
+	filtered := make([]storage.ArtifactRecord, 0, len(records))
+	for _, record := range records {
+		if strings.TrimSpace(record.RunID) == task.RunID {
+			filtered = append(filtered, record)
+		}
+	}
+	return filtered
+}
+
+func filterAuditRecordsForTaskAttempt(task runengine.TaskRecord, records []audit.Record) []audit.Record {
+	if !taskUsesAttemptScopedFormalReads(task) {
+		return records
+	}
+	filtered := make([]audit.Record, 0, len(records))
+	for _, record := range records {
+		if strings.TrimSpace(record.RunID) == task.RunID {
+			filtered = append(filtered, record)
+		}
+	}
+	return filtered
+}
+
+// latestAttemptDeliveryResultFromStorage restores the newest first-class
+// delivery_result for the task detail attempt that is currently active. Restart
+// attempts must not rehydrate a previous run's formal output while the new run
+// is still processing the same task_id.
+func (s *Service) latestAttemptDeliveryResultFromStorage(task runengine.TaskRecord) map[string]any {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(task.TaskID) == "" {
 		return nil
 	}
-	record, ok, err := s.storage.LoopRuntimeStore().GetLatestDeliveryResult(context.Background(), taskID)
-	if err != nil || !ok {
+	records, _, err := s.storage.LoopRuntimeStore().ListDeliveryResults(context.Background(), task.TaskID, 0, 0)
+	if err != nil || len(records) == 0 {
 		return nil
 	}
+	records = filterDeliveryResultsForTaskAttempt(task, records)
+	if len(records) == 0 {
+		return nil
+	}
+	record := records[0]
 	payload := map[string]any{}
 	if strings.TrimSpace(record.PayloadJSON) != "" {
 		if err := json.Unmarshal([]byte(record.PayloadJSON), &payload); err != nil {
@@ -3780,16 +3863,19 @@ func (s *Service) latestDeliveryResultFromStorage(taskID string) map[string]any 
 	}
 }
 
-// loadTaskCitationsFromStorage restores the current formal citation chain from
-// first-class loop runtime storage when task_run snapshots are unavailable.
-func (s *Service) loadTaskCitationsFromStorage(taskID string) []map[string]any {
-	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(taskID) == "" {
+// loadAttemptTaskCitationsFromStorage restores the current formal citation chain
+// for the active task attempt when task_run snapshots are unavailable. Restarted
+// tasks keep previous attempts under the same task_id, so task detail must not
+// reuse older run evidence once a fresh run_id exists.
+func (s *Service) loadAttemptTaskCitationsFromStorage(task runengine.TaskRecord) []map[string]any {
+	if s == nil || s.storage == nil || s.storage.LoopRuntimeStore() == nil || strings.TrimSpace(task.TaskID) == "" {
 		return nil
 	}
-	records, err := s.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), taskID)
+	records, err := s.storage.LoopRuntimeStore().ListTaskCitations(context.Background(), task.TaskID)
 	if err != nil {
 		return nil
 	}
+	records = filterCitationsForTaskAttempt(task, records)
 	citations := make([]map[string]any, 0, len(records))
 	for _, record := range records {
 		citation := map[string]any{
@@ -4591,11 +4677,11 @@ func (s *Service) hydrateStructuredTaskFormalArtifacts(task *runengine.TaskRecor
 	if s == nil || s.storage == nil || task == nil {
 		return
 	}
-	task.Artifacts = s.loadArtifactsFromStorage(task.TaskID, 0, 0)
-	task.Citations = s.loadTaskCitationsFromStorage(task.TaskID)
-	task.AuditRecords = s.loadAuditRecordsFromStorage(task.TaskID, 0, 0)
+	task.Artifacts = s.loadAttemptArtifactsFromStorage(*task, 0, 0)
+	task.Citations = s.loadAttemptTaskCitationsFromStorage(*task)
+	task.AuditRecords = s.loadAttemptAuditRecordsFromStorage(*task, 0, 0)
 	task.LatestToolCall = s.latestToolCallFromStorage(task.TaskID, task.RunID)
-	if deliveryResult := s.latestDeliveryResultFromStorage(task.TaskID); deliveryResult != nil {
+	if deliveryResult := s.latestAttemptDeliveryResultFromStorage(*task); deliveryResult != nil {
 		task.DeliveryResult = deliveryResult
 	}
 }
@@ -4638,10 +4724,10 @@ func (s *Service) hydrateStructuredTaskGovernance(task *runengine.TaskRecord) {
 	if authorizationRecord := s.latestAuthorizationRecordFromStorage(task.TaskID); authorizationRecord != nil {
 		task.Authorization = authorizationRecord
 	}
-	if deliveryResult := s.latestDeliveryResultFromStorage(task.TaskID); len(deliveryResult) > 0 {
+	if deliveryResult := s.latestAttemptDeliveryResultFromStorage(*task); len(deliveryResult) > 0 {
 		task.DeliveryResult = deliveryResult
 	}
-	if citations := s.loadTaskCitationsFromStorage(task.TaskID); len(citations) > 0 {
+	if citations := s.loadAttemptTaskCitationsFromStorage(*task); len(citations) > 0 {
 		task.Citations = citations
 	}
 	securitySummary := cloneMap(task.SecuritySummary)
@@ -5486,6 +5572,32 @@ func (s *Service) loadAuditRecordsFromStorage(taskID string, limit, offset int) 
 	return result
 }
 
+func (s *Service) loadAttemptAuditRecordsFromStorage(task runengine.TaskRecord, limit, offset int) []map[string]any {
+	if s == nil || s.storage == nil || s.storage.AuditStore() == nil || strings.TrimSpace(task.TaskID) == "" {
+		return nil
+	}
+	items, _, err := s.storage.AuditStore().ListAuditRecords(context.Background(), task.TaskID, 0, 0)
+	if err != nil {
+		return nil
+	}
+	items = filterAuditRecordsForTaskAttempt(task, items)
+	if limit > 0 || offset > 0 {
+		if offset >= len(items) {
+			return []map[string]any{}
+		}
+		end := offset + limit
+		if limit <= 0 || end > len(items) {
+			end = len(items)
+		}
+		items = items[offset:end]
+	}
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		result = append(result, item.Map())
+	}
+	return result
+}
+
 func (s *Service) latestToolCallFromStorage(taskID, runID string) map[string]any {
 	if s == nil || s.storage == nil || s.storage.ToolCallSink() == nil || strings.TrimSpace(taskID) == "" {
 		return nil
@@ -5797,12 +5909,13 @@ func firstImpactFile(impactScope map[string]any) string {
 	return files[0]
 }
 
-func (s *Service) writeRestoreAuditRecord(taskID string, point checkpoint.RecoveryPoint, applied bool, summary string) map[string]any {
+func (s *Service) writeRestoreAuditRecord(taskID, runID string, point checkpoint.RecoveryPoint, applied bool, summary string) map[string]any {
 	if s.audit == nil {
 		return nil
 	}
 	input := audit.RecordInput{
 		TaskID:  taskID,
+		RunID:   runID,
 		Type:    "recovery",
 		Action:  "restore_apply",
 		Summary: firstNonEmptyString(strings.TrimSpace(summary), "restore apply completed"),
@@ -6616,6 +6729,7 @@ func (s *Service) writeGovernanceAuditRecord(taskID, runID, auditType, action, s
 	}
 	if record, err := s.audit.Write(context.Background(), audit.RecordInput{
 		TaskID:  taskID,
+		RunID:   runID,
 		Type:    auditType,
 		Action:  action,
 		Summary: summary,
@@ -6626,6 +6740,7 @@ func (s *Service) writeGovernanceAuditRecord(taskID, runID, auditType, action, s
 	}
 	if record, err := s.audit.BuildRecord(audit.RecordInput{
 		TaskID:  taskID,
+		RunID:   runID,
 		Type:    auditType,
 		Action:  action,
 		Summary: summary,
@@ -6665,11 +6780,16 @@ func (s *Service) persistArtifacts(taskID string, artifactPlans []map[string]any
 	if s.storage == nil || s.storage.ArtifactStore() == nil || len(artifactPlans) == 0 {
 		return
 	}
+	runID := ""
+	if task, ok := s.runEngine.GetTask(taskID); ok {
+		runID = task.RunID
+	}
 	records := make([]storage.ArtifactRecord, 0, len(artifactPlans))
 	for _, plan := range artifactPlans {
 		records = append(records, storage.ArtifactRecord{
 			ArtifactID:          stringValue(plan, "artifact_id", ""),
 			TaskID:              firstNonEmptyString(stringValue(plan, "task_id", ""), taskID),
+			RunID:               firstNonEmptyString(stringValue(plan, "run_id", ""), runID),
 			ArtifactType:        stringValue(plan, "artifact_type", ""),
 			Title:               stringValue(plan, "title", ""),
 			Path:                stringValue(plan, "path", ""),
@@ -6681,17 +6801,17 @@ func (s *Service) persistArtifacts(taskID string, artifactPlans []map[string]any
 	}
 	_ = s.storage.ArtifactStore().SaveArtifacts(context.Background(), records)
 	if task, ok := s.runEngine.GetTask(taskID); ok {
-		merged := mergeArtifactsWithStored(task.Artifacts, s.loadArtifactsFromStorage(taskID, 0, 0))
+		merged := mergeArtifactsWithStored(task.Artifacts, s.loadAttemptArtifactsFromStorage(task, 0, 0))
 		_, _ = s.runEngine.SetPresentation(taskID, task.BubbleMessage, task.DeliveryResult, merged)
 	}
 }
 
-func (s *Service) artifactsForTask(taskID string, runtimeArtifacts []map[string]any) []map[string]any {
-	return mergeArtifactsWithStored(delivery.EnsureArtifactIdentifiers(taskID, runtimeArtifacts), s.loadArtifactsFromStorage(taskID, 0, 0))
+func (s *Service) artifactsForTask(task runengine.TaskRecord, runtimeArtifacts []map[string]any) []map[string]any {
+	return mergeArtifactsWithStored(delivery.EnsureArtifactIdentifiers(task.TaskID, runtimeArtifacts), s.loadAttemptArtifactsFromStorage(task, 0, 0))
 }
 
-func (s *Service) citationsForTask(taskID string, runtimeCitations []map[string]any) []map[string]any {
-	return mergeCitationsWithStored(s.loadTaskCitationsFromStorage(taskID), runtimeCitations)
+func (s *Service) citationsForTask(task runengine.TaskRecord, runtimeCitations []map[string]any) []map[string]any {
+	return mergeCitationsWithStored(s.loadAttemptTaskCitationsFromStorage(task), runtimeCitations)
 }
 
 func (s *Service) loadArtifactsFromStorage(taskID string, limit, offset int) []map[string]any {
@@ -6701,6 +6821,32 @@ func (s *Service) loadArtifactsFromStorage(taskID string, limit, offset int) []m
 	records, _, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, limit, offset)
 	if err != nil {
 		return nil
+	}
+	items := make([]map[string]any, 0, len(records))
+	for _, record := range records {
+		items = append(items, artifactMapFromStorage(record))
+	}
+	return items
+}
+
+func (s *Service) loadAttemptArtifactsFromStorage(task runengine.TaskRecord, limit, offset int) []map[string]any {
+	if s.storage == nil || s.storage.ArtifactStore() == nil || strings.TrimSpace(task.TaskID) == "" {
+		return nil
+	}
+	records, _, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), task.TaskID, 0, 0)
+	if err != nil {
+		return nil
+	}
+	records = filterArtifactsForTaskAttempt(task, records)
+	if limit > 0 || offset > 0 {
+		if offset >= len(records) {
+			return []map[string]any{}
+		}
+		end := offset + limit
+		if limit <= 0 || end > len(records) {
+			end = len(records)
+		}
+		records = records[offset:end]
 	}
 	items := make([]map[string]any, 0, len(records))
 	for _, record := range records {
@@ -6723,7 +6869,10 @@ func (s *Service) listArtifactsPage(taskID string, limit, offset int) ([]map[str
 			return items, total, nil
 		}
 	}
-	items := s.artifactsForTask(taskID, currentTaskArtifacts(s.runEngine, taskID))
+	items := delivery.EnsureArtifactIdentifiers(taskID, currentTaskArtifacts(s.runEngine, taskID))
+	if task, ok := s.runEngine.GetTask(taskID); ok {
+		items = s.artifactsForTask(task, task.Artifacts)
+	}
 	total := len(items)
 	if offset >= total {
 		return []map[string]any{}, total, nil
@@ -7909,6 +8058,7 @@ func (s *Service) persistExecutionDeliveryResult(task runengine.TaskRecord, task
 	_ = s.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
 		DeliveryResultID: deliveryResultID,
 		TaskID:           task.TaskID,
+		RunID:            task.RunID,
 		Type:             stringValue(deliveryResult, "type", "bubble"),
 		Title:            stringValue(deliveryResult, "title", ""),
 		PayloadJSON:      payloadJSON,

@@ -59,6 +59,7 @@ func (s *Service) BuildRecord(input RecordInput) (Record, error) {
 	return Record{
 		AuditID:   s.nextAuditID(),
 		TaskID:    strings.TrimSpace(input.TaskID),
+		RunID:     strings.TrimSpace(input.RunID),
 		Type:      strings.TrimSpace(input.Type),
 		Action:    strings.TrimSpace(input.Action),
 		Summary:   strings.TrimSpace(input.Summary),
@@ -92,9 +93,11 @@ func BuildRecordInputFromCandidate(taskID string, candidate map[string]any) (Rec
 
 	summaryValue, _ := candidate["summary"].(string)
 	targetValue, _ := candidate["target"].(string)
+	runIDValue, _ := candidate["run_id"].(string)
 
 	return RecordInput{
 		TaskID:  strings.TrimSpace(taskID),
+		RunID:   strings.TrimSpace(runIDValue),
 		Type:    strings.TrimSpace(typeValue),
 		Action:  strings.TrimSpace(actionValue),
 		Summary: strings.TrimSpace(summaryValue),

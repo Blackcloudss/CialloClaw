@@ -62,6 +62,7 @@ type EventRecord struct {
 type DeliveryResultRecord struct {
 	DeliveryResultID string
 	TaskID           string
+	RunID            string
 	Type             string
 	Title            string
 	PayloadJSON      string
@@ -303,9 +304,9 @@ func (s *SQLiteLoopRuntimeStore) SaveEvents(ctx context.Context, records []Event
 
 func (s *SQLiteLoopRuntimeStore) SaveDeliveryResult(ctx context.Context, record DeliveryResultRecord) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT OR REPLACE INTO delivery_results (delivery_result_id, task_id, type, title, payload_json, preview_text, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, record.DeliveryResultID, record.TaskID, record.Type, record.Title, record.PayloadJSON, nullableRuntimeString(record.PreviewText), record.CreatedAt)
+		INSERT OR REPLACE INTO delivery_results (delivery_result_id, task_id, run_id, type, title, payload_json, preview_text, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.DeliveryResultID, record.TaskID, nullableRuntimeString(record.RunID), record.Type, record.Title, record.PayloadJSON, nullableRuntimeString(record.PreviewText), record.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("write delivery_result record: %w", err)
 	}
@@ -323,7 +324,7 @@ func (s *SQLiteLoopRuntimeStore) GetRun(ctx context.Context, runID string) (RunR
 
 func (s *SQLiteLoopRuntimeStore) ListDeliveryResults(ctx context.Context, taskID string, limit, offset int) ([]DeliveryResultRecord, int, error) {
 	countQuery := `SELECT COUNT(1) FROM delivery_results WHERE task_id = ?`
-	query := `SELECT delivery_result_id, task_id, type, title, payload_json, COALESCE(preview_text, ''), created_at FROM delivery_results WHERE task_id = ? ORDER BY created_at DESC, delivery_result_id DESC`
+	query := `SELECT delivery_result_id, task_id, COALESCE(run_id, ''), type, title, payload_json, COALESCE(preview_text, ''), created_at FROM delivery_results WHERE task_id = ? ORDER BY created_at DESC, delivery_result_id DESC`
 	args := []any{taskID}
 	if limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
@@ -341,7 +342,7 @@ func (s *SQLiteLoopRuntimeStore) ListDeliveryResults(ctx context.Context, taskID
 	items := make([]DeliveryResultRecord, 0)
 	for rows.Next() {
 		var record DeliveryResultRecord
-		if err := rows.Scan(&record.DeliveryResultID, &record.TaskID, &record.Type, &record.Title, &record.PayloadJSON, &record.PreviewText, &record.CreatedAt); err != nil {
+		if err := rows.Scan(&record.DeliveryResultID, &record.TaskID, &record.RunID, &record.Type, &record.Title, &record.PayloadJSON, &record.PreviewText, &record.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan delivery result: %w", err)
 		}
 		items = append(items, record)
@@ -381,7 +382,7 @@ func (s *SQLiteLoopRuntimeStore) ReplaceTaskCitations(ctx context.Context, taskI
 
 func (s *SQLiteLoopRuntimeStore) GetLatestDeliveryResult(ctx context.Context, taskID string) (DeliveryResultRecord, bool, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT delivery_result_id, task_id, type, title, payload_json, preview_text, created_at
+		SELECT delivery_result_id, task_id, COALESCE(run_id, ''), type, title, payload_json, preview_text, created_at
 		FROM delivery_results
 		WHERE task_id = ?
 		ORDER BY created_at DESC, delivery_result_id DESC
@@ -389,7 +390,7 @@ func (s *SQLiteLoopRuntimeStore) GetLatestDeliveryResult(ctx context.Context, ta
 	`, taskID)
 	var record DeliveryResultRecord
 	var previewText sql.NullString
-	if err := row.Scan(&record.DeliveryResultID, &record.TaskID, &record.Type, &record.Title, &record.PayloadJSON, &previewText, &record.CreatedAt); err != nil {
+	if err := row.Scan(&record.DeliveryResultID, &record.TaskID, &record.RunID, &record.Type, &record.Title, &record.PayloadJSON, &previewText, &record.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return DeliveryResultRecord{}, false, nil
 		}
@@ -523,8 +524,10 @@ func (s *SQLiteLoopRuntimeStore) initialize(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_steps_run_order ON steps(run_id, order_index);`,
 		`CREATE TABLE IF NOT EXISTS events (event_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL, step_id TEXT, type TEXT NOT NULL, level TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL);`,
 		`CREATE INDEX IF NOT EXISTS idx_events_task_time ON events(task_id, created_at DESC);`,
-		`CREATE TABLE IF NOT EXISTS delivery_results (delivery_result_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, type TEXT NOT NULL, title TEXT NOT NULL, payload_json TEXT NOT NULL, preview_text TEXT, created_at TEXT NOT NULL);`,
+		`CREATE TABLE IF NOT EXISTS delivery_results (delivery_result_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, run_id TEXT, type TEXT NOT NULL, title TEXT NOT NULL, payload_json TEXT NOT NULL, preview_text TEXT, created_at TEXT NOT NULL);`,
+		`ALTER TABLE delivery_results ADD COLUMN run_id TEXT;`,
 		`CREATE INDEX IF NOT EXISTS idx_delivery_results_task_time ON delivery_results(task_id, created_at DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_delivery_results_task_run_time ON delivery_results(task_id, run_id, created_at DESC);`,
 		`CREATE TABLE IF NOT EXISTS task_citations (citation_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, run_id TEXT, source_type TEXT NOT NULL, source_ref TEXT NOT NULL, label TEXT NOT NULL, artifact_id TEXT, artifact_type TEXT, evidence_role TEXT, excerpt_text TEXT, screen_session_id TEXT, order_index INTEGER NOT NULL DEFAULT 0);`,
 		`CREATE INDEX IF NOT EXISTS idx_task_citations_task_order ON task_citations(task_id, order_index ASC, citation_id ASC);`,
 	}

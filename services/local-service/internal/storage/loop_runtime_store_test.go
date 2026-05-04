@@ -19,7 +19,7 @@ func TestInMemoryLoopRuntimeStoreSupportsStructuredQueries(t *testing.T) {
 	if err := store.SaveEvents(context.Background(), []EventRecord{{EventID: "evt_mem_001", RunID: "run_mem_001", TaskID: "task_mem_001", Type: "loop.completed", CreatedAt: "2026-04-21T10:00:03Z"}}); err != nil {
 		t.Fatalf("SaveEvents returned error: %v", err)
 	}
-	if err := store.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_mem_001", TaskID: "task_mem_001", Type: "bubble", Title: "result", CreatedAt: "2026-04-21T10:00:05Z"}); err != nil {
+	if err := store.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_mem_001", TaskID: "task_mem_001", RunID: "run_mem_001", Type: "bubble", Title: "result", CreatedAt: "2026-04-21T10:00:05Z"}); err != nil {
 		t.Fatalf("SaveDeliveryResult returned error: %v", err)
 	}
 	if err := store.ReplaceTaskCitations(context.Background(), "task_mem_001", []CitationRecord{{CitationID: "cit_mem_002", TaskID: "task_mem_001", OrderIndex: 2}, {CitationID: "cit_mem_001", TaskID: "task_mem_001", OrderIndex: 1}}); err != nil {
@@ -35,7 +35,7 @@ func TestInMemoryLoopRuntimeStoreSupportsStructuredQueries(t *testing.T) {
 		t.Fatalf("ListDeliveryResults returned total=%d items=%+v err=%v", total, deliveryResults, err)
 	}
 	latestDelivery, ok, err := store.GetLatestDeliveryResult(context.Background(), "task_mem_001")
-	if err != nil || !ok || latestDelivery.DeliveryResultID != "delivery_mem_001" {
+	if err != nil || !ok || latestDelivery.DeliveryResultID != "delivery_mem_001" || latestDelivery.RunID != "run_mem_001" {
 		t.Fatalf("GetLatestDeliveryResult returned record=%+v ok=%v err=%v", latestDelivery, ok, err)
 	}
 	citations, err := store.ListTaskCitations(context.Background(), "task_mem_001")
@@ -60,7 +60,7 @@ func TestSQLiteLoopRuntimeStoreStructuredQueries(t *testing.T) {
 	if err := store.SaveRun(context.Background(), RunRecord{RunID: "run_sql_001", TaskID: "task_sql_001", SessionID: "sess_sql_001", SourceType: "hover_input", Status: "completed", IntentName: "summarize", StartedAt: "2026-04-21T10:00:00Z", UpdatedAt: "2026-04-21T10:00:01Z", FinishedAt: "2026-04-21T10:00:02Z", StopReason: "completed"}); err != nil {
 		t.Fatalf("SaveRun returned error: %v", err)
 	}
-	if err := store.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_sql_001", TaskID: "task_sql_001", Type: "workspace_document", Title: "result", PayloadJSON: `{"task_id":"task_sql_001"}`, PreviewText: "preview", CreatedAt: "2026-04-21T10:00:03Z"}); err != nil {
+	if err := store.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_sql_001", TaskID: "task_sql_001", RunID: "run_sql_001", Type: "workspace_document", Title: "result", PayloadJSON: `{"task_id":"task_sql_001"}`, PreviewText: "preview", CreatedAt: "2026-04-21T10:00:03Z"}); err != nil {
 		t.Fatalf("SaveDeliveryResult returned error: %v", err)
 	}
 	if err := store.ReplaceTaskCitations(context.Background(), "task_sql_001", []CitationRecord{{CitationID: "cit_sql_001", TaskID: "task_sql_001", OrderIndex: 0}}); err != nil {
@@ -82,7 +82,7 @@ func TestSQLiteLoopRuntimeStoreStructuredQueries(t *testing.T) {
 		t.Fatalf("expected empty paged delivery result slice, total=%d items=%+v err=%v", total, emptyPage, err)
 	}
 	latestDelivery, ok, err := store.GetLatestDeliveryResult(context.Background(), "task_sql_001")
-	if err != nil || !ok || latestDelivery.DeliveryResultID != "delivery_sql_001" {
+	if err != nil || !ok || latestDelivery.DeliveryResultID != "delivery_sql_001" || latestDelivery.RunID != "run_sql_001" {
 		t.Fatalf("GetLatestDeliveryResult returned record=%+v ok=%v err=%v", latestDelivery, ok, err)
 	}
 	if latestDelivery, ok, err := store.GetLatestDeliveryResult(context.Background(), "missing_task"); err != nil || ok || latestDelivery.DeliveryResultID != "" {

@@ -8,6 +8,7 @@ import "context"
 // 但本类型仅用于后端模块内部，不替代协议真源。
 type RecordInput struct {
 	TaskID  string
+	RunID   string
 	Type    string
 	Action  string
 	Summary string
@@ -21,6 +22,7 @@ type RecordInput struct {
 type Record struct {
 	AuditID   string
 	TaskID    string
+	RunID     string
 	Type      string
 	Action    string
 	Summary   string
@@ -34,6 +36,7 @@ func (r Record) Map() map[string]any {
 	return map[string]any{
 		"audit_id":   r.AuditID,
 		"task_id":    r.TaskID,
+		"run_id":     r.RunID,
 		"type":       r.Type,
 		"action":     r.Action,
 		"summary":    r.Summary,

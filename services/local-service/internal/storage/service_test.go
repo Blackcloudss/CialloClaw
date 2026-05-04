@@ -945,6 +945,7 @@ func TestAuditWriterReturnsWorkingImplementation(t *testing.T) {
 	err := writer.WriteAuditRecord(context.Background(), audit.Record{
 		AuditID:   "audit_001",
 		TaskID:    "task_001",
+		RunID:     "run_001",
 		Type:      "file",
 		Action:    "write_file",
 		Summary:   "write result file",
@@ -960,6 +961,13 @@ func TestAuditWriterReturnsWorkingImplementation(t *testing.T) {
 		t.Fatalf("expected sqlite audit store, got %T", service.auditStore)
 	}
 	assertAuditCount(t, sqliteWriter.db, 1)
+	items, total, err := service.AuditStore().ListAuditRecords(context.Background(), "task_001", 20, 0)
+	if err != nil {
+		t.Fatalf("ListAuditRecords returned error: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].RunID != "run_001" {
+		t.Fatalf("expected audit run_id to round-trip, total=%d items=%+v", total, items)
+	}
 }
 
 func TestRecoveryPointWriterReturnsWorkingImplementation(t *testing.T) {

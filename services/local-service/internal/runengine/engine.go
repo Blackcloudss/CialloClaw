@@ -1126,6 +1126,8 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		record.CurrentStep = "generate_output"
 		record.DeliveryResult = nil
 		record.Artifacts = nil
+		record.Citations = nil
+		record.AuditRecords = nil
 		record.BubbleMessage = nil
 		record.ApprovalRequest = nil
 		record.PendingExecution = nil
@@ -1136,6 +1138,7 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		record.MemoryReadPlans = nil
 		record.MemoryWritePlans = nil
 		record.MirrorReferences = nil
+		record.LatestToolCall = nil
 		record.LoopStopReason = ""
 		record.SecuritySummary = mergePreservedSecuritySummary(
 			buildSecuritySummary(record.RiskLevel, latestRestorePointFromSummary(record.SecuritySummary)),

@@ -228,10 +228,11 @@ func NewSQLiteAuditStore(databasePath string) (*SQLiteAuditStore, error) {
 func (s *SQLiteAuditStore) WriteAuditRecord(ctx context.Context, record audit.Record) error {
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT OR REPLACE INTO audit_records (audit_id, task_id, type, action, summary, target, result, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR REPLACE INTO audit_records (audit_id, task_id, run_id, type, action, summary, target, result, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.AuditID,
 		record.TaskID,
+		nullableRuntimeString(record.RunID),
 		record.Type,
 		record.Action,
 		record.Summary,
@@ -247,7 +248,7 @@ func (s *SQLiteAuditStore) WriteAuditRecord(ctx context.Context, record audit.Re
 
 func (s *SQLiteAuditStore) ListAuditRecords(ctx context.Context, taskID string, limit, offset int) ([]audit.Record, int, error) {
 	countQuery := `SELECT COUNT(1) FROM audit_records`
-	query := `SELECT audit_id, task_id, type, action, summary, target, result, created_at FROM audit_records`
+	query := `SELECT audit_id, task_id, COALESCE(run_id, ''), type, action, summary, target, result, created_at FROM audit_records`
 	args := []any{}
 	if taskID != "" {
 		countQuery += ` WHERE task_id = ?`
@@ -272,7 +273,7 @@ func (s *SQLiteAuditStore) ListAuditRecords(ctx context.Context, taskID string, 
 	items := make([]audit.Record, 0)
 	for rows.Next() {
 		var record audit.Record
-		if err := rows.Scan(&record.AuditID, &record.TaskID, &record.Type, &record.Action, &record.Summary, &record.Target, &record.Result, &record.CreatedAt); err != nil {
+		if err := rows.Scan(&record.AuditID, &record.TaskID, &record.RunID, &record.Type, &record.Action, &record.Summary, &record.Target, &record.Result, &record.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan audit record: %w", err)
 		}
 		items = append(items, record)
@@ -301,6 +302,7 @@ func (s *SQLiteAuditStore) initialize(ctx context.Context) error {
 		CREATE TABLE IF NOT EXISTS audit_records (
 			audit_id TEXT PRIMARY KEY,
 			task_id TEXT NOT NULL,
+			run_id TEXT,
 			type TEXT NOT NULL,
 			action TEXT NOT NULL,
 			summary TEXT NOT NULL,
@@ -310,6 +312,12 @@ func (s *SQLiteAuditStore) initialize(ctx context.Context) error {
 		);
 	`); err != nil {
 		return fmt.Errorf("create audit_records table: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE audit_records ADD COLUMN run_id TEXT;`); err != nil && !isSQLiteDuplicateColumnError(err) {
+		return fmt.Errorf("add audit_records run_id column: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_audit_records_task_run_time ON audit_records(task_id, run_id, created_at DESC);`); err != nil {
+		return fmt.Errorf("create audit task run index: %w", err)
 	}
 	return nil
 }

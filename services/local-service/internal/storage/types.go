@@ -73,6 +73,7 @@ type MemoryStore interface {
 type ArtifactRecord struct {
 	ArtifactID          string
 	TaskID              string
+	RunID               string
 	ArtifactType        string
 	Title               string
 	Path                string

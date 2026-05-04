@@ -3108,6 +3108,154 @@ func TestServiceTaskControlRestartQueuesBehindActiveSessionTask(t *testing.T) {
 	}
 }
 
+func TestServiceTaskDetailGetRestartAttemptHidesPreviousRunFormalObjects(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "restart detail scope")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_restart_detail_scope",
+		Title:       "Restart detail scope task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		CurrentStep: "return_result",
+		RiskLevel:   "yellow",
+	})
+	previousRunID := task.RunID
+	if _, ok := service.runEngine.SetPresentation(task.TaskID, nil, map[string]any{
+		"type":         "bubble",
+		"title":        "Previous attempt result",
+		"preview_text": "old preview",
+		"payload":      map[string]any{"task_id": task.TaskID},
+	}, []map[string]any{{
+		"artifact_id":      "art_restart_detail_previous",
+		"task_id":          task.TaskID,
+		"run_id":           previousRunID,
+		"artifact_type":    "generated_doc",
+		"title":            "old-result.md",
+		"path":             "workspace/old-result.md",
+		"mime_type":        "text/markdown",
+		"delivery_type":    "workspace_document",
+		"delivery_payload": map[string]any{"path": "workspace/old-result.md", "task_id": task.TaskID},
+		"created_at":       "2026-04-22T09:00:00Z",
+	}}); !ok {
+		t.Fatal("expected runtime presentation to update")
+	}
+	if _, ok := service.runEngine.SetCitations(task.TaskID, []map[string]any{{
+		"citation_id":   "cit_restart_detail_previous",
+		"task_id":       task.TaskID,
+		"run_id":        previousRunID,
+		"source_type":   "file",
+		"source_ref":    "art_restart_detail_previous",
+		"label":         "previous attempt evidence",
+		"artifact_id":   "art_restart_detail_previous",
+		"artifact_type": "generated_doc",
+		"excerpt_text":  "old excerpt",
+	}}); !ok {
+		t.Fatal("expected runtime citations to update")
+	}
+	if _, ok := service.runEngine.AppendAuditData(task.TaskID, []map[string]any{{
+		"audit_id":   "audit_restart_detail_previous",
+		"task_id":    task.TaskID,
+		"run_id":     previousRunID,
+		"type":       "execution",
+		"action":     "agent_loop",
+		"summary":    "previous attempt failed",
+		"target":     "workspace/old-result.md",
+		"result":     "failed",
+		"created_at": "2026-04-22T09:00:01Z",
+		"metadata": map[string]any{
+			"failure_code":     "agent_loop_failed",
+			"failure_category": "task_execution",
+		},
+	}}, nil); !ok {
+		t.Fatal("expected runtime audit data to update")
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_restart_detail_previous",
+		TaskID:              task.TaskID,
+		RunID:               previousRunID,
+		ArtifactType:        "generated_doc",
+		Title:               "old-result.md",
+		Path:                "workspace/old-result.md",
+		MimeType:            "text/markdown",
+		DeliveryType:        "workspace_document",
+		DeliveryPayloadJSON: `{"path":"workspace/old-result.md","task_id":"` + task.TaskID + `"}`,
+		CreatedAt:           "2026-04-22T09:00:00Z",
+	}}); err != nil {
+		t.Fatalf("save stored artifact failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), task.TaskID, []storage.CitationRecord{{
+		CitationID:   "cit_restart_detail_previous",
+		TaskID:       task.TaskID,
+		RunID:        previousRunID,
+		SourceType:   "file",
+		SourceRef:    "art_restart_detail_previous",
+		Label:        "previous attempt evidence",
+		ArtifactID:   "art_restart_detail_previous",
+		ArtifactType: "generated_doc",
+		ExcerptText:  "old excerpt",
+		OrderIndex:   0,
+	}}); err != nil {
+		t.Fatalf("save stored citations failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_restart_detail_previous",
+		TaskID:           task.TaskID,
+		RunID:            previousRunID,
+		Type:             "workspace_document",
+		Title:            "Previous attempt result",
+		PayloadJSON:      `{"path":"workspace/old-result.md","task_id":"` + task.TaskID + `"}`,
+		PreviewText:      "old preview",
+		CreatedAt:        "2026-04-22T09:00:00Z",
+	}); err != nil {
+		t.Fatalf("save stored delivery result failed: %v", err)
+	}
+	if err := service.storage.AuditStore().WriteAuditRecord(context.Background(), audit.Record{
+		AuditID:   "audit_restart_detail_previous",
+		TaskID:    task.TaskID,
+		RunID:     previousRunID,
+		Type:      "execution",
+		Action:    "agent_loop",
+		Summary:   "previous attempt failed",
+		Target:    "workspace/old-result.md",
+		Result:    "failed",
+		CreatedAt: "2026-04-22T09:00:01Z",
+	}); err != nil {
+		t.Fatalf("write stored audit record failed: %v", err)
+	}
+
+	restartedTask, err := service.runEngine.ControlTask(task.TaskID, "restart", nil)
+	if err != nil {
+		t.Fatalf("restart runtime task failed: %v", err)
+	}
+	if restartedTask.RunID == previousRunID || restartedTask.ExecutionAttempt != 2 || restartedTask.Status != "processing" {
+		t.Fatalf("expected restart to allocate a fresh processing attempt, got %+v", restartedTask)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": task.TaskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if detailResult["delivery_result"] != nil {
+		t.Fatalf("expected restart detail to hide previous delivery_result, got %+v", detailResult["delivery_result"])
+	}
+	if artifacts := detailResult["artifacts"].([]map[string]any); len(artifacts) != 0 {
+		t.Fatalf("expected restart detail to hide previous artifacts, got %+v", artifacts)
+	}
+	if citations := detailResult["citations"].([]map[string]any); len(citations) != 0 {
+		t.Fatalf("expected restart detail to hide previous citations, got %+v", citations)
+	}
+	if detailResult["audit_record"] != nil {
+		t.Fatalf("expected restart detail to hide previous audit record, got %+v", detailResult["audit_record"])
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["latest_failure_code"] != nil || runtimeSummary["latest_failure_summary"] != nil {
+		t.Fatalf("expected restart runtime summary to clear previous failure markers, got %+v", runtimeSummary)
+	}
+}
+
 func TestMaybeEscalateHumanLoopSkipsSideEffectingExecutionAttempt(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "unused")
 	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
@@ -3597,6 +3745,11 @@ func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
 		t.Fatalf("start task failed: %v", err)
 	}
 	taskID := result["task"].(map[string]any)["task_id"].(string)
+	taskRecord, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected runtime task to remain available")
+	}
+	runID := taskRecord.RunID
 
 	toolCallsResult, err := service.TaskToolCallsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
 	if err != nil {
@@ -3639,7 +3792,7 @@ func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get latest delivery result failed: %v", err)
 	}
-	if !ok || deliveryRecord.Type != "bubble" || !strings.Contains(deliveryRecord.PreviewText, "hello from formal sample chain") {
+	if !ok || deliveryRecord.RunID != runID || deliveryRecord.Type != "bubble" || !strings.Contains(deliveryRecord.PreviewText, "hello from formal sample chain") {
 		t.Fatalf("expected persisted direct delivery result, ok=%v record=%+v", ok, deliveryRecord)
 	}
 
@@ -11214,6 +11367,11 @@ func TestServiceStartTaskPersistsArtifactsToStore(t *testing.T) {
 		t.Fatalf("start task failed: %v", err)
 	}
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	taskRecord, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected runtime task to remain available")
+	}
+	runID := taskRecord.RunID
 	records, total, err := service.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, 20, 0)
 	if err != nil {
 		t.Fatalf("list persisted artifacts failed: %v", err)
@@ -11221,7 +11379,7 @@ func TestServiceStartTaskPersistsArtifactsToStore(t *testing.T) {
 	if total != 1 || len(records) != 1 {
 		t.Fatalf("expected one persisted artifact, got total=%d records=%+v", total, records)
 	}
-	if records[0].DeliveryType != "workspace_document" {
+	if records[0].RunID != runID || records[0].DeliveryType != "workspace_document" {
 		t.Fatalf("expected persisted workspace_document artifact, got %+v", records[0])
 	}
 }
