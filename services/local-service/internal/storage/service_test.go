@@ -1,4 +1,4 @@
-// 该测试文件验证存储层的数据行为。
+// These tests verify storage service behavior and capability wiring.
 package storage
 
 import (
@@ -16,7 +16,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-// stubAdapter 定义当前模块的数据结构。
+// stubAdapter provides the minimal adapter contract used by storage tests.
 type stubAdapter struct {
 	databasePath string
 }
@@ -30,12 +30,12 @@ type stubStrongholdProvider struct {
 	openCalls   int
 }
 
-// DatabasePath 处理当前模块的相关逻辑。
+// DatabasePath returns the configured database path for the test adapter.
 func (s stubAdapter) DatabasePath() string {
 	return s.databasePath
 }
 
-// SecretStorePath 处理当前模块的相关逻辑。
+// SecretStorePath returns the derived Stronghold path for the test adapter.
 func (s stubAdapter) SecretStorePath() string {
 	if s.databasePath == "" {
 		return ""
@@ -154,7 +154,7 @@ func TestNewServiceWithStrongholdBootstrapFillsMissingFactories(t *testing.T) {
 	})
 }
 
-// TestBackendReturnsSQLiteWAL 验证BackendReturnsSQLiteWAL。
+// TestBackendReturnsSQLiteWAL verifies the reported storage backend.
 func TestBackendReturnsSQLiteWAL(t *testing.T) {
 	service := NewService(nil)
 
@@ -163,7 +163,7 @@ func TestBackendReturnsSQLiteWAL(t *testing.T) {
 	}
 }
 
-// TestDatabasePathReturnsEmptyWhenAdapterMissing 验证DatabasePathReturnsEmptyWhenAdapterMissing。
+// TestDatabasePathReturnsEmptyWhenAdapterMissing verifies empty adapter paths.
 func TestDatabasePathReturnsEmptyWhenAdapterMissing(t *testing.T) {
 	service := NewService(nil)
 
@@ -172,7 +172,7 @@ func TestDatabasePathReturnsEmptyWhenAdapterMissing(t *testing.T) {
 	}
 }
 
-// TestDatabasePathTrimsWhitespace 验证DatabasePathTrimsWhitespace。
+// TestDatabasePathTrimsWhitespace verifies whitespace trimming for paths.
 func TestDatabasePathTrimsWhitespace(t *testing.T) {
 	service := NewService(stubAdapter{databasePath: "  D:/CialloClaw/data.db  "})
 
@@ -181,7 +181,7 @@ func TestDatabasePathTrimsWhitespace(t *testing.T) {
 	}
 }
 
-// TestConfiguredReturnsFalseWhenAdapterMissing 验证ConfiguredReturnsFalseWhenAdapterMissing。
+// TestConfiguredReturnsFalseWhenAdapterMissing verifies missing adapter state.
 func TestConfiguredReturnsFalseWhenAdapterMissing(t *testing.T) {
 	service := NewService(nil)
 
@@ -190,7 +190,7 @@ func TestConfiguredReturnsFalseWhenAdapterMissing(t *testing.T) {
 	}
 }
 
-// TestConfiguredReturnsFalseWhenPathEmpty 验证ConfiguredReturnsFalseWhenPathEmpty。
+// TestConfiguredReturnsFalseWhenPathEmpty verifies empty path handling.
 func TestConfiguredReturnsFalseWhenPathEmpty(t *testing.T) {
 	service := NewService(stubAdapter{databasePath: "   "})
 
@@ -199,7 +199,7 @@ func TestConfiguredReturnsFalseWhenPathEmpty(t *testing.T) {
 	}
 }
 
-// TestConfiguredReturnsTrueWhenAdapterAndPathPresent 验证ConfiguredReturnsTrueWhenAdapterAndPathPresent。
+// TestConfiguredReturnsTrueWhenAdapterAndPathPresent verifies configured state.
 func TestConfiguredReturnsTrueWhenAdapterAndPathPresent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "configured.db")
 	service := NewService(stubAdapter{databasePath: path})
@@ -210,7 +210,7 @@ func TestConfiguredReturnsTrueWhenAdapterAndPathPresent(t *testing.T) {
 	}
 }
 
-// TestValidateReturnsErrorWhenAdapterMissing 验证ValidateReturnsErrorWhenAdapterMissing。
+// TestValidateReturnsErrorWhenAdapterMissing verifies adapter validation.
 func TestValidateReturnsErrorWhenAdapterMissing(t *testing.T) {
 	service := NewService(nil)
 
@@ -220,7 +220,7 @@ func TestValidateReturnsErrorWhenAdapterMissing(t *testing.T) {
 	}
 }
 
-// TestValidateReturnsErrorWhenPathMissing 验证ValidateReturnsErrorWhenPathMissing。
+// TestValidateReturnsErrorWhenPathMissing verifies path validation.
 func TestValidateReturnsErrorWhenPathMissing(t *testing.T) {
 	service := NewService(stubAdapter{databasePath: "   "})
 
@@ -230,7 +230,7 @@ func TestValidateReturnsErrorWhenPathMissing(t *testing.T) {
 	}
 }
 
-// TestValidatePassesWhenAdapterConfigured 验证ValidatePassesWhenAdapterConfigured。
+// TestValidatePassesWhenAdapterConfigured verifies the success path.
 func TestValidatePassesWhenAdapterConfigured(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "validate.db")
 	service := NewService(stubAdapter{databasePath: path})
@@ -241,7 +241,7 @@ func TestValidatePassesWhenAdapterConfigured(t *testing.T) {
 	}
 }
 
-// TestDescriptorReturnsTypedSnapshot 验证DescriptorReturnsTypedSnapshot。
+// TestDescriptorReturnsTypedSnapshot verifies descriptor projection.
 func TestDescriptorReturnsTypedSnapshot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "descriptor.db")
 	service := NewService(stubAdapter{databasePath: path})
@@ -262,7 +262,8 @@ func TestDescriptorReturnsTypedSnapshot(t *testing.T) {
 	}
 }
 
-// TestCapabilitiesReturnsConfiguredStructuredStorageOnly 验证CapabilitiesReturnsConfiguredStructuredStorageOnly。
+// TestCapabilitiesReturnsConfiguredStructuredStorageOnly verifies capability
+// reporting for the configured structured-storage path.
 func TestCapabilitiesReturnsConfiguredStructuredStorageOnly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "capabilities.db")
 	service := NewService(stubAdapter{databasePath: path})
@@ -379,7 +380,8 @@ func TestResolveModelAPIKeyFailsWhenSecretStoreMissing(t *testing.T) {
 	}
 }
 
-// TestCapabilitiesReturnsUnconfiguredSnapshotWhenPathMissing 验证CapabilitiesReturnsUnconfiguredSnapshotWhenPathMissing。
+// TestCapabilitiesReturnsUnconfiguredSnapshotWhenPathMissing verifies the
+// unconfigured capability snapshot.
 func TestCapabilitiesReturnsUnconfiguredSnapshotWhenPathMissing(t *testing.T) {
 	service := NewService(stubAdapter{databasePath: "   "})
 
@@ -389,7 +391,7 @@ func TestCapabilitiesReturnsUnconfiguredSnapshotWhenPathMissing(t *testing.T) {
 	}
 }
 
-// TestMemoryStoreReturnsWorkingImplementation 验证MemoryStoreReturnsWorkingImplementation。
+// TestMemoryStoreReturnsWorkingImplementation verifies memory store wiring.
 func TestMemoryStoreReturnsWorkingImplementation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "store.db")
 	service := NewService(stubAdapter{databasePath: path})
@@ -657,7 +659,7 @@ func TestAuthorizationDecisionWriteIsAtomicInSQLiteStore(t *testing.T) {
 	}
 }
 
-// TestCloseIsSafeWithoutConfiguredStore 验证CloseIsSafeWithoutConfiguredStore。
+// TestCloseIsSafeWithoutConfiguredStore verifies noop close behavior.
 func TestCloseIsSafeWithoutConfiguredStore(t *testing.T) {
 	service := NewService(nil)
 	if err := service.Close(); err != nil {

@@ -1,4 +1,4 @@
-// 该文件负责存储层的数据接口或落盘实现。
+// Package storage defines shared storage contracts and persisted record shapes.
 package storage
 
 import (
@@ -12,7 +12,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-// CapabilitySnapshot 定义当前模块的数据结构。
+// CapabilitySnapshot describes the currently available storage capabilities.
 type CapabilitySnapshot struct {
 	Backend                string
 	Configured             bool
@@ -40,7 +40,7 @@ var (
 	ErrSecretStoreAccessFailed = errors.New("secret store access failed")
 )
 
-// MemorySummaryRecord 描述当前模块记录。
+// MemorySummaryRecord describes one persisted memory summary row.
 type MemorySummaryRecord struct {
 	MemorySummaryID string
 	TaskID          string
@@ -49,7 +49,7 @@ type MemorySummaryRecord struct {
 	CreatedAt       string
 }
 
-// MemoryRetrievalRecord 描述当前模块记录。
+// MemoryRetrievalRecord describes one persisted memory retrieval-hit row.
 type MemoryRetrievalRecord struct {
 	RetrievalHitID string
 	TaskID         string
@@ -61,7 +61,7 @@ type MemoryRetrievalRecord struct {
 	CreatedAt      string
 }
 
-// MemoryStore 定义当前模块的接口约束。
+// MemoryStore defines the persistence contract for memory summaries and hits.
 type MemoryStore interface {
 	SaveSummary(ctx context.Context, summary MemorySummaryRecord) error
 	SaveRetrievalHits(ctx context.Context, hits []MemoryRetrievalRecord) error
