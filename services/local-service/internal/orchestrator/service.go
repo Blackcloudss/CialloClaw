@@ -2628,12 +2628,21 @@ func (s *Service) SecurityAuditList(params map[string]any) (map[string]any, erro
 		return map[string]any{"items": []map[string]any{}, "page": pageMap(limit, offset, 0)}, nil
 	}
 	runIDFilter := ""
-	if task, ok := formalReadTask(taskID, s.runEngine, s.taskDetailFromStorage); ok {
+	task := runengine.TaskRecord{}
+	if loadedTask, ok := formalReadTask(taskID, s.runEngine, s.taskDetailFromStorage); ok {
+		task = loadedTask
 		runIDFilter = taskAttemptRunIDFilter(task)
 	}
 	records, total, err := s.storage.AuditStore().ListAuditRecords(context.Background(), taskID, runIDFilter, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
+	}
+	if total == 0 && runIDFilter != "" && len(task.AuditRecords) > 0 {
+		items := paginateTaskAuditItems(task.AuditRecords, limit, offset)
+		return map[string]any{
+			"items": items,
+			"page":  pageMap(limit, offset, len(task.AuditRecords)),
+		}, nil
 	}
 	items := make([]map[string]any, 0, len(records))
 	for _, record := range records {
@@ -2643,6 +2652,17 @@ func (s *Service) SecurityAuditList(params map[string]any) (map[string]any, erro
 		"items": items,
 		"page":  pageMap(limit, offset, total),
 	}, nil
+}
+
+func paginateTaskAuditItems(items []map[string]any, limit, offset int) []map[string]any {
+	if len(items) == 0 || offset >= len(items) {
+		return []map[string]any{}
+	}
+	end := len(items)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return cloneMapSlice(items[offset:end])
 }
 
 // SecurityRestorePointsList handles agent.security.restore_points.list.
@@ -3744,6 +3764,7 @@ func structuredTaskNeedsTaskRunFallback(record storage.TaskRecord, _ runengine.T
 // snapshot only backfills fields the structured read could not rebuild.
 func mergeStructuredTaskDetailCompatibility(task, taskRunTask runengine.TaskRecord) runengine.TaskRecord {
 	attemptScopedFormalReads := taskUsesAttemptScopedFormalReads(task)
+	sameAttemptSnapshot := strings.TrimSpace(task.RunID) != "" && strings.TrimSpace(task.RunID) == strings.TrimSpace(taskRunTask.RunID)
 	if task.FinishedAt == nil && taskRunTask.FinishedAt != nil {
 		task.FinishedAt = cloneTimePointer(taskRunTask.FinishedAt)
 	}
@@ -3756,16 +3777,16 @@ func mergeStructuredTaskDetailCompatibility(task, taskRunTask runengine.TaskReco
 	if len(task.BubbleMessage) == 0 {
 		task.BubbleMessage = cloneMap(taskRunTask.BubbleMessage)
 	}
-	if len(task.DeliveryResult) == 0 && !attemptScopedFormalReads {
+	if len(task.DeliveryResult) == 0 && (!attemptScopedFormalReads || sameAttemptSnapshot) {
 		task.DeliveryResult = cloneMap(taskRunTask.DeliveryResult)
 	}
-	if len(task.Artifacts) == 0 && !attemptScopedFormalReads {
+	if len(task.Artifacts) == 0 && (!attemptScopedFormalReads || sameAttemptSnapshot) {
 		task.Artifacts = cloneMapSlice(taskRunTask.Artifacts)
 	}
-	if len(task.Citations) == 0 && !attemptScopedFormalReads {
+	if len(task.Citations) == 0 && (!attemptScopedFormalReads || sameAttemptSnapshot) {
 		task.Citations = cloneMapSlice(taskRunTask.Citations)
 	}
-	if len(task.AuditRecords) == 0 && !attemptScopedFormalReads {
+	if len(task.AuditRecords) == 0 && (!attemptScopedFormalReads || sameAttemptSnapshot) {
 		task.AuditRecords = cloneMapSlice(taskRunTask.AuditRecords)
 	}
 	if len(task.MirrorReferences) == 0 {
@@ -3786,7 +3807,7 @@ func mergeStructuredTaskDetailCompatibility(task, taskRunTask runengine.TaskReco
 	if len(task.PendingExecution) == 0 {
 		task.PendingExecution = cloneMap(taskRunTask.PendingExecution)
 	}
-	if len(task.Authorization) == 0 {
+	if len(task.Authorization) == 0 && (!attemptScopedFormalReads || sameAttemptSnapshot) {
 		task.Authorization = cloneMap(taskRunTask.Authorization)
 	}
 	if len(task.ImpactScope) == 0 {

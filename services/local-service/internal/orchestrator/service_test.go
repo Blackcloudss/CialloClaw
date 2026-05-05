@@ -10498,6 +10498,162 @@ func TestServiceTaskDetailGetStructuredFallbackNormalizesSparseDeliveryPayloadKe
 	}
 }
 
+func TestServiceRestartedStructuredTaskFallsBackToCurrentSnapshotFormalData(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured restart snapshot fallback")
+	if service.storage == nil || service.storage.TaskStore() == nil {
+		t.Fatal("expected structured task storage to be wired")
+	}
+
+	taskID := "task_structured_restart_snapshot"
+	runID := "run_structured_restart_current"
+	primaryRunID := "run_structured_restart_primary"
+	startedAt := time.Date(2026, 4, 16, 9, 0, 0, 0, time.UTC)
+	updatedAt := time.Date(2026, 4, 16, 9, 5, 0, 0, time.UTC)
+	finishedAt := time.Date(2026, 4, 16, 9, 6, 0, 0, time.UTC)
+
+	snapshotJSONBytes, err := json.Marshal(storage.TaskRunRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_structured_restart",
+		RunID:             runID,
+		ExecutionAttempt:  2,
+		Title:             "structured restart snapshot task",
+		SourceType:        "hover_input",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "summarize"},
+		PreferredDelivery: "task_detail",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "yellow",
+		StartedAt:         startedAt,
+		UpdatedAt:         updatedAt,
+		FinishedAt:        &finishedAt,
+		DeliveryResult: map[string]any{
+			"type":         "task_detail",
+			"title":        "Restart snapshot detail",
+			"preview_text": "restart snapshot preview",
+			"payload":      map[string]any{"task_id": taskID},
+		},
+		Artifacts: []map[string]any{{
+			"artifact_id":      "art_restart_snapshot",
+			"task_id":          taskID,
+			"run_id":           runID,
+			"artifact_type":    "workspace_document",
+			"title":            "restart-snapshot.md",
+			"path":             "workspace/restart-snapshot.md",
+			"mime_type":        "text/markdown",
+			"delivery_type":    "task_detail",
+			"delivery_payload": map[string]any{"task_id": taskID},
+			"created_at":       "2026-04-16T09:06:00Z",
+		}},
+		Citations: []map[string]any{{
+			"citation_id":   "cit_restart_snapshot",
+			"task_id":       taskID,
+			"run_id":        runID,
+			"source_type":   "file",
+			"source_ref":    "art_restart_snapshot",
+			"label":         "restart snapshot evidence",
+			"artifact_id":   "art_restart_snapshot",
+			"artifact_type": "workspace_document",
+		}},
+		AuditRecords: []map[string]any{{
+			"audit_id":   "audit_restart_snapshot",
+			"task_id":    taskID,
+			"run_id":     runID,
+			"type":       "execution",
+			"action":     "deliver_result",
+			"summary":    "Restart snapshot completed.",
+			"target":     "workspace/restart-snapshot.md",
+			"result":     "failed",
+			"created_at": "2026-04-16T09:06:00Z",
+			"metadata": map[string]any{
+				"failure_code":     "SNAPSHOT_ONLY_FAILURE",
+				"failure_category": "restart_snapshot",
+			},
+		}},
+		Authorization: map[string]any{
+			"authorization_record_id": "auth_restart_snapshot",
+			"task_id":                 taskID,
+			"run_id":                  runID,
+			"approval_id":             "appr_restart_snapshot",
+			"decision":                "allow_once",
+			"operator":                "user",
+			"created_at":              "2026-04-16T09:05:30Z",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal restart snapshot json failed: %v", err)
+	}
+
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_restart",
+		RunID:               runID,
+		PrimaryRunID:        primaryRunID,
+		Title:               "structured restart snapshot task",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"concise"}`,
+		PreferredDelivery:   "task_detail",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "yellow",
+		StartedAt:           startedAt.Format(time.RFC3339Nano),
+		UpdatedAt:           updatedAt.Format(time.RFC3339Nano),
+		FinishedAt:          finishedAt.Format(time.RFC3339Nano),
+		SnapshotJSON:        string(snapshotJSONBytes),
+	}); err != nil {
+		t.Fatalf("write structured restart task failed: %v", err)
+	}
+	if err := service.runEngine.DeleteTask(taskID); err != nil && !errors.Is(err, runengine.ErrTaskNotFound) {
+		t.Fatalf("delete runtime task shadow failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	deliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok || deliveryResult["preview_text"] != "restart snapshot preview" {
+		t.Fatalf("expected restart snapshot delivery result fallback, got %+v", detailResult["delivery_result"])
+	}
+	authorizationRecord, ok := detailResult["authorization_record"].(map[string]any)
+	if !ok || authorizationRecord["decision"] != "allow_once" {
+		t.Fatalf("expected restart snapshot authorization fallback, got %+v", detailResult["authorization_record"])
+	}
+	artifacts := detailResult["artifacts"].([]map[string]any)
+	if len(artifacts) != 1 || artifacts[0]["artifact_id"] != "art_restart_snapshot" {
+		t.Fatalf("expected restart snapshot artifact fallback, got %+v", artifacts)
+	}
+	citations := detailResult["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["citation_id"] != "cit_restart_snapshot" {
+		t.Fatalf("expected restart snapshot citation fallback, got %+v", citations)
+	}
+	runtimeSummary := detailResult["runtime_summary"].(map[string]any)
+	if runtimeSummary["latest_failure_code"] != "SNAPSHOT_ONLY_FAILURE" {
+		t.Fatalf("expected restart snapshot audit fallback to feed runtime summary, got %+v", runtimeSummary)
+	}
+
+	artifactList, err := service.TaskArtifactList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task artifact list failed: %v", err)
+	}
+	artifactItems := artifactList["items"].([]map[string]any)
+	if len(artifactItems) != 1 || artifactItems[0]["artifact_id"] != "art_restart_snapshot" {
+		t.Fatalf("expected restart snapshot artifact list fallback, got %+v", artifactItems)
+	}
+
+	auditList, err := service.SecurityAuditList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("security audit list failed: %v", err)
+	}
+	auditItems := auditList["items"].([]map[string]any)
+	if len(auditItems) != 1 || auditItems[0]["audit_id"] != "audit_restart_snapshot" {
+		t.Fatalf("expected restart snapshot audit fallback, got %+v", auditItems)
+	}
+}
+
 func TestServiceTaskDetailGetStructuredFallbackRehydratesApprovalRequest(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "structured task detail approval")
 	if service.storage == nil {
