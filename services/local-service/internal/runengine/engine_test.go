@@ -1763,7 +1763,10 @@ func TestEnginePrepareRestartLeavesLiveTaskStableUntilCommit(t *testing.T) {
 		"audit_id": "audit_prepare_restart",
 		"task_id":  task.TaskID,
 		"summary":  "stable audit",
-	}}, nil); !ok {
+	}}, map[string]any{
+		"total_tokens":   36,
+		"estimated_cost": 0.12,
+	}); !ok {
 		t.Fatal("expected stable audit before restart")
 	}
 
@@ -1779,6 +1782,12 @@ func TestEnginePrepareRestartLeavesLiveTaskStableUntilCommit(t *testing.T) {
 	}
 	if prepared.DeliveryResult != nil || len(prepared.Artifacts) != 0 || len(prepared.Citations) != 0 || len(prepared.AuditRecords) != 0 {
 		t.Fatalf("expected prepared restart copy to clear formal outputs, got %+v", prepared)
+	}
+	if len(prepared.TokenUsage) != 0 {
+		t.Fatalf("expected prepared restart copy to clear token usage, got %+v", prepared.TokenUsage)
+	}
+	if len(prepared.Notifications) != 0 {
+		t.Fatalf("expected prepared restart copy to start with a clean notification queue, got %+v", prepared.Notifications)
 	}
 
 	liveTask, ok := engine.GetTask(task.TaskID)

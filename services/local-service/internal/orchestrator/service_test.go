@@ -3061,13 +3061,24 @@ func TestServiceTaskControlRestartRechecksAuthorization(t *testing.T) {
 	if !ok {
 		t.Fatal("expected restart authorization notifications to remain available")
 	}
+	taskUpdatedCount := 0
+	approvalPendingCount := 0
 	for _, notification := range notifications {
+		switch notification.Method {
+		case "task.updated":
+			taskUpdatedCount++
+		case "approval.pending":
+			approvalPendingCount++
+		}
 		if notification.Method != "task.updated" {
 			continue
 		}
 		if status, _ := notification.Params["status"].(string); status == "processing" {
 			t.Fatalf("expected restart authorization gate to avoid transient processing notification, got %+v", notification.Params)
 		}
+	}
+	if taskUpdatedCount != 1 || approvalPendingCount != 1 {
+		t.Fatalf("expected one task.updated and one approval.pending notification, got %+v", notifications)
 	}
 }
 
@@ -3124,13 +3135,58 @@ func TestServiceTaskControlRestartQueuesBehindActiveSessionTask(t *testing.T) {
 	if !ok {
 		t.Fatal("expected queued restart notifications to remain available")
 	}
+	taskUpdatedCount := 0
+	sessionQueuedCount := 0
 	for _, notification := range notifications {
+		switch notification.Method {
+		case "task.updated":
+			taskUpdatedCount++
+		case "task.session_queued":
+			sessionQueuedCount++
+		}
 		if notification.Method != "task.updated" {
 			continue
 		}
 		if status, _ := notification.Params["status"].(string); status == "processing" {
 			t.Fatalf("expected queued restart to avoid transient processing notification, got %+v", notification.Params)
 		}
+	}
+	if taskUpdatedCount != 1 || sessionQueuedCount != 1 {
+		t.Fatalf("expected one task.updated and one task.session_queued notification, got %+v", notifications)
+	}
+}
+
+func TestServiceTaskControlRestartPublishesDeniedAttemptWithFreshRunID(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "unused")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_restart_deny",
+		Title:       "Denied restart task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "write_file", "arguments": map[string]any{"target_path": "../secret.txt"}},
+		CurrentStep: "return_result",
+		RiskLevel:   "green",
+	})
+	previousRunID := task.RunID
+	_, _ = service.runEngine.DrainNotifications(task.TaskID)
+
+	result, err := service.TaskControl(map[string]any{"task_id": task.TaskID, "action": "restart"})
+	if err != nil {
+		t.Fatalf("restart task failed: %v", err)
+	}
+	restartedTask := result["task"].(map[string]any)
+	if restartedTask["status"] != "cancelled" || restartedTask["current_step"] != "risk_blocked" {
+		t.Fatalf("expected denied restart to publish the intercepted attempt, got %+v", restartedTask)
+	}
+	record, ok := service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected denied restart to remain in runtime")
+	}
+	if record.RunID == previousRunID {
+		t.Fatalf("expected denied restart to retain the prepared run_id instead of cancelling the old attempt, got %s", record.RunID)
+	}
+	if record.ExecutionAttempt != task.ExecutionAttempt+1 {
+		t.Fatalf("expected denied restart to increment attempt, got before=%d after=%d", task.ExecutionAttempt, record.ExecutionAttempt)
 	}
 }
 
@@ -15074,5 +15130,25 @@ func TestTaskUsesAttemptScopedFormalReadsFallsBackToPrimaryRunID(t *testing.T) {
 	}
 	if !taskUsesAttemptScopedFormalReads(runengine.TaskRecord{RunID: "run_restart", ExecutionAttempt: 2}) {
 		t.Fatal("expected execution attempt fallback to keep restart-scoped reads for legacy snapshots")
+	}
+}
+
+func TestTaskRecordFromStoragePreservesExecutionAttempt(t *testing.T) {
+	task := taskRecordFromStorage(storage.TaskRunRecord{
+		TaskID:           "task_restart_storage",
+		SessionID:        "sess_restart_storage",
+		RunID:            "run_restart_storage",
+		ExecutionAttempt: 3,
+		Status:           "completed",
+		Title:            "restart storage task",
+		SourceType:       "hover_input",
+		StartedAt:        time.Date(2026, 5, 1, 8, 0, 0, 0, time.UTC),
+		UpdatedAt:        time.Date(2026, 5, 1, 8, 1, 0, 0, time.UTC),
+	})
+	if task.ExecutionAttempt != 3 {
+		t.Fatalf("expected compatibility storage reload to preserve execution attempt, got %+v", task)
+	}
+	if task.PrimaryRunID != "run_restart_storage" {
+		t.Fatalf("expected compatibility storage reload to default primary run id to current run, got %+v", task)
 	}
 }
