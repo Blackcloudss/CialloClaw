@@ -706,6 +706,60 @@ func TestServerStartFencesReuseAfterTransportTimeout(t *testing.T) {
 	}
 }
 
+func TestServerStartRejectsConcurrentServeRun(t *testing.T) {
+	server := newTestServer()
+	server.transport = "named_pipe"
+	server.debugHTTPServer = nil
+
+	listenerStarted := make(chan struct{}, 1)
+	releaseListener := make(chan struct{})
+	server.serveNamedPipe = func(context.Context, string, func(net.Conn)) error {
+		listenerStarted <- struct{}{}
+		<-releaseListener
+		return nil
+	}
+
+	startCtx, cancelStart := context.WithCancel(context.Background())
+	firstErr := make(chan error, 1)
+	go func() {
+		firstErr <- server.Start(startCtx)
+	}()
+
+	select {
+	case <-listenerStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first Start to launch named-pipe listener")
+	}
+
+	secondErr := make(chan error, 1)
+	go func() {
+		secondErr <- server.Start(context.Background())
+	}()
+
+	select {
+	case err := <-secondErr:
+		if !errors.Is(err, errServerAlreadyRunning) {
+			t.Fatalf("expected concurrent Start to be rejected, got %v", err)
+		}
+	case <-listenerStarted:
+		t.Fatal("expected rejected Start to avoid launching another listener")
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected concurrent Start to fail without blocking")
+	}
+
+	cancelStart()
+	close(releaseListener)
+
+	select {
+	case err := <-firstErr:
+		if err != nil {
+			t.Fatalf("expected first Start to exit cleanly, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first Start to exit after cancellation")
+	}
+}
+
 func TestServerHelperUtilitiesCoverFallbackBranches(t *testing.T) {
 	server := newTestServer()
 	recorder := httptest.NewRecorder()
