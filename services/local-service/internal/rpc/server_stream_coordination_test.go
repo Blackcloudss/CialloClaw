@@ -24,33 +24,51 @@ func TestHandleStreamConnSerializesTaskStartingRequestsOnSharedConnection(t *tes
 			name:   "input submit",
 			method: "agent.input.submit",
 			firstParams: map[string]any{
-				"session_id": "sess_serialized_submit",
+				"request_meta": rpcRequestMeta("trace_serialized_submit_first"),
+				"session_id":   "sess_serialized_submit",
+				"source":       "floating_ball",
+				"trigger":      "hover_text_input",
 				"input": map[string]any{
-					"type": "text",
-					"text": "first submit",
+					"type":       "text",
+					"text":       "first submit",
+					"input_mode": "text",
 				},
+				"context": map[string]any{},
 			},
 			secondParams: map[string]any{
-				"session_id": "sess_serialized_submit",
-				"input": map[string]any{
-					"type": "text",
-					"text": "second submit",
+				"request_meta": map[string]any{
+					"trace_id":    "trace_serialized_submit_second",
+					"client_time": "2026-05-10T10:00:01Z",
 				},
+				"session_id": "sess_serialized_submit",
+				"source":     "floating_ball",
+				"trigger":    "hover_text_input",
+				"input": map[string]any{
+					"type":       "text",
+					"text":       "second submit",
+					"input_mode": "text",
+				},
+				"context": map[string]any{},
 			},
 		},
 		{
 			name:   "task start",
 			method: "agent.task.start",
 			firstParams: map[string]any{
-				"session_id": "sess_serialized_start",
-				"source":     "floating_ball",
-				"trigger":    "text_selected_click",
+				"request_meta": rpcRequestMeta("trace_serialized_start_first"),
+				"session_id":   "sess_serialized_start",
+				"source":       "floating_ball",
+				"trigger":      "text_selected_click",
 				"input": map[string]any{
 					"type": "text_selection",
 					"text": "first selection",
 				},
 			},
 			secondParams: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_serialized_start_second",
+					"client_time": "2026-05-10T10:00:01Z",
+				},
 				"session_id": "sess_serialized_start",
 				"source":     "floating_ball",
 				"trigger":    "text_selected_click",
@@ -185,7 +203,7 @@ func TestHandleStreamConnSerializesTaskStartingRequestsOnSharedConnection(t *tes
 
 func TestHandleStreamConnReplaysLateTaskNotificationsBeforeQueuedSameTaskFollowUp(t *testing.T) {
 	server := newTestServer()
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_late_task_replay",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -237,9 +255,10 @@ func TestHandleStreamConnReplaysLateTaskNotificationsBeforeQueuedSameTaskFollowU
 		ID:      json.RawMessage(`"req-late-task-starter"`),
 		Method:  "agent.task.start",
 		Params: mustMarshal(t, map[string]any{
-			"session_id": "sess_late_task_response_owner",
-			"source":     "floating_ball",
-			"trigger":    "text_selected_click",
+			"request_meta": rpcRequestMeta("trace_late_task_starter"),
+			"session_id":   "sess_late_task_response_owner",
+			"source":       "floating_ball",
+			"trigger":      "text_selected_click",
 			"input": map[string]any{
 				"type": "text_selection",
 				"text": "start a task on the shared stream",
@@ -310,7 +329,7 @@ func TestHandleStreamConnReplaysLateTaskNotificationsBeforeQueuedSameTaskFollowU
 
 func TestHandleStreamConnTaskListDoesNotStealBufferedNotifications(t *testing.T) {
 	server := newTestServer()
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_task_list_replay_owner",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -363,7 +382,12 @@ func TestHandleStreamConnTaskListDoesNotStealBufferedNotifications(t *testing.T)
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-task-list-owned"`),
 		Method:  "agent.task.list",
-		Params:  mustMarshal(t, map[string]any{}),
+		Params: mustMarshal(t, map[string]any{
+			"request_meta": rpcRequestMeta("trace_task_list_owned"),
+			"group":        "unfinished",
+			"limit":        20,
+			"offset":       0,
+		}),
 	}); err != nil {
 		t.Fatalf("encode task.list request: %v", err)
 	}
@@ -455,7 +479,7 @@ func TestHandleStreamConnKeepsQueuedReadsResponsiveWhileLoopTaskRuns(t *testing.
 
 	startTask := func(sessionID string) string {
 		t.Helper()
-		result, err := server.orchestrator.StartTask(map[string]any{
+		result, err := startTaskForTest(server.orchestrator, map[string]any{
 			"session_id": sessionID,
 			"source":     "floating_ball",
 			"trigger":    "text_selected_click",
@@ -514,8 +538,9 @@ func TestHandleStreamConnKeepsQueuedReadsResponsiveWhileLoopTaskRuns(t *testing.
 		ID:      json.RawMessage(`"req-loop-blocked"`),
 		Method:  "agent.task.confirm",
 		Params: mustMarshal(t, map[string]any{
-			"task_id":   taskA,
-			"confirmed": false,
+			"request_meta": rpcRequestMeta("trace_task_confirm_loop_blocked"),
+			"task_id":      taskA,
+			"confirmed":    false,
 			"corrected_intent": map[string]any{
 				"name":      "agent_loop",
 				"arguments": map[string]any{},
@@ -537,7 +562,8 @@ func TestHandleStreamConnKeepsQueuedReadsResponsiveWhileLoopTaskRuns(t *testing.
 		ID:      json.RawMessage(`"req-task-detail-queued"`),
 		Method:  "agent.task.detail.get",
 		Params: mustMarshal(t, map[string]any{
-			"task_id": taskB,
+			"request_meta": rpcRequestMeta("trace_task_detail_loop_blocked"),
+			"task_id":      taskB,
 		}),
 	}
 	if err := encoder.Encode(detailRequest); err != nil {
@@ -598,7 +624,7 @@ func TestHandleStreamConnSerializesConcurrentRequestsForSameTask(t *testing.T) {
 	}
 	server := newTestServerWithModelClient(modelClient)
 
-	result, err := server.orchestrator.StartTask(map[string]any{
+	result, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_pipe_same_task",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -665,8 +691,9 @@ func TestHandleStreamConnSerializesConcurrentRequestsForSameTask(t *testing.T) {
 		ID:      json.RawMessage(`"req-loop-same-task"`),
 		Method:  "agent.task.confirm",
 		Params: mustMarshal(t, map[string]any{
-			"task_id":   taskID,
-			"confirmed": false,
+			"request_meta": rpcRequestMeta("trace_task_confirm_same_task"),
+			"task_id":      taskID,
+			"confirmed":    false,
 			"corrected_intent": map[string]any{
 				"name":      "agent_loop",
 				"arguments": map[string]any{},
@@ -688,7 +715,8 @@ func TestHandleStreamConnSerializesConcurrentRequestsForSameTask(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-detail-same-task"`),
 		Method:  "agent.task.detail.get",
 		Params: mustMarshal(t, map[string]any{
-			"task_id": taskID,
+			"request_meta": rpcRequestMeta("trace_task_detail_same_task"),
+			"task_id":      taskID,
 		}),
 	}
 	if err := encoder.Encode(detailRequest); err != nil {

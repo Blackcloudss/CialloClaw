@@ -20,9 +20,10 @@ func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-start-ignore-intent"`),
 		Method:  methodAgentTaskStart,
 		Params: mustMarshal(t, map[string]any{
-			"session_id": "sess_ignore_intent",
-			"source":     "floating_ball",
-			"trigger":    "text_selected_click",
+			"request_meta": rpcRequestMeta("trace_task_start_ignore_intent"),
+			"session_id":   "sess_ignore_intent",
+			"source":       "floating_ball",
+			"trigger":      "text_selected_click",
 			"input": map[string]any{
 				"type": "text_selection",
 				"text": "select this content",
@@ -40,7 +41,7 @@ func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	task := success.Result.Data.(map[string]any)["task"].(map[string]any)
+	task := protocolMap(t, success.Result.Data)["task"].(map[string]any)
 	if task["status"] != "confirming_intent" {
 		t.Fatalf("expected task.start to stay in confirming_intent when intent is stripped, got %+v", task)
 	}
@@ -58,9 +59,10 @@ func TestDispatchTaskStartFileInstructionSkipsIntentConfirmation(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-start-file-instruction"`),
 		Method:  methodAgentTaskStart,
 		Params: mustMarshal(t, map[string]any{
-			"session_id": "sess_file_instruction_rpc",
-			"source":     "floating_ball",
-			"trigger":    "file_drop",
+			"request_meta": rpcRequestMeta("trace_task_start_file_instruction"),
+			"session_id":   "sess_file_instruction_rpc",
+			"source":       "floating_ball",
+			"trigger":      "file_drop",
 			"input": map[string]any{
 				"type":  "file",
 				"text":  "帮我看看这里面有什么",
@@ -80,7 +82,7 @@ func TestDispatchTaskStartFileInstructionSkipsIntentConfirmation(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	result := success.Result.Data.(map[string]any)
+	result := protocolMap(t, success.Result.Data)
 	task := result["task"].(map[string]any)
 	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
 		t.Fatalf("expected instructed file start to skip intent confirmation, got %+v", task)
@@ -100,7 +102,7 @@ func TestDispatchTaskStartFileInstructionSkipsIntentConfirmation(t *testing.T) {
 func TestDispatchTaskDetailGetIncludesActiveApprovalAnchor(t *testing.T) {
 	server := newTestServer()
 
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_detail_rpc",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -124,14 +126,17 @@ func TestDispatchTaskDetailGetIncludesActiveApprovalAnchor(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-task-detail-anchor"`),
 		Method:  methodAgentTaskDetailGet,
-		Params:  mustMarshal(t, map[string]any{"task_id": taskID}),
+		Params: mustMarshal(t, map[string]any{
+			"request_meta": rpcRequestMeta("trace_task_detail_anchor"),
+			"task_id":      taskID,
+		}),
 	})
 
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	approvalRequest, ok := data["approval_request"].(map[string]any)
 	if !ok || approvalRequest["task_id"] != taskID {
 		t.Fatalf("expected approval_request task_id %s, got %+v", taskID, data["approval_request"])
@@ -147,7 +152,7 @@ func TestDispatchTaskDetailGetIncludesActiveApprovalAnchor(t *testing.T) {
 
 func TestDispatchTaskDetailGetOmitsApprovalAnchorForCompletedTask(t *testing.T) {
 	server := newTestServer()
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_detail_rpc_done",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -174,14 +179,17 @@ func TestDispatchTaskDetailGetOmitsApprovalAnchorForCompletedTask(t *testing.T) 
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-task-detail-no-anchor"`),
 		Method:  methodAgentTaskDetailGet,
-		Params:  mustMarshal(t, map[string]any{"task_id": taskID}),
+		Params: mustMarshal(t, map[string]any{
+			"request_meta": rpcRequestMeta("trace_task_detail_no_anchor"),
+			"task_id":      taskID,
+		}),
 	})
 
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	if data["approval_request"] != nil {
 		t.Fatalf("expected approval_request to be nil, got %+v", data["approval_request"])
 	}
@@ -197,7 +205,7 @@ func TestDispatchTaskDetailGetOmitsApprovalAnchorForCompletedTask(t *testing.T) 
 func TestDispatchTaskControlValidationAndStatusErrors(t *testing.T) {
 	server := newTestServer()
 
-	completedTask, err := server.orchestrator.StartTask(map[string]any{
+	completedTask, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -220,7 +228,7 @@ func TestDispatchTaskControlValidationAndStatusErrors(t *testing.T) {
 		t.Fatal("expected runtime task completion to succeed")
 	}
 
-	waitingTask, err := server.orchestrator.StartTask(map[string]any{
+	waitingTask, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_waiting_task",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -240,10 +248,10 @@ func TestDispatchTaskControlValidationAndStatusErrors(t *testing.T) {
 		expectedCode  int
 		expectedError string
 	}{
-		{name: "missing task id", params: map[string]any{"action": "pause"}, expectedCode: errInvalidParams, expectedError: "INVALID_PARAMS"},
-		{name: "unsupported action", params: map[string]any{"task_id": completedTaskID, "action": "skip"}, expectedCode: errInvalidParams, expectedError: "INVALID_PARAMS"},
-		{name: "finished task", params: map[string]any{"task_id": completedTaskID, "action": "cancel"}, expectedCode: 1001005, expectedError: "TASK_ALREADY_FINISHED"},
-		{name: "status invalid", params: map[string]any{"task_id": waitingTaskID, "action": "pause"}, expectedCode: 1001004, expectedError: "TASK_STATUS_INVALID"},
+		{name: "missing task id", params: map[string]any{"request_meta": rpcRequestMeta("trace_task_control_missing_task"), "action": "pause"}, expectedCode: errInvalidParams, expectedError: "INVALID_PARAMS"},
+		{name: "unsupported action", params: map[string]any{"request_meta": rpcRequestMeta("trace_task_control_unsupported"), "task_id": completedTaskID, "action": "skip"}, expectedCode: errInvalidParams, expectedError: "INVALID_PARAMS"},
+		{name: "finished task", params: map[string]any{"request_meta": rpcRequestMeta("trace_task_control_finished"), "task_id": completedTaskID, "action": "cancel"}, expectedCode: 1001005, expectedError: "TASK_ALREADY_FINISHED"},
+		{name: "status invalid", params: map[string]any{"request_meta": rpcRequestMeta("trace_task_control_status_invalid"), "task_id": waitingTaskID, "action": "pause"}, expectedCode: 1001004, expectedError: "TASK_STATUS_INVALID"},
 	}
 
 	for _, test := range tests {
@@ -291,7 +299,7 @@ func TestDispatchTaskConfirmRejectsMalformedCorrectionText(t *testing.T) {
 func TestDispatchTaskListClampsPagingParams(t *testing.T) {
 	server := newTestServer()
 	for index := 0; index < 25; index++ {
-		_, err := server.orchestrator.StartTask(map[string]any{
+		_, err := startTaskForTest(server.orchestrator, map[string]any{
 			"session_id": fmt.Sprintf("sess_rpc_task_list_%02d", index),
 			"source":     "floating_ball",
 			"trigger":    "hover_text_input",
@@ -316,11 +324,12 @@ func TestDispatchTaskListClampsPagingParams(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-list-clamp"`),
 		Method:  methodAgentTaskList,
 		Params: mustMarshal(t, map[string]any{
-			"group":      "unfinished",
-			"limit":      0,
-			"offset":     -5,
-			"sort_by":    "updated_at",
-			"sort_order": "desc",
+			"request_meta": rpcRequestMeta("trace_task_list_clamp"),
+			"group":        "unfinished",
+			"limit":        0,
+			"offset":       -5,
+			"sort_by":      "updated_at",
+			"sort_order":   "desc",
 		}),
 	})
 
@@ -328,8 +337,8 @@ func TestDispatchTaskListClampsPagingParams(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
-	items := data["items"].([]map[string]any)
+	data := protocolMap(t, success.Result.Data)
+	items := protocolMapSlice(t, data["items"])
 	if len(items) != 20 {
 		t.Fatalf("expected rpc task.list to clamp zero limit to 20 items, got %d", len(items))
 	}
@@ -361,11 +370,12 @@ func TestDispatchTaskEventsListReturnsLoopEvents(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-events-list"`),
 		Method:  methodAgentTaskEventsList,
 		Params: mustMarshal(t, map[string]any{
-			"task_id": "task_rpc_loop_001",
-			"run_id":  "run_rpc_loop_001",
-			"type":    "loop.completed",
-			"limit":   20,
-			"offset":  0,
+			"request_meta": rpcRequestMeta("trace_task_events_list"),
+			"task_id":      "task_rpc_loop_001",
+			"run_id":       "run_rpc_loop_001",
+			"type":         "loop.completed",
+			"limit":        20,
+			"offset":       0,
 		}),
 	})
 
@@ -373,7 +383,7 @@ func TestDispatchTaskEventsListReturnsLoopEvents(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	items := protocolMapSlice(t, protocolMap(t, success.Result.Data)["items"])
 	if len(items) != 1 || items[0]["type"] != "loop.completed" {
 		t.Fatalf("expected rpc task events list to return loop.completed, got %+v", items)
 	}
@@ -400,14 +410,19 @@ func TestDispatchTaskToolCallsListReturnsPersistedToolCalls(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-task-tool-calls-list"`),
 		Method:  methodAgentTaskToolCallsList,
-		Params:  mustMarshal(t, map[string]any{"task_id": "task_rpc_tool_001", "limit": 20, "offset": 0}),
+		Params: mustMarshal(t, map[string]any{
+			"request_meta": rpcRequestMeta("trace_task_tool_calls_list"),
+			"task_id":      "task_rpc_tool_001",
+			"limit":        20,
+			"offset":       0,
+		}),
 	})
 
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	items := protocolMapSlice(t, protocolMap(t, success.Result.Data)["items"])
 	if len(items) != 1 || items[0]["tool_name"] != "read_file" {
 		t.Fatalf("expected rpc task tool calls list to return read_file, got %+v", items)
 	}
@@ -415,7 +430,7 @@ func TestDispatchTaskToolCallsListReturnsPersistedToolCalls(t *testing.T) {
 
 func TestDispatchTaskSteerReturnsUpdatedTask(t *testing.T) {
 	server := newTestServer()
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_rpc_task_steer",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -438,15 +453,20 @@ func TestDispatchTaskSteerReturnsUpdatedTask(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-task-steer"`),
 		Method:  methodAgentTaskSteer,
-		Params:  mustMarshal(t, map[string]any{"task_id": taskID, "message": "Also include a short summary section."}),
+		Params: mustMarshal(t, map[string]any{
+			"request_meta": rpcRequestMeta("trace_task_steer"),
+			"task_id":      taskID,
+			"message":      "Also include a short summary section.",
+		}),
 	})
 
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	if success.Result.Data.(map[string]any)["task"].(map[string]any)["task_id"] != taskID {
-		t.Fatalf("expected rpc task steer to keep task id, got %+v", success.Result.Data)
+	successData := protocolMap(t, success.Result.Data)
+	if successData["task"].(map[string]any)["task_id"] != taskID {
+		t.Fatalf("expected rpc task steer to keep task id, got %+v", successData)
 	}
 }
 
@@ -458,13 +478,13 @@ func TestDispatchReturnsSettingsGet(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-settings-get"`),
 		Method:  methodAgentSettingsGet,
-		Params:  mustMarshal(t, map[string]any{"scope": "all"}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_settings_get"), "scope": "all"}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	credentials := success.Result.Data.(map[string]any)["settings"].(map[string]any)["models"].(map[string]any)["credentials"].(map[string]any)
+	credentials := protocolMap(t, success.Result.Data)["settings"].(map[string]any)["models"].(map[string]any)["credentials"].(map[string]any)
 	if _, ok := credentials["stronghold"].(map[string]any); !ok {
 		t.Fatalf("expected settings get to include stronghold status, got %+v", credentials)
 	}
@@ -479,6 +499,7 @@ func TestDispatchReturnsSettingsUpdate(t *testing.T) {
 		ID:      json.RawMessage(`"req-settings-update"`),
 		Method:  methodAgentSettingsUpdate,
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": rpcRequestMeta("trace_settings_update"),
 			"models": map[string]any{
 				"provider": "openai",
 				"api_key":  "rpc-secret-key",
@@ -489,15 +510,16 @@ func TestDispatchReturnsSettingsUpdate(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	models := success.Result.Data.(map[string]any)["effective_settings"].(map[string]any)["models"].(map[string]any)
+	successData := protocolMap(t, success.Result.Data)
+	models := successData["effective_settings"].(map[string]any)["models"].(map[string]any)
 	if models["provider_api_key_configured"] != true {
 		t.Fatalf("expected settings update to mark provider key configured, got %+v", models)
 	}
 	if _, exists := models["api_key"]; exists {
 		t.Fatalf("expected settings update response to keep api_key redacted, got %+v", models)
 	}
-	if success.Result.Data.(map[string]any)["apply_mode"] != "next_task_effective" || success.Result.Data.(map[string]any)["need_restart"] != false {
-		t.Fatalf("expected model settings update to be next_task_effective, got %+v", success.Result.Data)
+	if successData["apply_mode"] != "next_task_effective" || successData["need_restart"] != false {
+		t.Fatalf("expected model settings update to be next_task_effective, got %+v", successData)
 	}
 }
 
@@ -508,6 +530,7 @@ func TestDispatchReturnsSettingsModelValidate(t *testing.T) {
 		ID:      json.RawMessage(`"req-settings-model-validate"`),
 		Method:  methodAgentSettingsModelValidate,
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": rpcRequestMeta("trace_settings_model_validate"),
 			"models": map[string]any{
 				"provider": "openai",
 				"base_url": "https://api.example.com/v1",
@@ -519,7 +542,7 @@ func TestDispatchReturnsSettingsModelValidate(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	if data["ok"] != false || data["status"] != "missing_api_key" {
 		t.Fatalf("expected structured validation failure result, got %+v", data)
 	}
@@ -531,14 +554,14 @@ func TestDispatchReturnsPluginRuntimeList(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-plugin-runtime-list"`),
 		Method:  methodAgentPluginRuntimeList,
-		Params:  mustMarshal(t, map[string]any{}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_plugin_runtime_list")}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
-	items := data["items"].([]map[string]any)
+	data := protocolMap(t, success.Result.Data)
+	items := protocolMapSlice(t, data["items"])
 	if len(items) == 0 {
 		t.Fatalf("expected plugin runtime query to return declared runtimes, got %+v", data)
 	}
@@ -546,7 +569,7 @@ func TestDispatchReturnsPluginRuntimeList(t *testing.T) {
 	if !ok || manifest["plugin_id"] == nil || manifest["source"] == nil {
 		t.Fatalf("expected plugin runtime items to include formal manifest linkage, got %+v", items[0])
 	}
-	metrics := data["metrics"].([]map[string]any)
+	metrics := protocolMapSlice(t, data["metrics"])
 	if len(metrics) == 0 {
 		t.Fatalf("expected plugin runtime query to return metric snapshots, got %+v", data)
 	}
@@ -558,15 +581,16 @@ func TestDispatchReturnsPluginList(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-plugin-list"`),
 		Method:  methodAgentPluginList,
-		Params:  mustMarshal(t, map[string]any{"query": "ocr", "page": map[string]any{"limit": 10, "offset": 0}}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_plugin_list"), "query": "ocr", "page": map[string]any{"limit": 10, "offset": 0}}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	successData := protocolMap(t, success.Result.Data)
+	items := protocolMapSlice(t, successData["items"])
 	if len(items) != 1 || items[0]["plugin_id"] != "ocr" {
-		t.Fatalf("expected plugin list query to return filtered ocr plugin, got %+v", success.Result.Data)
+		t.Fatalf("expected plugin list query to return filtered ocr plugin, got %+v", successData)
 	}
 }
 
@@ -576,13 +600,13 @@ func TestDispatchReturnsPluginDetail(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-plugin-detail"`),
 		Method:  methodAgentPluginDetailGet,
-		Params:  mustMarshal(t, map[string]any{"plugin_id": "ocr"}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_plugin_detail_get"), "plugin_id": "ocr"}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	if data["plugin"].(map[string]any)["plugin_id"] != "ocr" {
 		t.Fatalf("expected plugin detail query to resolve ocr plugin, got %+v", data)
 	}
@@ -590,7 +614,7 @@ func TestDispatchReturnsPluginDetail(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ocr worker runtime to exist")
 	}
-	toolItems := data["tools"].([]map[string]any)
+	toolItems := protocolMapSlice(t, data["tools"])
 	if len(toolItems) != len(runtime.Capabilities) {
 		t.Fatalf("expected one contract per declared capability, got %+v", data)
 	}
@@ -604,5 +628,49 @@ func TestDispatchReturnsPluginDetail(t *testing.T) {
 		if item["display_name"] != metadata.DisplayName || item["source"] != string(metadata.Source) {
 			t.Fatalf("expected plugin detail payload to mirror registry metadata for %q, got %+v", toolName, item)
 		}
+	}
+}
+
+func TestDispatchRejectsPluginQueriesMissingRequestMeta(t *testing.T) {
+	server := newTestServer()
+	testCases := []struct {
+		name   string
+		method string
+		params map[string]any
+	}{
+		{
+			name:   "plugin runtime list",
+			method: methodAgentPluginRuntimeList,
+			params: map[string]any{},
+		},
+		{
+			name:   "plugin list",
+			method: methodAgentPluginList,
+			params: map[string]any{"query": "ocr"},
+		},
+		{
+			name:   "plugin detail get",
+			method: methodAgentPluginDetailGet,
+			params: map[string]any{"plugin_id": "ocr"},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := server.dispatch(requestEnvelope{
+				JSONRPC: "2.0",
+				ID:      json.RawMessage(`"req-plugin-invalid"`),
+				Method:  testCase.method,
+				Params:  mustMarshal(t, testCase.params),
+			})
+
+			rpcErr, ok := response.(errorEnvelope)
+			if !ok {
+				t.Fatalf("expected error response envelope, got %#v", response)
+			}
+			if rpcErr.Error.Code != errInvalidParams || rpcErr.Error.Message != "INVALID_PARAMS" {
+				t.Fatalf("expected invalid params response, got %#v", rpcErr)
+			}
+		})
 	}
 }

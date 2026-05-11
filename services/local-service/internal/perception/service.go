@@ -9,6 +9,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/urlutil"
 )
 
 const (
@@ -66,7 +67,7 @@ func CaptureContextSignals(source, scene string, context map[string]any) SignalS
 		Source:            firstNonEmpty(strings.TrimSpace(source), stringValue(context, "source")),
 		Scene:             firstNonEmpty(strings.TrimSpace(scene), stringValue(context, "scene")),
 		PageTitle:         firstNonEmpty(stringValue(context, "page_title"), stringValue(page, "title")),
-		PageURL:           firstNonEmpty(stringValue(context, "page_url"), stringValue(page, "url")),
+		PageURL:           urlutil.SanitizeContextURL(firstNonEmpty(stringValue(context, "page_url"), stringValue(page, "url"))),
 		AppName:           firstNonEmpty(stringValue(context, "app_name"), stringValue(page, "app_name")),
 		WindowTitle:       firstNonEmpty(stringValue(context, "window_title"), stringValue(page, "window_title"), stringValue(screen, "window_title")),
 		VisibleText:       firstNonEmpty(stringValue(context, "visible_text"), stringValue(page, "visible_text"), stringValue(screen, "visible_text")),
@@ -76,7 +77,7 @@ func CaptureContextSignals(source, scene string, context map[string]any) SignalS
 		ClipboardMimeType: firstNonEmpty(stringValue(context, "clipboard_mime_type"), stringValue(clipboard, "mime_type")),
 		HoverTarget:       firstNonEmpty(stringValue(context, "hover_target"), stringValue(page, "hover_target"), stringValue(screen, "hover_target")),
 		LastAction:        firstNonEmpty(stringValue(context, "last_action"), stringValue(behavior, "last_action")),
-		ErrorText:         firstNonEmpty(stringValue(context, "error_text"), stringValue(errorValue, "message")),
+		ErrorText:         stringValue(errorValue, "message"),
 		DwellMillis:       intValue(context, "dwell_millis", intValue(behavior, "dwell_millis", 0)),
 		WindowSwitchCount: intValue(context, "window_switch_count", intValue(behavior, "window_switch_count", 0)),
 		PageSwitchCount:   intValue(context, "page_switch_count", intValue(behavior, "page_switch_count", 0)),

@@ -16,7 +16,7 @@ func TestServiceCaptureNormalizesNestedContext(t *testing.T) {
 			},
 			"page": map[string]any{
 				"title":        " Editor ",
-				"url":          " https://example.com/doc ",
+				"url":          " https://user:pass@example.com/doc?tab=1#focus ",
 				"app_name":     " desktop ",
 				"browser_kind": " chrome ",
 				"process_path": " C:/Program Files/Google/Chrome/Application/chrome.exe ",
@@ -80,7 +80,7 @@ func TestServiceCapturePrefersInputPageContextAndFlatFallbackSignals(t *testing.
 			"text": "看看当前屏幕上哪里出错了",
 			"page_context": map[string]any{
 				"title":        " Build Pipeline ",
-				"url":          " https://example.com/build ",
+				"url":          " https://example.com/build?job=42#logs ",
 				"app_name":     " Chrome ",
 				"browser_kind": " edge ",
 				"process_path": " C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe ",
@@ -154,6 +154,31 @@ func TestServiceSnapshotAndCaptureInferenceHelpers(t *testing.T) {
 	})
 	if errorOnly.InputType != "error" || errorOnly.Trigger != "error_detected" || errorOnly.Text != "build failed" {
 		t.Fatalf("expected error-only payload to infer error input, got %+v", errorOnly)
+	}
+}
+
+func TestServiceCaptureIgnoresRetiredTaskEntryAliases(t *testing.T) {
+	service := NewCaptureService()
+
+	snapshot := service.Capture(map[string]any{
+		"input": map[string]any{
+			"type":           "text_selection",
+			"selection_text": "legacy selected text",
+			"file_paths":     []any{"workspace/legacy.txt"},
+		},
+		"context": map[string]any{
+			"error_text": "legacy build failed",
+		},
+	})
+
+	if snapshot.SelectionText != "" {
+		t.Fatalf("expected retired input.selection_text alias to be ignored, got %q", snapshot.SelectionText)
+	}
+	if len(snapshot.Files) != 0 {
+		t.Fatalf("expected retired input.file_paths alias to be ignored, got %+v", snapshot.Files)
+	}
+	if snapshot.ErrorText != "" {
+		t.Fatalf("expected retired context.error_text alias to be ignored, got %q", snapshot.ErrorText)
 	}
 }
 

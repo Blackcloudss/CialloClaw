@@ -1,7 +1,11 @@
 // Package taskcontext captures and normalizes task-facing input snapshots.
 package taskcontext
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/urlutil"
+)
 
 // TaskContextSnapshot aggregates the normalized request context that the main
 // task pipeline uses for intent inference and orchestration.
@@ -53,9 +57,6 @@ func (s *CaptureService) Capture(params map[string]any) TaskContextSnapshot {
 	input := mapValue(params, "input")
 	contextValue := mapValue(params, "context")
 	selection := mapValue(contextValue, "selection")
-	if len(selection) == 0 {
-		selection = mapValue(input, "selection")
-	}
 	pageContext := mapValue(input, "page_context")
 	pageFallback := mapValue(contextValue, "page")
 	errorValue := mapValue(contextValue, "error")
@@ -66,7 +67,6 @@ func (s *CaptureService) Capture(params map[string]any) TaskContextSnapshot {
 	selectionText := firstNonEmpty(
 		stringValue(selection, "text"),
 		stringValue(contextValue, "selection_text"),
-		stringValue(input, "selection_text"),
 	)
 	text := firstNonEmpty(
 		stringValue(input, "text"),
@@ -75,14 +75,12 @@ func (s *CaptureService) Capture(params map[string]any) TaskContextSnapshot {
 	errorText := firstNonEmpty(
 		stringValue(input, "error_message"),
 		stringValue(errorValue, "message"),
-		stringValue(contextValue, "error_text"),
 	)
 
 	files := dedupeStrings(append(
 		append(stringSliceValue(input["files"]), stringSliceValue(contextValue["files"])...),
-		stringSliceValue(input["file_paths"])...,
+		stringSliceValue(contextValue["file_paths"])...,
 	))
-	files = dedupeStrings(append(files, stringSliceValue(contextValue["file_paths"])...))
 
 	inputType := firstNonEmpty(stringValue(input, "type"), inferInputType(text, selectionText, errorText, files))
 	if inputType == "text_selection" && text == "" {
@@ -102,7 +100,7 @@ func (s *CaptureService) Capture(params map[string]any) TaskContextSnapshot {
 		ErrorText:      errorText,
 		Files:          files,
 		PageTitle:      firstNonEmpty(stringValue(pageContext, "title"), stringValue(pageFallback, "title")),
-		PageURL:        firstNonEmpty(stringValue(pageContext, "url"), stringValue(pageFallback, "url")),
+		PageURL:        urlutil.SanitizeContextURL(firstNonEmpty(stringValue(pageContext, "url"), stringValue(pageFallback, "url"))),
 		AppName:        firstNonEmpty(stringValue(pageContext, "app_name"), stringValue(pageFallback, "app_name")),
 		BrowserKind:    firstNonEmpty(stringValue(pageContext, "browser_kind"), stringValue(pageFallback, "browser_kind")),
 		ProcessPath:    firstNonEmpty(stringValue(pageContext, "process_path"), stringValue(pageFallback, "process_path")),

@@ -38,14 +38,14 @@ func TestDispatchReturnsSecurityAuditList(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-security-audit-list"`),
 		Method:  methodAgentSecurityAuditList,
-		Params:  mustMarshal(t, map[string]any{"task_id": "task_001", "limit": 20, "offset": 0}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_security_audit_list"), "task_id": "task_001", "limit": 20, "offset": 0}),
 	})
 
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	items := protocolMapSlice(t, protocolMap(t, success.Result.Data)["items"])
 	if len(items) != 1 || items[0]["audit_id"] != "audit_001" {
 		t.Fatalf("expected stored audit_001, got %+v", items)
 	}
@@ -70,14 +70,14 @@ func TestDispatchReturnsSecurityRestorePointsList(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-security-restore-points-list"`),
 		Method:  methodAgentSecurityRestorePointsList,
-		Params:  mustMarshal(t, map[string]any{"task_id": "task_001", "limit": 20, "offset": 0}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_security_restore_points_list"), "task_id": "task_001", "limit": 20, "offset": 0}),
 	})
 
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	items := protocolMapSlice(t, protocolMap(t, success.Result.Data)["items"])
 	if len(items) != 1 || items[0]["recovery_point_id"] != "rp_001" {
 		t.Fatalf("expected stored rp_001, got %+v", items)
 	}
@@ -87,7 +87,7 @@ func TestDispatchReturnsSecurityRestoreApplyResult(t *testing.T) {
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "restore-apply.db")))
 	defer func() { _ = storageService.Close() }()
 	server := newTestServerWithStorage(storageService)
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_restore",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -115,14 +115,14 @@ func TestDispatchReturnsSecurityRestoreApplyResult(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-security-restore-apply"`),
 		Method:  methodAgentSecurityRestoreApply,
-		Params:  mustMarshal(t, map[string]any{"task_id": taskID, "recovery_point_id": "rp_001"}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_security_restore_apply"), "task_id": taskID, "recovery_point_id": "rp_001"}),
 	})
 
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	if _, ok := data["applied"].(bool); !ok || data["task"].(map[string]any)["status"] != "waiting_auth" || data["recovery_point"].(map[string]any)["recovery_point_id"] != "rp_001" {
 		t.Fatalf("unexpected restore apply result %+v", data)
 	}
@@ -134,18 +134,18 @@ func TestDispatchReturnsNotepadUpdateResult(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-notepad-update"`),
 		Method:  methodAgentNotepadUpdate,
-		Params:  mustMarshal(t, map[string]any{"item_id": "todo_002", "action": "move_upcoming"}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_notepad_update"), "item_id": "todo_002", "action": "move_upcoming"}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	notepadItem, ok := data["notepad_item"].(map[string]any)
 	if !ok || notepadItem["bucket"] != "upcoming" {
 		t.Fatalf("expected updated notepad item bucket upcoming, got %+v", data)
 	}
-	refreshGroups := data["refresh_groups"].([]string)
+	refreshGroups := stringSliceValue(data["refresh_groups"])
 	if len(refreshGroups) != 2 || refreshGroups[0] != "later" || refreshGroups[1] != "upcoming" {
 		t.Fatalf("expected refresh_groups to include source and target buckets, got %+v", refreshGroups)
 	}
@@ -173,13 +173,13 @@ func TestDispatchReturnsTaskArtifactList(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-task-artifact-list"`),
 		Method:  methodAgentTaskArtifactList,
-		Params:  mustMarshal(t, map[string]any{"task_id": "task_rpc_001", "limit": 20, "offset": 0}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_task_artifact_list"), "task_id": "task_rpc_001", "limit": 20, "offset": 0}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	items := protocolMapSlice(t, protocolMap(t, success.Result.Data)["items"])
 	if len(items) != 1 || items[0]["artifact_id"] != "art_rpc_001" {
 		t.Fatalf("expected artifact list item, got %+v", items)
 	}
@@ -207,13 +207,13 @@ func TestDispatchReturnsTaskArtifactOpen(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-task-artifact-open"`),
 		Method:  methodAgentTaskArtifactOpen,
-		Params:  mustMarshal(t, map[string]any{"task_id": "task_rpc_open_001", "artifact_id": "art_rpc_open_001"}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_task_artifact_open"), "task_id": "task_rpc_open_001", "artifact_id": "art_rpc_open_001"}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	if data["open_action"] != "open_file" || data["artifact"].(map[string]any)["artifact_id"] != "art_rpc_open_001" {
 		t.Fatalf("expected opened artifact, got %+v", data)
 	}
@@ -241,20 +241,21 @@ func TestDispatchReturnsDeliveryOpenForArtifact(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-delivery-open-artifact"`),
 		Method:  methodAgentDeliveryOpen,
-		Params:  mustMarshal(t, map[string]any{"task_id": "task_delivery_rpc_001", "artifact_id": "art_delivery_rpc_001"}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_delivery_open_artifact"), "task_id": "task_delivery_rpc_001", "artifact_id": "art_delivery_rpc_001"}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	if success.Result.Data.(map[string]any)["open_action"] != "open_file" {
-		t.Fatalf("expected open_file action, got %+v", success.Result.Data)
+	data := protocolMap(t, success.Result.Data)
+	if data["open_action"] != "open_file" {
+		t.Fatalf("expected open_file action, got %+v", data)
 	}
 }
 
 func TestDispatchReturnsDeliveryOpenForTaskResult(t *testing.T) {
 	server := newTestServer()
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_delivery_rpc",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -277,14 +278,15 @@ func TestDispatchReturnsDeliveryOpenForTaskResult(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-delivery-open-task"`),
 		Method:  methodAgentDeliveryOpen,
-		Params:  mustMarshal(t, map[string]any{"task_id": taskID}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_delivery_open_task"), "task_id": taskID}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	if success.Result.Data.(map[string]any)["open_action"] != "task_detail" {
-		t.Fatalf("expected task_detail action, got %+v", success.Result.Data)
+	data := protocolMap(t, success.Result.Data)
+	if data["open_action"] != "task_detail" {
+		t.Fatalf("expected task_detail action, got %+v", data)
 	}
 }
 
@@ -333,13 +335,13 @@ func TestDispatchReturnsDeliveryOpenForResultPage(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-delivery-open-result-page"`),
 		Method:  methodAgentDeliveryOpen,
-		Params:  mustMarshal(t, map[string]any{"task_id": taskID}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_delivery_open_result_page"), "task_id": taskID}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	if data["open_action"] != "result_page" {
 		t.Fatalf("expected result_page action, got %+v", data)
 	}
@@ -378,7 +380,7 @@ func TestDispatchReturnsFormalTaskInspectorRunSourceErrors(t *testing.T) {
 				JSONRPC: "2.0",
 				ID:      json.RawMessage(fmt.Sprintf(`"%s"`, test.requestID)),
 				Method:  methodAgentTaskInspectorRun,
-				Params:  mustMarshal(t, map[string]any{"target_sources": test.targetSources}),
+				Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta(test.requestID), "target_sources": test.targetSources}),
 			})
 			errEnvelope, ok := response.(errorEnvelope)
 			if !ok {

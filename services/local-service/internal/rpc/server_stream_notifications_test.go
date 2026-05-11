@@ -15,7 +15,7 @@ import (
 // are emitted on the stream connection after task confirmation enters waiting_auth.
 func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
 	server := newTestServer()
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -45,8 +45,9 @@ func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
 		ID:      json.RawMessage(`"req-1"`),
 		Method:  "agent.task.confirm",
 		Params: mustMarshal(t, map[string]any{
-			"task_id":   taskID,
-			"confirmed": false,
+			"request_meta": rpcRequestMeta("trace_task_confirm_approval"),
+			"task_id":      taskID,
+			"confirmed":    false,
 			"corrected_intent": map[string]any{
 				"name": "write_file",
 				"arguments": map[string]any{
@@ -65,7 +66,7 @@ func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
 	if err := decoder.Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.Result.Data.(map[string]any)["task"].(map[string]any)["status"] != "waiting_auth" {
+	if protocolMap(t, response.Result.Data)["task"].(map[string]any)["status"] != "waiting_auth" {
 		t.Fatalf("expected waiting_auth task status in response")
 	}
 
@@ -91,7 +92,7 @@ func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
 
 func TestHandleStreamConnEmitsLoopLifecycleNotifications(t *testing.T) {
 	server := newTestServer()
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_loop_notify",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -130,7 +131,8 @@ func TestHandleStreamConnEmitsLoopLifecycleNotifications(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-detail"`),
 		Method:  "agent.task.detail.get",
 		Params: mustMarshal(t, map[string]any{
-			"task_id": taskID,
+			"request_meta": rpcRequestMeta("trace_task_detail_loop_notify"),
+			"task_id":      taskID,
 		}),
 	}
 
@@ -142,7 +144,7 @@ func TestHandleStreamConnEmitsLoopLifecycleNotifications(t *testing.T) {
 	if err := decoder.Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.Result.Data.(map[string]any)["task"].(map[string]any)["task_id"] != taskID {
+	if protocolMap(t, response.Result.Data)["task"].(map[string]any)["task_id"] != taskID {
 		t.Fatalf("expected task detail response for %s, got %+v", taskID, response)
 	}
 
@@ -174,7 +176,7 @@ func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponse(t *test
 		generateToolSeen: make(chan struct{}),
 	}
 	server := newTestServerWithModelClient(modelClient)
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_loop_stream",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -203,8 +205,9 @@ func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponse(t *test
 		ID:      json.RawMessage(`"req-loop-stream"`),
 		Method:  "agent.task.confirm",
 		Params: mustMarshal(t, map[string]any{
-			"task_id":   taskID,
-			"confirmed": false,
+			"request_meta": rpcRequestMeta("trace_task_confirm_loop_stream"),
+			"task_id":      taskID,
+			"confirmed":    false,
 			"corrected_intent": map[string]any{
 				"name":      "agent_loop",
 				"arguments": map[string]any{},
@@ -287,11 +290,16 @@ func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponseForSubmi
 		ID:      json.RawMessage(`"req-input-submit-loop-stream"`),
 		Method:  "agent.input.submit",
 		Params: mustMarshal(t, map[string]any{
-			"session_id": "sess_input_submit_loop_stream",
+			"request_meta": rpcRequestMeta("trace_input_submit_loop_stream"),
+			"session_id":   "sess_input_submit_loop_stream",
+			"source":       "floating_ball",
+			"trigger":      "hover_text_input",
 			"input": map[string]any{
-				"type": "text",
-				"text": "inspect this workspace and answer directly",
+				"type":       "text",
+				"text":       "inspect this workspace and answer directly",
+				"input_mode": "text",
 			},
+			"context": map[string]any{},
 			"options": map[string]any{
 				"confirm_required": false,
 			},
@@ -373,11 +381,16 @@ func TestHandleStreamConnDoesNotReplayStreamedRuntimeNotificationsAfterResponse(
 		ID:      json.RawMessage(`"req-loop-no-replay"`),
 		Method:  "agent.input.submit",
 		Params: mustMarshal(t, map[string]any{
-			"session_id": "sess_input_submit_no_replay",
+			"request_meta": rpcRequestMeta("trace_input_submit_no_replay"),
+			"session_id":   "sess_input_submit_no_replay",
+			"source":       "floating_ball",
+			"trigger":      "hover_text_input",
 			"input": map[string]any{
-				"type": "text",
-				"text": "inspect this workspace and answer directly",
+				"type":       "text",
+				"text":       "inspect this workspace and answer directly",
+				"input_mode": "text",
 			},
+			"context": map[string]any{},
 			"options": map[string]any{
 				"confirm_required": false,
 			},
@@ -451,7 +464,7 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 
 	startTask := func(sessionID string) string {
 		t.Helper()
-		result, err := server.orchestrator.StartTask(map[string]any{
+		result, err := startTaskForTest(server.orchestrator, map[string]any{
 			"session_id": sessionID,
 			"source":     "floating_ball",
 			"trigger":    "text_selected_click",
@@ -482,8 +495,9 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 		ID:      json.RawMessage(`"req-loop-scope"`),
 		Method:  "agent.task.confirm",
 		Params: mustMarshal(t, map[string]any{
-			"task_id":   taskA,
-			"confirmed": false,
+			"request_meta": rpcRequestMeta("trace_task_confirm_loop_scope"),
+			"task_id":      taskA,
+			"confirmed":    false,
 			"corrected_intent": map[string]any{
 				"name":      "agent_loop",
 				"arguments": map[string]any{},

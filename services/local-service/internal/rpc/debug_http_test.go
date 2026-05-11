@@ -10,7 +10,7 @@ import (
 // notifications can be fetched through the debug events endpoint.
 func TestHandleDebugEventsReturnsQueuedNotifications(t *testing.T) {
 	server := newTestServer()
-	result, err := server.orchestrator.StartTask(map[string]any{
+	result, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",

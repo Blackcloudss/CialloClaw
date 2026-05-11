@@ -60,7 +60,10 @@ func TestHandleStreamConnServesJSONRPCSuccess(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-stream-success"`),
 		Method:  "agent.settings.get",
-		Params:  mustMarshal(t, map[string]any{"scope": "all"}),
+		Params: mustMarshal(t, map[string]any{
+			"request_meta": rpcRequestMeta("trace_stream_settings_get"),
+			"scope":        "all",
+		}),
 	}
 	if err := json.NewEncoder(right).Encode(request); err != nil {
 		t.Fatalf("encode stream request: %v", err)
@@ -97,11 +100,19 @@ func TestHandleStreamConnSkipsBufferedLiveRuntimeReplay(t *testing.T) {
 		ID:      json.RawMessage(`"req-stream-runtime-no-replay"`),
 		Method:  "agent.input.submit",
 		Params: mustMarshal(t, map[string]any{
-			"session_id": "sess_stream_runtime_no_replay",
-			"input": map[string]any{
-				"type": "text",
-				"text": "inspect this workspace and answer directly",
+			"request_meta": map[string]any{
+				"trace_id":    "trace_stream_runtime_no_replay",
+				"client_time": "2026-05-10T10:00:00Z",
 			},
+			"session_id": "sess_stream_runtime_no_replay",
+			"source":     "floating_ball",
+			"trigger":    "hover_text_input",
+			"input": map[string]any{
+				"type":       "text",
+				"text":       "inspect this workspace and answer directly",
+				"input_mode": "text",
+			},
+			"context": map[string]any{},
 			"options": map[string]any{
 				"confirm_required": false,
 			},
@@ -334,7 +345,7 @@ func TestHandleHTTPRPCCoversMethodDecodeAndSuccess(t *testing.T) {
 	}
 
 	successRecorder := httptest.NewRecorder()
-	successRequest := httptest.NewRequest(http.MethodPost, "/rpc", strings.NewReader(`{"jsonrpc":"2.0","id":"req-http-rpc","method":"agent.settings.get","params":{"scope":"all"}}`))
+	successRequest := httptest.NewRequest(http.MethodPost, "/rpc", strings.NewReader(`{"jsonrpc":"2.0","id":"req-http-rpc","method":"agent.settings.get","params":{"request_meta":{"trace_id":"trace_http_settings_get","client_time":"2026-05-10T00:00:00Z"},"scope":"all"}}`))
 	server.handleHTTPRPC(successRecorder, successRequest)
 	if successRecorder.Code != http.StatusOK {
 		t.Fatalf("expected rpc post to return 200, got %d", successRecorder.Code)
@@ -363,7 +374,7 @@ func TestHandleDebugEventsCoversValidationAndSuccess(t *testing.T) {
 		t.Fatalf("expected unknown task_id to return 404, got %d", notFoundRecorder.Code)
 	}
 
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_debug_events",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -425,7 +436,7 @@ func TestHandleDebugEventStreamCoversValidationSuccessAndError(t *testing.T) {
 		t.Fatalf("expected SSE error event, got %q", errorRecorder.Body.String())
 	}
 
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_stream_success",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",

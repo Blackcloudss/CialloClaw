@@ -11,7 +11,7 @@ func TestCaptureContextSignalsNormalizesNestedSignals(t *testing.T) {
 	snapshot := CaptureContextSignals("floating_ball", "hover", map[string]any{
 		"page": map[string]any{
 			"title":        "Article",
-			"url":          "https://example.com/article",
+			"url":          "https://user:pass@example.com/article?draft=1#summary",
 			"app_name":     "browser",
 			"window_title": "Browser - Example",
 			"visible_text": "Important visible page text",
@@ -31,6 +31,9 @@ func TestCaptureContextSignalsNormalizesNestedSignals(t *testing.T) {
 			"page_switch_count":   2,
 			"copy_count":          2,
 		},
+		"error": map[string]any{
+			"message": " build failed ",
+		},
 	})
 
 	if snapshot.PageTitle != "Article" || snapshot.PageURL != "https://example.com/article" || snapshot.AppName != "browser" {
@@ -44,6 +47,20 @@ func TestCaptureContextSignalsNormalizesNestedSignals(t *testing.T) {
 	}
 	if snapshot.HoverTarget != "warning banner" {
 		t.Fatalf("expected hover target to be normalized, got %+v", snapshot)
+	}
+	if snapshot.ErrorText != "build failed" {
+		t.Fatalf("expected structured error message to be normalized, got %+v", snapshot)
+	}
+}
+
+func TestCaptureContextSignalsDropsMalformedPageURLFromPersistedSignals(t *testing.T) {
+	snapshot := CaptureContextSignals("floating_ball", "hover", map[string]any{
+		"page": map[string]any{
+			"url": "https://user:pass@example.com/%zz?token=secret",
+		},
+	})
+	if snapshot.PageURL != "" {
+		t.Fatalf("expected malformed page url to be dropped, got %+v", snapshot)
 	}
 }
 
