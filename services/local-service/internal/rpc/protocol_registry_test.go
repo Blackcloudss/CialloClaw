@@ -131,6 +131,58 @@ func TestAgentTaskConfirmDTORejectsMalformedCorrectionFields(t *testing.T) {
 	}
 }
 
+func TestAgentTaskConfirmDTONormalizesValidCorrectionFields(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  map[string]any
+	}{
+		{
+			name: "correction_text survives dto normalization",
+			raw: map[string]any{
+				"request_meta":    map[string]any{"trace_id": "trace_task_confirm_text"},
+				"task_id":         "task_confirm_text",
+				"confirmed":       false,
+				"correction_text": "改成解释这个错误",
+			},
+		},
+		{
+			name: "corrected_intent survives dto normalization",
+			raw: map[string]any{
+				"request_meta": map[string]any{"trace_id": "trace_task_confirm_intent"},
+				"task_id":      "task_confirm_intent",
+				"confirmed":    false,
+				"corrected_intent": map[string]any{
+					"name":      "page_read",
+					"arguments": map[string]any{"url": "https://example.test/issues/474"},
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			params, rpcErr := decodeAgentTaskConfirmParams(mustMarshal(t, test.raw))
+			if rpcErr != nil {
+				t.Fatalf("decode task.confirm params: %+v", rpcErr)
+			}
+			if stringValue(params, "task_id", "") != stringValue(test.raw, "task_id", "") {
+				t.Fatalf("expected task_id to survive dto normalization, got %+v", params)
+			}
+			if _, hasCorrectionText := test.raw["correction_text"]; hasCorrectionText {
+				if stringValue(params, "correction_text", "") != stringValue(test.raw, "correction_text", "") {
+					t.Fatalf("expected correction_text to survive dto normalization, got %+v", params)
+				}
+			}
+			if rawIntent, hasCorrectedIntent := test.raw["corrected_intent"]; hasCorrectedIntent {
+				intentValue := mapValue(params, "corrected_intent")
+				if stringValue(intentValue, "name", "") != stringValue(rawIntent.(map[string]any), "name", "") {
+					t.Fatalf("expected corrected_intent.name to survive dto normalization, got %+v", intentValue)
+				}
+			}
+		})
+	}
+}
+
 func TestStableMethodRegistryDispatchMatrix(t *testing.T) {
 	server := newTestServer()
 	expectedDecoders := map[string]func(json.RawMessage) (map[string]any, *rpcError){

@@ -105,7 +105,7 @@ func taskConfirmCorrectionContextSummary(snapshot taskcontext.TaskContextSnapsho
 		fmt.Sprintf("text=%s", truncatePromptField(snapshot.Text)),
 		fmt.Sprintf("selection_text=%s", truncatePromptField(snapshot.SelectionText)),
 		fmt.Sprintf("error_text=%s", truncatePromptField(snapshot.ErrorText)),
-		fmt.Sprintf("files=%s", strings.Join(snapshot.Files, ",")),
+		fmt.Sprintf("files=%s", normalizePromptFiles(snapshot.Files)),
 		fmt.Sprintf("page_title=%s", truncatePromptField(snapshot.PageTitle)),
 		fmt.Sprintf("page_url=%s", truncatePromptField(snapshot.PageURL)),
 		fmt.Sprintf("app_name=%s", truncatePromptField(snapshot.AppName)),
@@ -120,6 +120,29 @@ func truncatePromptField(value string) string {
 	const limit = 240
 	trimmed := strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 	return textutil.TruncateGraphemes(trimmed, limit)
+}
+
+func normalizePromptFiles(files []string) string {
+	const maxFiles = 8
+	normalized := make([]string, 0, min(len(files), maxFiles))
+	for _, filePath := range files {
+		cleaned := truncatePromptField(filePath)
+		if cleaned == "" {
+			continue
+		}
+		normalized = append(normalized, cleaned)
+		if len(normalized) == maxFiles {
+			break
+		}
+	}
+	if len(normalized) == 0 {
+		return ""
+	}
+	joined := strings.Join(normalized, ",")
+	if len(files) > len(normalized) {
+		joined += ",..."
+	}
+	return textutil.TruncateGraphemes(joined, 240)
 }
 
 func parseTaskConfirmCorrectionIntent(raw string) (map[string]any, bool) {

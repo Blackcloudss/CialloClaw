@@ -288,6 +288,29 @@ func TestDispatchTaskConfirmRejectsMalformedCorrectionText(t *testing.T) {
 	}
 }
 
+func TestDispatchTaskConfirmRejectsMalformedCorrectedIntent(t *testing.T) {
+	server := newTestServer()
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-confirm-invalid-corrected-intent"`),
+		Method:  methodAgentTaskConfirm,
+		Params: mustMarshal(t, map[string]any{
+			"task_id":          "task_confirm_invalid_corrected_intent",
+			"confirmed":        false,
+			"corrected_intent": "page_read",
+		}),
+	})
+
+	errEnvelope, ok := response.(errorEnvelope)
+	if !ok {
+		t.Fatalf("expected error response envelope, got %#v", response)
+	}
+	if errEnvelope.Error.Code != errInvalidParams || errEnvelope.Error.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected INVALID_PARAMS for malformed corrected_intent, got %+v", errEnvelope.Error)
+	}
+}
+
 func TestDispatchTaskListClampsPagingParams(t *testing.T) {
 	server := newTestServer()
 	for index := 0; index < 25; index++ {
