@@ -2671,8 +2671,8 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	if task["source_type"] != "todo" {
 		t.Fatalf("expected converted task source_type todo, got %v", task["source_type"])
 	}
-	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
-		t.Fatalf("expected confirmed notepad conversion to reuse the text confirmation gate, got %+v", task)
+	if task["status"] != "completed" || task["current_step"] != "return_result" {
+		t.Fatalf("expected confirmed notepad conversion to execute through the free-text path, got %+v", task)
 	}
 
 	intentValue := task["intent"].(map[string]any)
@@ -2694,12 +2694,12 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/homework" {
 		t.Fatalf("expected explicit path resources to enter task snapshot, got %+v", record.Snapshot.Files)
 	}
-	if result["delivery_result"] != nil {
-		t.Fatalf("expected confirm-gated notepad conversion to defer delivery_result, got %+v", result["delivery_result"])
+	if result["delivery_result"] == nil {
+		t.Fatalf("expected direct notepad conversion to return delivery_result, got %+v", result)
 	}
 	bubble := result["bubble_message"].(map[string]any)
-	if bubble["type"] != "intent_confirm" {
-		t.Fatalf("expected confirm-gated notepad conversion to return intent_confirm bubble, got %+v", bubble)
+	if bubble["type"] != "result" {
+		t.Fatalf("expected direct notepad conversion to return result bubble, got %+v", bubble)
 	}
 
 	sourceItem := result["notepad_item"].(map[string]any)
@@ -2768,8 +2768,8 @@ func TestServiceNotepadConvertToTaskFallsBackToTitleAndIgnoresNonPathResources(t
 	if len(record.Snapshot.Files) != 0 {
 		t.Fatalf("expected non-path resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
 	}
-	if record.Status != "confirming_intent" || record.CurrentStep != "intent_confirmation" {
-		t.Fatalf("expected title-only note to stay behind confirmation, got %+v", record)
+	if record.Status != "completed" || record.CurrentStep != "return_result" {
+		t.Fatalf("expected title-only note to execute through the free-text path, got %+v", record)
 	}
 }
 
@@ -3287,7 +3287,7 @@ func TestServiceNotepadConvertToTaskRollsBackLinkWhenFinishFails(t *testing.T) {
 	defer replaceApprovalRequestStore(t, service.storage, originalStore)
 	replaceApprovalRequestStore(t, service.storage, failingApprovalRequestStore{base: originalStore, err: errors.New("approval store unavailable")})
 
-	_, finishErr := service.finishNotepadTask(snapshot, suggestion, task)
+	_, _, finishErr := service.finishNotepadTask(snapshot, suggestion, task, "")
 	if finishErr == nil {
 		t.Fatal("expected finishNotepadTask to fail when approval persistence fails")
 	}

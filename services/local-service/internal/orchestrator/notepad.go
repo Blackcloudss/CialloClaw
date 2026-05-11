@@ -83,9 +83,11 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	}()
 
 	snapshot := notepadSnapshot(item)
-	confirmRequired := taskStartConfirmRequired(snapshot, nil, false)
-	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
-	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, confirmRequired)
+	// Notepad conversion reuses the free-text submit semantics: the note body is
+	// already the explicit task input, so confirmation only happens when the
+	// intent service itself later asks for clarification.
+	suggestion := s.intent.Suggest(snapshot, nil, false)
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, false)
 	suggestion.TaskTitle = notepadTaskTitle(snapshot, suggestion)
 	task := s.createNotepadTask(snapshot, suggestion)
 	updatedItem, ok := s.runEngine.LinkNotepadItemTask(itemID, task.TaskID)
@@ -97,11 +99,16 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 		return nil, linkErr
 	}
 	claimed = false
-	response, err := s.finishNotepadTask(snapshot, suggestion, task)
+	response, startedPublished, err := s.finishNotepadTask(snapshot, suggestion, task, requestTraceID(params))
 	if err != nil {
+		if startedPublished {
+			return nil, err
+		}
 		return nil, s.rollbackLinkedNotepadTask(itemID, task.TaskID, err)
 	}
-	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
+	if !startedPublished {
+		s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
+	}
 
 	response["notepad_item"] = s.runEngine.ProtocolNotepadItem(updatedItem)
 	response["refresh_groups"] = []string{stringValue(updatedItem, "bucket", "upcoming")}
@@ -140,33 +147,37 @@ func (s *Service) createNotepadTask(snapshot taskcontext.TaskContextSnapshot, su
 	return task
 }
 
-func (s *Service) finishNotepadTask(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, task runengine.TaskRecord) (map[string]any, error) {
+func (s *Service) finishNotepadTask(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, task runengine.TaskRecord, traceID string) (map[string]any, bool, error) {
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForStart(suggestion), task.StartedAt.Format(dateTimeLayout))
 	if suggestion.RequiresConfirm {
 		task = s.persistTaskPresentation(task, bubble)
-		return buildTaskEntryResponse(task, bubble, nil), nil
+		return buildTaskEntryResponse(task, bubble, nil), false, nil
 	}
 
 	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {
-		return nil, queueErr
+		return nil, false, queueErr
 	} else if queued {
-		return buildTaskEntryResponse(queuedTask, queueBubble, nil), nil
+		return buildTaskEntryResponse(queuedTask, queueBubble, nil), false, nil
 	}
 
 	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, suggestion.Intent)
 	if governanceErr != nil {
-		return nil, governanceErr
+		return nil, false, governanceErr
 	}
 	if handled {
-		return governedResponse, nil
+		return governedResponse, false, nil
 	}
 	task = governedTask
+
+	// Publish the task start before loop execution begins so stream subscribers
+	// can correlate the first live runtime notifications with this request.
+	s.publishTaskStart(task.TaskID, task.SessionID, traceID)
 
 	deliveryResult := map[string]any(nil)
 	var execErr error
 	task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
 	if execErr != nil {
-		return nil, execErr
+		return nil, true, execErr
 	}
-	return buildTaskEntryResponse(task, bubble, deliveryResult), nil
+	return buildTaskEntryResponse(task, bubble, deliveryResult), true, nil
 }

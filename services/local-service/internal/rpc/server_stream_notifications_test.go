@@ -350,6 +350,100 @@ func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponseForSubmi
 	}
 }
 
+func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponseForNotepadConvertToTask(t *testing.T) {
+	modelClient := &stubLoopModelClient{
+		toolResult: model.ToolCallResult{
+			OutputText: "Loop runtime finished from notepad.convert_to_task.",
+		},
+		generateToolWait: make(chan struct{}),
+		generateToolSeen: make(chan struct{}),
+	}
+	server := newTestServerWithModelClient(modelClient)
+	server.orchestrator.RunEngine().ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_loop_stream",
+		"title":     "整理 loop stream 事项",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "Inspect this workspace and answer directly.",
+	}})
+
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-notepad-convert-loop-stream"`),
+		Method:  "agent.notepad.convert_to_task",
+		Params: mustMarshal(t, map[string]any{
+			"item_id":   "todo_loop_stream",
+			"confirmed": true,
+			"request_meta": map[string]any{
+				"trace_id": "trace_notepad_loop_stream",
+			},
+		}),
+	}
+
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode request: %v", err)
+	}
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+
+	var firstEnvelope map[string]any
+	if err := decoder.Decode(&firstEnvelope); err != nil {
+		t.Fatalf("decode first envelope: %v", err)
+	}
+	if method, _ := firstEnvelope["method"].(string); !strings.HasPrefix(method, "loop.") {
+		t.Fatalf("expected first streamed envelope to be loop.* notification, got %+v", firstEnvelope)
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
+	}
+
+	close(modelClient.generateToolWait)
+
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set response deadline: %v", err)
+	}
+	responseSeen := false
+	for index := 0; index < 8; index++ {
+		var envelope map[string]any
+		if err := decoder.Decode(&envelope); err != nil {
+			t.Fatalf("decode response envelope: %v", err)
+		}
+		if envelope["id"] == nil {
+			continue
+		}
+		result, ok := envelope["result"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected success result envelope, got %+v", envelope)
+		}
+		data, ok := result["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected response data payload, got %+v", envelope)
+		}
+		task, ok := data["task"].(map[string]any)
+		if !ok || task["status"] != "completed" {
+			t.Fatalf("expected completed task response, got %+v", envelope)
+		}
+		if data["delivery_result"] == nil {
+			t.Fatalf("expected notepad convert response to include delivery_result, got %+v", data)
+		}
+		responseSeen = true
+		break
+	}
+	if !responseSeen {
+		t.Fatal("expected final response after streamed loop notifications")
+	}
+}
+
 func TestHandleStreamConnDoesNotReplayStreamedRuntimeNotificationsAfterResponse(t *testing.T) {
 	modelClient := &stubLoopModelClient{
 		toolResult: model.ToolCallResult{

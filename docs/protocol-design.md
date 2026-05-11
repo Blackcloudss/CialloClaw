@@ -2623,7 +2623,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### agent.notepad.convert_to_task 出参示例
 
-以下示例展示最常见的确认分支响应：事项升级为正式任务后，先进入主链路的意图确认阶段，等待用户继续确认或修正处理方式。
+以下示例展示最常见的 free-text 直达分支响应：事项正文已经足够明确，因此升级为正式任务后会直接进入执行，并返回正式 `delivery_result`。
 
 ```json
 {
@@ -2635,14 +2635,23 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         "task_id": "task_401",
         "title": "处理：整理 Q3 复盘要点",
         "source_type": "todo",
-        "status": "confirming_intent",
-        "current_step": "intent_confirmation"
+        "status": "completed",
+        "current_step": "return_result"
       },
       "bubble_message": {
-        "type": "intent_confirm",
-        "text": "请确认你希望我如何处理当前内容。"
+        "type": "result",
+        "text": "结果已经生成，可直接查看。"
       },
-      "delivery_result": null,
+      "delivery_result": {
+        "delivery_result_id": "delivery_result_task_401",
+        "delivery_type": "workspace_document",
+        "title": "处理结果",
+        "preview_text": "已整理 Q3 复盘要点，并写入工作区文档。",
+        "open_action": "open_file",
+        "open_payload": {
+          "path": "workspace/output/task_401.md"
+        }
+      },
       "notepad_item": {
         "item_id": "todo_001",
         "bucket": "upcoming",
